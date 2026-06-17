@@ -20,11 +20,11 @@ web-proxy は [proxyium.com](https://proxyium.com/ja/) を参考にした Web �
 
 ## 動作環境
 
-| 項目 | 要件 |
-|---|---|
-| OS | Linux / macOS / Windows（Node.js が動く環境） |
-| ランタイム / 言語 | Node.js 18 以上 + TypeScript |
-| その他依存 | npm（パッケージ管理） |
+| 項目              | 要件                                          |
+| ----------------- | --------------------------------------------- |
+| OS                | Linux / macOS / Windows（Node.js が動く環境） |
+| ランタイム / 言語 | Node.js 18 以上 + TypeScript                  |
+| その他依存        | npm（パッケージ管理）                         |
 
 ---
 

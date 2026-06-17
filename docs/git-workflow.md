@@ -41,24 +41,24 @@ main ──┬──────────────────┬──→
 
 ### Issue と `docs/task/` の役割分担
 
-| | GitHub Issue | `docs/task/{slug}.md` |
-|---|---|---|
-| 役割 | 起票・仕様・受け入れ条件の**正本** | 作業中の**設計・進捗メモ** |
-| 主な内容 | 背景・受け入れ条件・対象範囲 | 実装方針・検討メモ・検証結果 |
-| 紐付け | 本文に対応する task ファイルを記載 | 冒頭に対応 Issue 番号 (`#12`) を記載 |
+|          | GitHub Issue                       | `docs/task/{slug}.md`                |
+| -------- | ---------------------------------- | ------------------------------------ |
+| 役割     | 起票・仕様・受け入れ条件の**正本** | 作業中の**設計・進捗メモ**           |
+| 主な内容 | 背景・受け入れ条件・対象範囲       | 実装方針・検討メモ・検証結果         |
+| 紐付け   | 本文に対応する task ファイルを記載 | 冒頭に対応 Issue 番号 (`#12`) を記載 |
 
 両者は相互リンクで紐付けます。タスクの進捗・完了管理は従来どおり [docs/task/index.md](task/index.md) で行います（[CLAUDE.md タスク管理ルール](../CLAUDE.md#タスク管理ルール)参照）。
 
 ## 4. ブランチ命名規則
 
-| 種別 | 命名 | Issue 番号 | 用途 |
-|---|---|---|---|
-| フィーチャー | `feature/<issue>-<short-description>` | 必須 | 機能追加 |
-| バグ修正 | `bugfix/<issue>-<short-description>` | 必須 | 不具合修正 |
-| ホットフィックス | `hotfix/<issue>-<short-description>` | 必須 | 緊急修正 |
-| リファクタリング | `refactor/<short-description>` | 不要 | 振る舞い不変の内部改善 |
-| ドキュメント | `docs/<short-description>` | 不要 | ドキュメントのみの変更 |
-| 雑務 | `chore/<short-description>` | 不要 | 依存更新・設定変更など |
+| 種別             | 命名                                  | Issue 番号 | 用途                   |
+| ---------------- | ------------------------------------- | ---------- | ---------------------- |
+| フィーチャー     | `feature/<issue>-<short-description>` | 必須       | 機能追加               |
+| バグ修正         | `bugfix/<issue>-<short-description>`  | 必須       | 不具合修正             |
+| ホットフィックス | `hotfix/<issue>-<short-description>`  | 必須       | 緊急修正               |
+| リファクタリング | `refactor/<short-description>`        | 不要       | 振る舞い不変の内部改善 |
+| ドキュメント     | `docs/<short-description>`            | 不要       | ドキュメントのみの変更 |
+| 雑務             | `chore/<short-description>`           | 不要       | 依存更新・設定変更など |
 
 - `<short-description>` は内容を表す英小文字 + ハイフン（kebab-case）。例: `feature/12-proxy-settings`。
 - `feature` / `bugfix` / `hotfix` は対応する Issue を前提とし、ブランチ名に Issue 番号を含める。
@@ -90,12 +90,12 @@ main ──┬──────────────────┬──→
 
 機械的・探索的な作業、および独立評価は専用のサブエージェントへ委譲し、主エージェントの文脈を温存する。定義は `.claude/agents/` 配下。調査・検証・docs 整合の 3 つは Sonnet、評価（`evaluator`）のみ Opus を使う。**設計・仕様の判断、テスト内容の決定、設計外の問題への対応は委譲せず、主エージェントとユーザーが行う**（§5.1）。
 
-| エージェント | モデル | 委譲する作業 | 対応するフロー | 主エージェントが受け取るもの |
-|---|---|---|---|---|
-| [`investigate`](../.claude/agents/investigate.md) | Sonnet | docs 先・コード裏取りの調査 | step 3 | 結論・関連 `path:line`・裏取りメモ |
-| [`verify`](../.claude/agents/verify.md) | Sonnet | lint / フォーマット / 型 / テストを green にする | step 7 | 検証結果・修正点・要判断項目 |
-| [`docs-check`](../.claude/agents/docs-check.md) | Sonnet | docs 整合性の点検と機械的修正 | step 7 | 点検結果・修正点・要対応項目 |
-| [`evaluator`](../.claude/agents/evaluator.md) | Opus | 受け入れ条件・spec の充足を独立評価 | step 7 | 総合判定・受け入れ条件ごとの合否・要対応項目 |
+| エージェント                                      | モデル | 委譲する作業                                     | 対応するフロー | 主エージェントが受け取るもの                 |
+| ------------------------------------------------- | ------ | ------------------------------------------------ | -------------- | -------------------------------------------- |
+| [`investigate`](../.claude/agents/investigate.md) | Sonnet | docs 先・コード裏取りの調査                      | step 3         | 結論・関連 `path:line`・裏取りメモ           |
+| [`verify`](../.claude/agents/verify.md)           | Sonnet | lint / フォーマット / 型 / テストを green にする | step 7         | 検証結果・修正点・要判断項目                 |
+| [`docs-check`](../.claude/agents/docs-check.md)   | Sonnet | docs 整合性の点検と機械的修正                    | step 7         | 点検結果・修正点・要対応項目                 |
+| [`evaluator`](../.claude/agents/evaluator.md)     | Opus   | 受け入れ条件・spec の充足を独立評価              | step 7         | 総合判定・受け入れ条件ごとの合否・要対応項目 |
 
 調査・検証・docs 整合の委譲は費用対効果で判断してよい（一発で通る見込みなら `verify` を介さず直接回す、軽い確認は `investigate` を介さず直接読む等）。`evaluator` だけ Opus を使うのは、他の 3 つが結果を客観的に検証できる機械的・探索的タスクなのに対し、評価は裁量を伴う判断であり、かつ生成側（主エージェント）も上位モデルのため、評価者が弱いと見落としを追認してしまうため。
 
@@ -103,11 +103,11 @@ main ──┬──────────────────┬──→
 
 `evaluator` の起動可否は **CLAUDE.md の「評価ゲート（evaluator）モード」** を単一の正本として決める（`/verify-gate` skill はこの値を読むだけ）。対象は受け入れ条件を持つ `feature` / `bugfix` / `hotfix` ブランチのみで、`refactor` / `docs` / `chore` は常に対象外。
 
-| モード | 挙動 |
-|---|---|
-| `always` | 対象ブランチで**必ず**起動（省略不可）。「単純だから不要」という判断自体が、evaluator で排除したい自己評価バイアスに当たるため、起動可否を裁量に委ねない |
-| `auto` | 変更規模が**閾値**を超える回に自動起動する。評価後に **1 度だけ**「以降 `always` に固定するか」を確認し、Yes なら CLAUDE.md のモードを `always` へ更新（昇格は一方向・固定）。閾値以下の回はスキップしてよい |
-| `off` | 起動しない。`.claude/agents/evaluator.md` は同梱済みのため、いつでも `auto` / `always` へ昇格できる |
+| モード   | 挙動                                                                                                                                                                                                         |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `always` | 対象ブランチで**必ず**起動（省略不可）。「単純だから不要」という判断自体が、evaluator で排除したい自己評価バイアスに当たるため、起動可否を裁量に委ねない                                                     |
+| `auto`   | 変更規模が**閾値**を超える回に自動起動する。評価後に **1 度だけ**「以降 `always` に固定するか」を確認し、Yes なら CLAUDE.md のモードを `always` へ更新（昇格は一方向・固定）。閾値以下の回はスキップしてよい |
+| `off`    | 起動しない。`.claude/agents/evaluator.md` は同梱済みのため、いつでも `auto` / `always` へ昇格できる                                                                                                          |
 
 **auto の発火閾値**（いずれかを満たせば「大きい変更」とみなす。数値はプロジェクトに合わせて調整可）:
 
@@ -121,11 +121,11 @@ main ──┬──────────────────┬──→
 
 定型の多段手順は `.claude/skills/` 配下の skill にまとめ、`/<skill 名>` で起動する。skill は**手順の入口**であり、起動条件・モデル選定・evaluator モードなどの**ルールは再定義せず §5.2 等の正本を参照**する（二重管理＝drift を避けるため）。
 
-| skill | 役割 | 対応するフロー |
-|---|---|---|
-| [`start-task`](../.claude/skills/start-task/SKILL.md) | Issue 確認/起票・ブランチ作成・`investigate` 起動・docs 先/テスト先の順序ゲート（判断は自動化せず確認に留める）・実装 | step 1〜6 |
-| [`verify-gate`](../.claude/skills/verify-gate/SKILL.md) | ブランチ種別を判定し `verify` →（docs 変更時）`docs-check` →（feature/bugfix/hotfix・モードに応じて）`evaluator` を順に起動・集約 | step 7 |
-| [`finish-task`](../.claude/skills/finish-task/SKILL.md) | `main` 最新化・マージ済みブランチ削除・完了タスクの archive 移動（docs ブランチ＋PR） | step 9 |
+| skill                                                   | 役割                                                                                                                              | 対応するフロー |
+| ------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| [`start-task`](../.claude/skills/start-task/SKILL.md)   | Issue 確認/起票・ブランチ作成・`investigate` 起動・docs 先/テスト先の順序ゲート（判断は自動化せず確認に留める）・実装             | step 1〜6      |
+| [`verify-gate`](../.claude/skills/verify-gate/SKILL.md) | ブランチ種別を判定し `verify` →（docs 変更時）`docs-check` →（feature/bugfix/hotfix・モードに応じて）`evaluator` を順に起動・集約 | step 7         |
+| [`finish-task`](../.claude/skills/finish-task/SKILL.md) | `main` 最新化・マージ済みブランチ削除・完了タスクの archive 移動（docs ブランチ＋PR）                                             | step 9         |
 
 skill が呼ぶサブエージェントの**合否・設計判断は委譲しない**点は §5.1 / §5.2 と同じ。skill は正しい順序・条件での起動と結果集約に徹する。ホスト操作（Issue / PR）を含む skill は冒頭注記の読み替えに従う。
 
@@ -134,11 +134,11 @@ skill が呼ぶサブエージェントの**合否・設計判断は委譲しな
 特定の種類のファイルを編集する瞬間にだけ思い出すべき遵守事項は、`.claude/rules/` 配下に **path-scoped rule** として置く。Claude Code はマッチするファイルを読んだ時にそのルールをコンテキストへ自動注入する（`paths` frontmatter の glob で対象を指定）。CLAUDE.md（常時ロード）と違い、関係するファイルを触る時だけ載るため文脈を節約できる。
 
 - **薄いポインタに徹し、正本は再定義しない**: ルール本文に手順をコピーすると単一情報源が崩れる（§5.3 の skill と同じく、判断・正本は一箇所に集約する）。各 rule は対応する正本 docs を指し、編集時に外しやすい要点だけを再掲する。
-- **順序ゲートの置き換えではなく補完**: path-scoped は「マッチするファイルを *読んだ* 後」に発火するため、新規領域では発火が遅れることがある。docs 先・テスト先（§5 step4-5）や PR 前の検証ゲート（§5 step7）を代替しない。
+- **順序ゲートの置き換えではなく補完**: path-scoped は「マッチするファイルを _読んだ_ 後」に発火するため、新規領域では発火が遅れることがある。docs 先・テスト先（§5 step4-5）や PR 前の検証ゲート（§5 step7）を代替しない。
 
 雛形には以下を同梱している（`paths` の glob はキックオフでプロジェクトのテスト配置に合わせて置換する）。
 
-| rule | `paths` | 正本 | 効かせたい瞬間 |
-|---|---|---|---|
-| [`testing.md`](../.claude/rules/testing.md) | テストファイルの glob（キックオフで置換） | [testing/policy.md](testing/policy.md) | テストを書く / 直す時（テストファースト・red 単独コミット禁止） |
-| [`docs-upkeep.md`](../.claude/rules/docs-upkeep.md) | `docs/*.md`, `docs/**/*.md` | [docs-guide.md](docs-guide.md) | spec / arch / task を編集する時（index 追記・相互リンク・archive 手順の漏れ防止） |
+| rule                                                | `paths`                                   | 正本                                   | 効かせたい瞬間                                                                    |
+| --------------------------------------------------- | ----------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------- |
+| [`testing.md`](../.claude/rules/testing.md)         | テストファイルの glob（キックオフで置換） | [testing/policy.md](testing/policy.md) | テストを書く / 直す時（テストファースト・red 単独コミット禁止）                   |
+| [`docs-upkeep.md`](../.claude/rules/docs-upkeep.md) | `docs/*.md`, `docs/**/*.md`               | [docs-guide.md](docs-guide.md)         | spec / arch / task を編集する時（index 追記・相互リンク・archive 手順の漏れ防止） |

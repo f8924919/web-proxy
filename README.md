@@ -9,10 +9,10 @@
 
 ## 動作環境
 
-| 項目 | 要件 |
-|---|---|
-| OS | Linux / macOS / Windows |
-| ランタイム | Node.js 18 以上 |
+| 項目       | 要件                    |
+| ---------- | ----------------------- |
+| OS         | Linux / macOS / Windows |
+| ランタイム | Node.js 18 以上         |
 
 ## 開発環境のセットアップと起動
 
@@ -29,9 +29,9 @@ npm run build
 
 ## 詳細ドキュメント
 
-| ドキュメント | 内容 |
-|---|---|
-| [docs/spec/](docs/spec/) | 動作仕様 |
-| [docs/arch/](docs/arch/) | モジュール実装の詳細 |
+| ドキュメント                                 | 内容                                      |
+| -------------------------------------------- | ----------------------------------------- |
+| [docs/spec/](docs/spec/)                     | 動作仕様                                  |
+| [docs/arch/](docs/arch/)                     | モジュール実装の詳細                      |
 | [docs/git-workflow.md](docs/git-workflow.md) | ブランチ運用・Issue ベース開発・PR ルール |
-| [docs/testing/](docs/testing/) | テスト方針・実行コマンド |
+| [docs/testing/](docs/testing/)               | テスト方針・実行コマンド                  |
