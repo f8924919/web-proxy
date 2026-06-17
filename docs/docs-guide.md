@@ -60,6 +60,7 @@ CLAUDE.md には概要 1〜2 行と詳細ファイルへのリンクのみを残
 | `docs/task/archive/`   | 完了タスクのアーカイブ（`index.md` + 完了済み `{slug}.md`）                                     | `kebab-case.md`（タスク slug）                         |
 | `docs/research/`       | 採否未決の **調査・検討メモ**（実装前の比較検討など）                                           | `kebab-case.md`                                        |
 | `docs/testing/`        | テスト方針・実行コマンド・カバレッジ運用                                                        | `kebab-case.md`                                        |
+| `docs/setup.md`        | 環境構築・開発サーバー起動・IDE 設定・トラブルシューティング                                    | 直下の単独ファイル                                     |
 | `docs/git-workflow.md` | ブランチ運用・Issue ベース開発・PR の詳細ルール                                                 | 直下の単独ファイル                                     |
 | `docs/docs-guide.md`   | 本ガイド                                                                                        | 直下の単独ファイル                                     |
 

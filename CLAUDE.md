@@ -96,6 +96,7 @@ npm run build
 
 | ドキュメント                                   | 内容                                                          |
 | ---------------------------------------------- | ------------------------------------------------------------- |
+| [docs/setup.md](docs/setup.md)                 | 環境構築・開発サーバー起動・IDE 設定・トラブルシューティング  |
 | [docs/spec/index.md](docs/spec/index.md)       | 動作仕様・画面仕様の目次                                      |
 | [docs/arch/index.md](docs/arch/index.md)       | モジュール実装の目次                                          |
 | [docs/git-workflow.md](docs/git-workflow.md)   | ブランチ運用・Issue ベース開発・PR の詳細ルール               |
