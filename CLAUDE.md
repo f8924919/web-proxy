@@ -94,13 +94,13 @@ npm run build
 
 詳細は以下の目次から参照する。コード変更時は対応するファイルも合わせて更新すること。
 
-| ドキュメント | 内容 |
-|---|---|
-| [docs/spec/index.md](docs/spec/index.md) | 動作仕様・画面仕様の目次 |
-| [docs/arch/index.md](docs/arch/index.md) | モジュール実装の目次 |
-| [docs/git-workflow.md](docs/git-workflow.md) | ブランチ運用・Issue ベース開発・PR の詳細ルール |
-| [docs/testing/index.md](docs/testing/index.md) | テスト実行コマンド・方針・カバレッジ運用 |
-| [docs/task/index.md](docs/task/index.md) | タスクの進捗管理（セッション開始時に必ず確認） |
-| [docs/docs-guide.md](docs/docs-guide.md) | CLAUDE.md / docs の更新ルール（ドキュメント編集時に必ず参照） |
+| ドキュメント                                   | 内容                                                          |
+| ---------------------------------------------- | ------------------------------------------------------------- |
+| [docs/spec/index.md](docs/spec/index.md)       | 動作仕様・画面仕様の目次                                      |
+| [docs/arch/index.md](docs/arch/index.md)       | モジュール実装の目次                                          |
+| [docs/git-workflow.md](docs/git-workflow.md)   | ブランチ運用・Issue ベース開発・PR の詳細ルール               |
+| [docs/testing/index.md](docs/testing/index.md) | テスト実行コマンド・方針・カバレッジ運用                      |
+| [docs/task/index.md](docs/task/index.md)       | タスクの進捗管理（セッション開始時に必ず確認）                |
+| [docs/docs-guide.md](docs/docs-guide.md)       | CLAUDE.md / docs の更新ルール（ドキュメント編集時に必ず参照） |
 
 > **コードまたは仕様を変更・拡張するときは、対応する `docs/spec/` / `docs/arch/` のファイルも合わせて更新すること。詳細な記載基準は [docs/docs-guide.md](docs/docs-guide.md) に従うこと。**
