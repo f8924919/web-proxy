@@ -8,6 +8,7 @@
 | タスク                                       | 概要                                                        | 完了日     |
 | -------------------------------------------- | ----------------------------------------------------------- | ---------- |
 | [project-bootstrap.md](project-bootstrap.md) | プロジェクト初期構築（Next.js 15 + TypeScript + Jest）PR #1 | 2026-06-17 |
+| [proxy-core.md](proxy-core.md)               | プロキシコア実装（中継・HTML書き換え・SSRF対策・レート制限）Issue #4 / PR #5 #6 | 2026-06-17 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
