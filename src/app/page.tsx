@@ -9,7 +9,8 @@ export default function HomePage() {
     e.preventDefault();
     if (!url) return;
     const target = url.startsWith("http") ? url : `https://${url}`;
-    window.location.href = `/browse?url=${encodeURIComponent(target)}`;
+    const base = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    window.location.href = `${base}/browse?url=${encodeURIComponent(target)}`;
   };
 
   return (
