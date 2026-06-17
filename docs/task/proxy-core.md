@@ -31,20 +31,20 @@
 
 ### 新規作成ファイル
 
-| ファイル | 内容 |
-|---|---|
-| `src/app/browse/route.ts` | ブラウズ Route Handler（生 HTML レスポンスを返す） |
-| `src/app/api/proxy/route.ts` | 静的アセット中継 API Route Handler |
-| `src/lib/proxy/fetch.ts` | ターゲットへの fetch・SSRF チェック |
-| `src/lib/proxy/rewrite.ts` | HTML / CSS URL 書き換え（node-html-parser 使用） |
-| `src/lib/proxy/headers.ts` | レスポンスヘッダー処理（除去リスト適用） |
-| `src/lib/proxy/rateLimit.ts` | インメモリ・スライディングウィンドウ レート制限 |
-| `tests/lib/proxy/` | 上記ユニットテスト |
+| ファイル                     | 内容                                               |
+| ---------------------------- | -------------------------------------------------- |
+| `src/app/browse/route.ts`    | ブラウズ Route Handler（生 HTML レスポンスを返す） |
+| `src/app/api/proxy/route.ts` | 静的アセット中継 API Route Handler                 |
+| `src/lib/proxy/fetch.ts`     | ターゲットへの fetch・SSRF チェック                |
+| `src/lib/proxy/rewrite.ts`   | HTML / CSS URL 書き換え（node-html-parser 使用）   |
+| `src/lib/proxy/headers.ts`   | レスポンスヘッダー処理（除去リスト適用）           |
+| `src/lib/proxy/rateLimit.ts` | インメモリ・スライディングウィンドウ レート制限    |
+| `tests/lib/proxy/`           | 上記ユニットテスト                                 |
 
 ### 変更ファイル
 
-| ファイル | 内容 |
-|---|---|
+| ファイル       | 内容                      |
+| -------------- | ------------------------- |
 | `package.json` | `node-html-parser` を追加 |
 
 ### v1 スコープ外

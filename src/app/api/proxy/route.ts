@@ -18,7 +18,8 @@ export async function GET(req: NextRequest) {
     return new Response("Bad Request", { status: 400 });
   }
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   try {
     rateLimiter.check(ip);
   } catch {

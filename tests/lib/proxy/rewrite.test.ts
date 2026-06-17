@@ -10,13 +10,17 @@ describe("rewriteHtml", () => {
     test("絶対 URL をそのまま /browse に書き換える", () => {
       const html = `<a href="https://example.com/about">link</a>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(`href="/browse?url=${encodeURIComponent("https://example.com/about")}"`);
+      expect(result).toContain(
+        `href="/browse?url=${encodeURIComponent("https://example.com/about")}"`
+      );
     });
 
     test("相対パスをベース URL で解決して /browse に書き換える", () => {
       const html = `<a href="/contact">link</a>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(`href="/browse?url=${encodeURIComponent("https://example.com/contact")}"`);
+      expect(result).toContain(
+        `href="/browse?url=${encodeURIComponent("https://example.com/contact")}"`
+      );
     });
   });
 
@@ -24,7 +28,9 @@ describe("rewriteHtml", () => {
     test("フォームの action を /browse に書き換える", () => {
       const html = `<form action="/search"></form>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(`action="/browse?url=${encodeURIComponent("https://example.com/search")}"`);
+      expect(result).toContain(
+        `action="/browse?url=${encodeURIComponent("https://example.com/search")}"`
+      );
     });
   });
 
@@ -53,24 +59,32 @@ describe("rewriteCss", () => {
   test("url() を /api/proxy に書き換える", () => {
     const css = `body { background: url('/bg.png'); }`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(`/api/proxy?url=${encodeURIComponent("https://example.com/bg.png")}`);
+    expect(result).toContain(
+      `/api/proxy?url=${encodeURIComponent("https://example.com/bg.png")}`
+    );
   });
 
   test("url() 内の引用符なし表記も書き換える", () => {
     const css = `body { background: url(/bg.png); }`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(`/api/proxy?url=${encodeURIComponent("https://example.com/bg.png")}`);
+    expect(result).toContain(
+      `/api/proxy?url=${encodeURIComponent("https://example.com/bg.png")}`
+    );
   });
 
   test("@import を /api/proxy に書き換える", () => {
     const css = `@import '/fonts.css';`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(`/api/proxy?url=${encodeURIComponent("https://example.com/fonts.css")}`);
+    expect(result).toContain(
+      `/api/proxy?url=${encodeURIComponent("https://example.com/fonts.css")}`
+    );
   });
 
   test("既に絶対 URL の url() も書き換える", () => {
     const css = `body { background: url('https://cdn.example.com/bg.png'); }`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(`/api/proxy?url=${encodeURIComponent("https://cdn.example.com/bg.png")}`);
+    expect(result).toContain(
+      `/api/proxy?url=${encodeURIComponent("https://cdn.example.com/bg.png")}`
+    );
   });
 });

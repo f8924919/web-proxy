@@ -80,9 +80,9 @@ src/
 
 ### エラー型
 
-| エラークラス | 意味 |
-|---|---|
-| `SsrfBlockedError` | SSRF ブロック（403 を返す） |
+| エラークラス        | 意味                                  |
+| ------------------- | ------------------------------------- |
+| `SsrfBlockedError`  | SSRF ブロック（403 を返す）           |
 | `FetchTimeoutError` | タイムアウト / 到達不能（502 を返す） |
 
 ---
@@ -95,13 +95,13 @@ src/
 
 相対 URL は `baseUrl` を基準に絶対 URL へ変換してからエンコードする。
 
-| 対象 | 書き換え先 |
-|---|---|
-| `<a href>` | `/browse?url=<encoded>` |
-| `<form action>` | `/browse?url=<encoded>` |
+| 対象                         | 書き換え先                 |
+| ---------------------------- | -------------------------- |
+| `<a href>`                   | `/browse?url=<encoded>`    |
+| `<form action>`              | `/browse?url=<encoded>`    |
 | `<img src>` / `<source src>` | `/api/proxy?url=<encoded>` |
-| `<link href>` | `/api/proxy?url=<encoded>` |
-| `<script src>` | `/api/proxy?url=<encoded>` |
+| `<link href>`                | `/api/proxy?url=<encoded>` |
+| `<script src>`               | `/api/proxy?url=<encoded>` |
 
 ### CSS 書き換え
 

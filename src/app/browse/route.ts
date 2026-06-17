@@ -1,5 +1,9 @@
 import { NextRequest } from "next/server";
-import { proxyFetch, SsrfBlockedError, FetchTimeoutError } from "@/lib/proxy/fetch";
+import {
+  proxyFetch,
+  SsrfBlockedError,
+  FetchTimeoutError,
+} from "@/lib/proxy/fetch";
 import { rewriteHtml } from "@/lib/proxy/rewrite";
 import { sanitizeHeaders } from "@/lib/proxy/headers";
 import { rateLimiter } from "@/lib/proxy/rateLimit";
@@ -27,7 +31,8 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip =
+    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
   try {
     rateLimiter.check(ip);
   } catch {
