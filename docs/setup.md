@@ -58,12 +58,27 @@ npm run dev
 
 ## 5. 環境変数
 
-現時点で必須の環境変数はありません。将来的に外部 API キーなどが必要になった場合は、プロジェクトルートに `.env.local` を作成し、以下の形式で記述します（`.env.local` は `.gitignore` に含まれています）。
+プロジェクトルートに `.env.local` を作成して設定します（`.env.local` は `.gitignore` に含まれており、コミットされません）。
+
+### `NEXT_PUBLIC_BASE_PATH`（任意）
+
+リバースプロキシがパスプレフィックスを付与する環境で使用します。
 
 ```bash
-# .env.local の例
-# EXAMPLE_KEY=your_value
+# .env.local
+NEXT_PUBLIC_BASE_PATH=/proxy/3000
 ```
+
+| 設定しない場合 | `http://localhost:3000/` で直接アクセスする通常開発環境 |
+| -------------- | ------------------------------------------------------- |
+| 設定する場合   | code-server ポート転送（`/proxy/3000/`）などリバースプロキシ下 |
+
+設定すると以下に反映されます。
+
+- `next.config.ts` の `assetPrefix` — `_next/static/...` への HTML 参照パスにプレフィックスを付与
+- `src/lib/proxy/rewrite.ts` — `/browse` / `/api/proxy` へのリンク書き換え時にプレフィックスを付与
+
+詳細は [docs/arch/proxy.md §リバースプロキシ下でのパスプレフィックス](arch/proxy.md) を参照。
 
 ---
 

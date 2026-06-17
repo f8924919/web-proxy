@@ -144,3 +144,39 @@ const store = new Map<string, number[]>();
 
 - Node.js runtime のインメモリのみ。プロセス再起動でリセットされる。
 - 複数 Next.js インスタンスをまたいだ共有は非対応（v2 以降）。
+
+---
+
+## リバースプロキシ下でのパスプレフィックス
+
+code-server のポート転送（`/proxy/3000/`）など、リバースプロキシがパスプレフィックスを付与する環境向けの設定。
+
+### 環境変数
+
+```bash
+# .env.local
+NEXT_PUBLIC_BASE_PATH=/proxy/3000
+```
+
+### `next.config.ts` — `assetPrefix`
+
+```ts
+assetPrefix: process.env.NEXT_PUBLIC_BASE_PATH ?? ""
+```
+
+`basePath` ではなく `assetPrefix` を使う理由：
+
+- **`basePath`** は `_next/static/...` の**サーブパス**を移動する。code-server はプレフィックスを除去してからポートへ転送するため `/_next/...` に来てしまい 404 になる。
+- **`assetPrefix`** は HTML 内に出力される `<script src="...">` の参照先のみ変更し、実際のサーブパスは `/_next/...` のまま維持する。プレフィックス除去後の転送と整合する。
+
+### `src/lib/proxy/rewrite.ts` — URL 書き換えへの影響
+
+```ts
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+// /browse → ${BASE_PATH}/browse
+// /api/proxy → ${BASE_PATH}/api/proxy
+```
+
+`rewrite.ts` は HTML 書き換え時に `/browse` と `/api/proxy` の先頭に `BASE_PATH` を付ける。これにより、リバースプロキシ下でもリンクが正しいパスを指す。
+
+アドレスバー HTML のフォーム `action` とホームリンクも同様に `BASE_PATH` を付与する。
