@@ -12,7 +12,10 @@ describe("sanitizeHeaders", () => {
   ];
 
   test.each(BLOCKED)("%s ヘッダーを除去する", (name) => {
-    const headers = new Headers({ [name]: "some-value", "content-type": "text/html" });
+    const headers = new Headers({
+      [name]: "some-value",
+      "content-type": "text/html",
+    });
     const result = sanitizeHeaders(headers);
     expect(result.has(name)).toBe(false);
   });
@@ -42,7 +45,10 @@ describe("sanitizeSetCookie", () => {
   });
 
   test("Secure / SameSite はそのまま維持する", () => {
-    const value = "token=xyz; Path=/; Domain=example.com; Secure; SameSite=Strict";
-    expect(sanitizeSetCookie(value)).toBe("token=xyz; Path=/; Secure; SameSite=Strict");
+    const value =
+      "token=xyz; Path=/; Domain=example.com; Secure; SameSite=Strict";
+    expect(sanitizeSetCookie(value)).toBe(
+      "token=xyz; Path=/; Secure; SameSite=Strict"
+    );
   });
 });

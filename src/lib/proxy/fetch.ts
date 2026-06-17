@@ -24,21 +24,22 @@ const PRIVATE_RANGES: [number, number][] = [
 ];
 
 function ipToInt(ip: string): number {
-  return ip
-    .split(".")
-    .reduce((acc, octet) => (acc << 8) | parseInt(octet, 10), 0) >>> 0;
+  return (
+    ip
+      .split(".")
+      .reduce((acc, octet) => (acc << 8) | parseInt(octet, 10), 0) >>> 0
+  );
 }
 
 export function isSsrfBlocked(ip: string): boolean {
-  if (ip === "::1") return true;
-
   const n = ipToInt(ip);
   return PRIVATE_RANGES.some(([lo, hi]) => n >= lo && n <= hi);
 }
 
 export async function proxyFetch(url: string): Promise<Response> {
   const parsed = new URL(url);
-  const { address } = await dns.lookup(parsed.hostname);
+  // IPv4 に固定して解決する（IPv6 の SSRF 判定は v2 以降）
+  const { address } = await dns.lookup(parsed.hostname, { family: 4 });
 
   if (isSsrfBlocked(address)) {
     throw new SsrfBlockedError(address);

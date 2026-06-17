@@ -18,7 +18,8 @@ function assetUrl(href: string, base: string): string {
   return `${BASE_PATH}/api/proxy?url=${encodeURIComponent(resolve(href, base))}`;
 }
 
-const ADDRESS_BAR_HTML = (currentUrl: string) => `
+const ADDRESS_BAR_HTML = (currentUrl: string) =>
+  `
 <div id="proxy-addressbar" style="position:sticky;top:0;z-index:99999;background:#1e1e2e;padding:6px 12px;display:flex;gap:8px;align-items:center;font-family:sans-serif;box-shadow:0 2px 4px rgba(0,0,0,.4)">
   <form onsubmit="(function(e){e.preventDefault();var v=e.target.querySelector('input').value;if(!v)return;window.location.href='${BASE_PATH}/browse?url='+encodeURIComponent(v.startsWith('http')?v:'https://'+v)})(event)" style="display:flex;flex:1;gap:8px">
     <input value="${currentUrl.replace(/"/g, "&quot;")}" style="flex:1;padding:4px 10px;border:1px solid #555;border-radius:4px;background:#2a2a3e;color:#fff;font-size:14px" />
