@@ -20,6 +20,7 @@ target/
 .env
 .env.local
 *.local
+.claude/settings.local.json
 
 # Logs
 *.log
