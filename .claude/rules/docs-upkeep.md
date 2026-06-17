@@ -1,0 +1,16 @@
+---
+paths:
+  - "docs/*.md"
+  - "docs/**/*.md"
+---
+
+# docs 編集時のルール
+
+docs の追加・更新基準の**正本は [docs/docs-guide.md](../../docs/docs-guide.md)**。着手前に必ず読むこと。本ファイルは編集時に思い出すべき要点のみで、詳細はコピーしない（drift 防止。[git-workflow.md](../../docs/git-workflow.md) §5.3 と同方針）。
+
+## 忘れやすい点（正本の要約）
+
+- **index 追記**: ファイルを追加・改名・削除したら、同フォルダの `index.md` を必ず更新する（spec / arch / task それぞれ。docs-guide §3.4）。
+- **相互リンク**: spec ↔ arch ↔ コードの導線を保つ。`arch/index.md` の表には対応する `spec/` を「関連仕様」列で併記（docs-guide §3.3）。リンク切れと命名規則（kebab-case）を確認する。
+- **タスク状態**: `docs/task/index.md` のステータス（未着手 / 進行中 / 完了）と更新日は状態が変わるたびに更新する（docs-guide §3.2）。
+- **完了タスクの archive 移動**: docs-guide §4.2 の手順に従う。`main` への直コミットは禁止のため、docs ブランチ＋PR で行う。
