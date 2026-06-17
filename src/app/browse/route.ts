@@ -13,7 +13,8 @@ export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
 
   if (!url) {
-    return Response.redirect(new URL("/", req.url), 307);
+    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
+    return Response.redirect(new URL(basePath + "/", req.url), 307);
   }
 
   let parsed: URL;
