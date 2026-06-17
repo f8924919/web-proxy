@@ -7,7 +7,7 @@
 
 | タスク | 概要 | 完了日 |
 | ------ | ---- | ------ |
-| —      | —    | —      |
+| [project-bootstrap.md](project-bootstrap.md) | プロジェクト初期構築（Next.js 15 + TypeScript + Jest）PR #1 | 2026-06-17 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
