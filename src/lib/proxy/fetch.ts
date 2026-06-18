@@ -49,7 +49,10 @@ export async function proxyFetch(url: string): Promise<Response> {
     return await fetch(url, {
       redirect: "follow",
       signal: AbortSignal.timeout(10_000),
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; web-proxy/1.0)" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; web-proxy/1.0)",
+        "Accept-Encoding": "identity",
+      },
     });
   } catch {
     throw new FetchTimeoutError();

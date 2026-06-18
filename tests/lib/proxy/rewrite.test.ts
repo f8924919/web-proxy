@@ -37,7 +37,7 @@ describe("rewriteHtml", () => {
   describe("静的アセット → /api/proxy", () => {
     test.each([
       ["<img src>", `<img src="/logo.png">`, "src", "/logo.png"],
-      ["<link href>", `<link href="/style.css">`, "href", "/style.css"],
+      ["<link rel=stylesheet href>", `<link rel="stylesheet" href="/style.css">`, "href", "/style.css"],
       ["<script src>", `<script src="/app.js"></script>`, "src", "/app.js"],
     ])("%s を /api/proxy に書き換える", (_label, html, attr, path) => {
       const result = rewriteHtml(html, BASE);
