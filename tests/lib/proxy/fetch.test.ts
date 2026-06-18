@@ -1,7 +1,7 @@
 /** @jest-environment node */
-// 仕様: docs/spec/features/proxy.md §SSRF 対策
+// 仕様: docs/spec/features/proxy.md §SSRF 対策 / §POST 中継
 
-import { isSsrfBlocked } from "@/lib/proxy/fetch";
+import { isSsrfBlocked, buildProxyRequestInit } from "@/lib/proxy/fetch";
 
 describe("isSsrfBlocked", () => {
   test.each([
@@ -30,5 +30,50 @@ describe("isSsrfBlocked", () => {
     ["192.169.0.0", "just above private class C"],
   ])("returns false for %s (%s)", (ip) => {
     expect(isSsrfBlocked(ip)).toBe(false);
+  });
+});
+
+describe("buildProxyRequestInit", () => {
+  test("defaults_to_get_without_body_and_keeps_base_headers", () => {
+    const init = buildProxyRequestInit();
+    expect(init.method).toBe("GET");
+    expect(init.body).toBeUndefined();
+    expect(init.duplex).toBeUndefined();
+    const headers = init.headers as Record<string, string>;
+    expect(headers["User-Agent"]).toContain("web-proxy");
+    expect(headers["Accept-Encoding"]).toBe("identity");
+  });
+
+  test("forwards_post_method_with_stream_body_and_sets_duplex_half", () => {
+    const body = new ReadableStream();
+    const init = buildProxyRequestInit({ method: "POST", body });
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(body);
+    // ReadableStream ボディには duplex: "half" が必須
+    expect(init.duplex).toBe("half");
+  });
+
+  test("forwards_request_content_type_header_merged_over_base_headers", () => {
+    const init = buildProxyRequestInit({
+      method: "POST",
+      body: "a=1",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+    });
+    const headers = init.headers as Record<string, string>;
+    expect(headers["content-type"]).toBe("application/x-www-form-urlencoded");
+    // 既定ヘッダーは維持される
+    expect(headers["Accept-Encoding"]).toBe("identity");
+  });
+
+  test("omits_duplex_for_non_stream_body", () => {
+    const init = buildProxyRequestInit({ method: "POST", body: "a=1" });
+    expect(init.body).toBe("a=1");
+    expect(init.duplex).toBeUndefined();
+  });
+
+  test("drops_body_for_get_even_if_provided", () => {
+    const init = buildProxyRequestInit({ method: "GET", body: "a=1" });
+    expect(init.body).toBeUndefined();
+    expect(init.duplex).toBeUndefined();
   });
 });
