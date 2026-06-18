@@ -1,7 +1,9 @@
 // web-proxy 実行時リクエスト横取り Service Worker。
-// 閲覧ページ（/browse?url=<target>）内で JS が動的に発行する GET リクエストを
-// 横取りし、/api/proxy?url=... 経由へ振り向ける。
+// 閲覧ページ（/browse?url=<target>）内で JS が動的に発行するリクエスト
+// （ナビゲーションを除く全メソッド）を横取りし、同一オリジンの /api/proxy?url=...
+// 経由へ振り向ける（クロスオリジン化を解消し CORS プリフライトを消す）。
 // 仕様: docs/spec/features/proxy.md §Service Worker による実行時リクエスト横取り
+//      docs/spec/features/proxy.md §CORS プリフライト対応
 //      docs/arch/proxy.md §Service Worker
 //
 // 純粋ロジック（下記関数）は module.exports で公開してテストする。
@@ -100,8 +102,8 @@
     });
     self.addEventListener("fetch", function (event) {
       const req = event.request;
-      if (req.method !== "GET") return;
-      if (req.mode === "navigate") return; // 閲覧ページ遷移は素通し
+      // ページ遷移ナビゲーション（フォーム POST 含む）はサーバー側書き換えに委ねる。
+      if (req.mode === "navigate") return;
 
       const basePath = deriveBasePath(self.registration.scope);
       const swOrigin = self.location.origin;
@@ -113,22 +115,17 @@
         return;
       }
 
-      // 同一オリジンの自前ルートは介在しない
-      if (reqUrl.origin === swOrigin && isProxyOwnPath(reqUrl.pathname, basePath)) {
+      // 同一オリジンの自前ルートは介在しない（/api/proxy への再帰を防ぐ）
+      if (
+        reqUrl.origin === swOrigin &&
+        isProxyOwnPath(reqUrl.pathname, basePath)
+      ) {
         return;
       }
 
-      // クロスオリジンは要求元ページに依存しないので同期的に振り向ける
-      if (reqUrl.origin !== swOrigin) {
-        event.respondWith(
-          fetch(basePath + "/api/proxy?url=" + encodeURIComponent(reqUrl.href), {
-            credentials: "omit",
-          }),
-        );
-        return;
-      }
-
-      // 同一オリジンの非自前パスは要求元ページからターゲットを解決する
+      // 非 GET を含むサブリソースを同一オリジンの /api/proxy へ振り向け、
+      // クロスオリジン化を解消して CORS プリフライトを消す。
+      // 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
       event.respondWith(
         (async function () {
           let pageUrl = req.referrer;
@@ -137,8 +134,20 @@
             if (client && client.url) pageUrl = client.url;
           }
           const dest = rewriteRequestUrl(req.url, pageUrl, swOrigin, basePath);
-          return dest ? fetch(dest, { credentials: "omit" }) : fetch(req);
-        })(),
+          if (!dest) return fetch(req);
+
+          // GET/HEAD はボディなし。非 GET はメソッド・ヘッダー・ボディを保持する。
+          if (req.method === "GET" || req.method === "HEAD") {
+            return fetch(dest, { credentials: "omit" });
+          }
+          const body = await req.arrayBuffer();
+          return fetch(dest, {
+            method: req.method,
+            headers: req.headers,
+            body: body.byteLength ? body : undefined,
+            credentials: "omit",
+          });
+        })()
       );
     });
   }

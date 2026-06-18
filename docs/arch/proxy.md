@@ -66,7 +66,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
    - 以降のレスポンス処理（rewriteHtml・sanitize・ステータス中継）は GET と共通
 ```
 
-> SW 経由の POST はスコープ外（[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）。`redirect: "follow"` によるクロスオリジンへの認証情報漏えいは既知の制約（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）。
+> JS 発行の非フォーム POST は SW が `/api/proxy` へ振り向けるため `/browse` POST ハンドラのスコープ外（[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）。`redirect: "follow"` によるクロスオリジンへの認証情報漏えいは既知の制約（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）。
 
 ### アドレスバー注入
 
@@ -76,22 +76,32 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 ## Route Handler: `src/app/api/proxy/route.ts`
 
-**役割**: 静的アセット（CSS・画像・JS）を透過中継する。
+**役割**: 静的アセット（CSS・画像・JS）の透過中継に加え、SW が振り向けた非 GET リクエストの中継と CORS プリフライト応答を担う。`GET` / `POST` / `PUT` / `PATCH` / `DELETE` / `OPTIONS` をエクスポートし、`GET`〜`DELETE` は共通の中継ヘルパーへ委譲する（[機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)）。
 
-### 処理フロー
+### 処理フロー（GET〜DELETE 共通）
 
 ```
 1. searchParams.get('url') を取得
 2. url が null → 400
 3. assetRateLimiter.check(getClientIp(headers)) → 超過なら 429
-4. proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) }) → SSRF ブロックなら 403
-   - 認証が要るアセットを取得できるよう Cookie / Authorization を転送
+4. ヘッダー方針をメソッドで分岐:
+   - GET/HEAD: forwardableRequestHeaders（許可リスト＝Cookie/Authorization、既存挙動）
+   - 非 GET   : relayRequestHeaders（拒否リスト方式で広めに転送）＋ body を転送
+   proxyFetch(url, { method, body, headers }) → SSRF ブロックなら 403
 5. Content-Type が text/css → rewriteCss(body, baseUrl)
 6. headers.sanitize(responseHeaders)
-7. Response を中継して返す
+7. 要求に Origin があれば Access-Control-Allow-Origin/-Credentials を付与
+8. Response を中継して返す
    （204/205/304 はボディを null として返す。1xx・ステータス範囲外・
     Response 構築・CSS 読取り/変換中の未捕捉例外は 502。
     [機能仕様 §ステータスコードの中継](../spec/features/proxy.md#ステータスコードの中継) 参照）
+```
+
+### 処理フロー（OPTIONS / プリフライト）
+
+```
+1. buildCorsPreflightHeaders(Origin, Access-Control-Request-Headers) を組み立て
+2. 204 No Content で返す（防御的。通常は SW の同一オリジン化でプリフライト自体が発生しない）
 ```
 
 ---
@@ -175,7 +185,7 @@ document に submit を capture で委任（動的フォームにも効く）:
 
 > 関連仕様: [プロキシ機能仕様 §Service Worker による実行時リクエスト横取り](../spec/features/proxy.md#service-worker-による実行時リクエスト横取り)
 
-**役割**: 閲覧ページ内で JS が実行時に発行する **GET リクエスト**を横取りし、`/api/proxy` 経由へ振り向ける。サーバー側 `rewriteHtml` が捕捉できない動的ロード（画像・スクリプト・XHR）を補完する。
+**役割**: 閲覧ページ内で JS が実行時に発行するリクエスト（**ナビゲーションを除く全メソッド**）を横取りし、`/api/proxy` 経由へ振り向ける。サーバー側 `rewriteHtml` が捕捉できない動的ロード（画像・スクリプト・XHR・非 GET API 呼び出し）を補完し、同一オリジン化により CORS プリフライトを消す（[機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)）。
 
 ### 登録
 
@@ -186,14 +196,18 @@ document に submit を capture で委任（動的フォームにも効く）:
 ### `fetch` ハンドラの処理
 
 ```
-1. method が GET 以外 → 素通し（respondWith しない）
-2. clientId から要求元ページ URL（/browse?url=<target>）を取得し、url パラメータをターゲットとする
-3. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
+1. request.mode === "navigate" → 素通し（ページ遷移・フォーム送信に委ねる）
+2. 同一オリジンの自前ルート（/browse・/api/proxy・/_next/* 等）→ 素通し
+3. clientId から要求元ページ URL（/browse?url=<target>）を取得し、url パラメータをターゲットとする
+4. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
    - クロスオリジンの絶対 URL → /api/proxy?url=<absolute>
    - 同一オリジンのルート絶対パス（自前ルート以外）→ ターゲット origin に解決し /api/proxy?url=<resolved>
-   - 自前ルート（/browse・/api/proxy・/_next/*・/sw.js・/favicon.ico・ホーム /）→ 素通し（null）
-4. 振り向け先があれば fetch(振り向け先) で応答、なければ素通し
+   - 自前ルート → 素通し（null）
+5. 振り向け先があれば fetch で応答（非 GET はメソッド・ボディ・リクエストヘッダーを保持、
+   credentials: "omit"）。なければ素通し
 ```
+
+> メソッド非依存の URL 書き換えは純粋関数 `rewriteRequestUrl` が担い（メソッドで分岐しない）、非 GET のボディ・ヘッダー保持は `fetch` ハンドラ（ランタイム配線）側で行う。
 
 ### 純粋ロジックの分離とテスト
 
@@ -201,7 +215,8 @@ document に submit を capture で委任（動的フォームにも効く）:
 
 ### 制約（MVP）
 
-- **GET のみ**。POST / 認証付き / プリフライト要のリクエストは横取りしない。
+- **ナビゲーションは対象外**。ページ遷移・フォーム送信はサーバー側書き換えに委ねる。
+- **`credentials: "omit"` で振り向け**。Cookie ベースのクロスオリジン XHR は best-effort（[機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)）。
 - **パス相対 URL は best-effort**。閲覧ページ URL（`/browse`）基準で解決されるため、ターゲット上のパス文脈を完全には復元できない。ルート絶対・絶対 URL は正しく振り向く。
 
 ---
@@ -218,7 +233,19 @@ document に submit を capture で委任（動的フォームにも効く）:
 
 > 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)
 
-受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。各 Route Handler はこの結果を `proxyFetch` の `options.headers` へ渡す（POST は `content-type` も併せて渡す）。
+受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。`GET` 中継（`/browse` GET / `/api/proxy` GET）が `proxyFetch` の `options.headers` へ渡す（`/browse` POST は `content-type` も併せて渡す）。
+
+### `relayRequestHeaders(incoming)`
+
+> 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
+
+SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding` 等の hop-by-hop・インフラ系を除外し、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。
+
+### `buildCorsPreflightHeaders(origin, requestHeaders)`
+
+> 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
+
+`OPTIONS` 応答用の CORS 許可ヘッダー（`Access-Control-Allow-Origin/-Methods/-Headers/-Credentials`・`Max-Age`・`Vary`）を組み立てる純粋関数。`origin` をエコーし（無ければ `*`）、`Access-Control-Request-Headers` をエコーする。`origin` がある場合のみ `Allow-Credentials: true` を付ける（`*` と `credentials` は併用不可のため）。
 
 ---
 
