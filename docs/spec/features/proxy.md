@@ -56,13 +56,30 @@ Next.js サーバー
 
 相対パスはターゲットサイトのオリジンを基準に絶対 URL へ変換してからエンコードする。
 
-| 対象タグ / 属性 | 遷移先ルート               | 理由                         |
-| --------------- | -------------------------- | ---------------------------- |
-| `<a href>`      | `/browse?url=<encoded>`    | リンク先もブラウズ画面で開く |
-| `<form action>` | `/browse?url=<encoded>`    | フォーム送信もプロキシ経由   |
-| `<img src>`     | `/api/proxy?url=<encoded>` | 透過中継（UI 不要）          |
-| `<link href>`   | `/api/proxy?url=<encoded>` | 透過中継                     |
-| `<script src>`  | `/api/proxy?url=<encoded>` | 透過中継                     |
+| 対象タグ / 属性 | 遷移先ルート               | 理由                                                     |
+| --------------- | -------------------------- | -------------------------------------------------------- |
+| `<a href>`      | `/browse?url=<encoded>`    | リンク先もブラウズ画面で開く                             |
+| `<form action>` | `/browse?url=<encoded>`    | フォーム送信もプロキシ経由（GET は下記スクリプトで補完） |
+| `<img src>`     | `/api/proxy?url=<encoded>` | 透過中継（UI 不要）                                      |
+| `<link href>`   | `/api/proxy?url=<encoded>` | 透過中継                                                 |
+| `<script src>`  | `/api/proxy?url=<encoded>` | 透過中継                                                 |
+
+### GET フォーム送信の横取り
+
+`<form action>` を `/browse?url=<encoded>` に書き換えても、**GET フォームの送信ではブラウザが action URL のクエリ文字列（`?url=...`）を破棄し、フォーム項目で置き換える**ため `url` が消失する。結果 `GET /browse?<form 項目>`（`url` 無し）となり、[ブラウズ Route Handler](../../arch/proxy.md#route-handler-srcappbrowseroutets) の `url` 未指定分岐が `BASE_PATH + "/"`（ホーム）へリダイレクトしてしまう（POST はボディで送るため影響を受けない）。
+
+これを補うため、`rewriteHtml` は閲覧ページの `<body>` 直後（アドレスバー・SW 登録に続けて）に **GET フォーム送信を横取りするスクリプト**を注入する。挙動は以下のとおり。
+
+| 条件                | 処理                                                                                                                  |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| GET フォームの送信  | `submit` を `preventDefault` し、ターゲットのクエリにフォーム項目をセットして `/browse?url=<再エンコード>` へ遷移する |
+| POST フォームの送信 | 横取りせず素通し（action のクエリが破棄されないため従来通り機能する）                                                 |
+
+- **ターゲットの復元**: 送信フォームの `action`（書き換え済み `…/browse?url=<target>`）から `url` パラメータを取り出してターゲットとする。`action` に `url` が無い（=`action` 属性なしのフォーム等）場合は、閲覧ページ自身の URL（`window.location`）の `url` パラメータをフォールバックに使う。
+- **クエリの載せ替え**: 復元したターゲットの**クエリ全体**をフォーム項目（`FormData`）で置き換える。これは GET フォーム送信時のブラウザ本来の挙動（action のクエリを破棄してフォーム項目に差し替え）をプロキシ経由で再現するもの。
+- **BASE_PATH の保持**: 遷移先は `action`（または `window.location`）の**パス部をそのまま再利用**するため、リバースプロキシのパスプレフィックス（`BASE_PATH`、例 `/proxy/3000`）込みの `…/browse` パスが保持される。
+- **動的フォーム対応**: `document` への `submit` イベント委任（キャプチャ）で捕捉するため、JS が実行時に追加したフォームにも効く。
+- **対象は GET のみ**: POST / その他メソッドは介入しない。GET フォーム以外の遷移は SW（下記）やサーバー側書き換えが担当する。
 
 ---
 
@@ -97,12 +114,12 @@ url("/api/proxy?url=<encodeURIComponent(absoluteURL)>")
 
 JS 依存サイト（Google 等）では、画像・スクリプト・XHR などがサーバー側の HTML 書き換え後に **JS が実行時に動的ロード**するため、`rewriteHtml` の属性書き換えだけでは捕捉できず、相対/絶対 URL がプロキシ origin やターゲット origin へ直接飛んで 404 / CORS エラーになる。これを補うため、閲覧ページに SW を登録し、ページ内の **GET リクエスト**を横取りして書き換える。
 
-| リクエスト種別 | 横取り後 |
-| -------------- | -------- |
-| クロスオリジンの絶対 URL（例 `https://ssl.gstatic.com/...`） | `/api/proxy?url=<absolute>` |
-| 同一オリジンのルート絶対パス（例 `/images/x.png`、`/xjs/...`） | ターゲット origin に解決し `/api/proxy?url=<resolved>` |
-| 自前ルート（`/browse`・`/api/proxy`・`/_next/*`・`/sw.js`・`/favicon.ico`・ホーム `/`） | 横取りせず素通し |
-| GET 以外（POST 等） | 横取りせず素通し |
+| リクエスト種別                                                                          | 横取り後                                               |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| クロスオリジンの絶対 URL（例 `https://ssl.gstatic.com/...`）                            | `/api/proxy?url=<absolute>`                            |
+| 同一オリジンのルート絶対パス（例 `/images/x.png`、`/xjs/...`）                          | ターゲット origin に解決し `/api/proxy?url=<resolved>` |
+| 自前ルート（`/browse`・`/api/proxy`・`/_next/*`・`/sw.js`・`/favicon.ico`・ホーム `/`） | 横取りせず素通し                                       |
+| GET 以外（POST 等）                                                                     | 横取りせず素通し                                       |
 
 - **ターゲット origin の特定**: SW は `fetch` イベントの `clientId` から要求元ページ（`/browse?url=<target>`）の URL を取得し、`url` パラメータをターゲットとして用いる。
 - **対象は GET のみ（MVP）**: POST / 認証付き（`credentials: include`）/ プリフライトを要するリクエスト（ログ・rpc 等）は横取り対象外。これらは引き続き CORS で失敗し得るが、ページ閲覧の主要素（画像・CSS・JS）には影響しない。
