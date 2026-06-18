@@ -42,7 +42,9 @@ public/
 1. searchParams.get('url') を取得
 2. url が null / パース失敗 → 307 リダイレクト to /
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
-4. proxyFetch(url) → SSRF ブロックなら 403 / 到達不能なら 502
+4. proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
+   → SSRF ブロックなら 403 / 到達不能なら 502
+   - 受信リクエストの Cookie / Authorization を転送（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）
 5. rewriteHtml(html, baseUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
 6. headers.sanitize(responseHeaders) でヘッダーを除去
 7. new Response(rewrittenHtml, { headers }) を返す
@@ -58,12 +60,13 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 1. searchParams.get('url') を取得
 2. url が null / パース失敗 → 400（GET のホームリダイレクトとは異なる）
 3. pageRateLimiter.check(...)（GET と同じバケット）→ 超過なら 429
-4. proxyFetch(url, { method: 'POST', body: req.body, headers: { 'content-type': … } })
-   - リクエストの Content-Type を転送（urlencoded / multipart の境界維持）
+4. proxyFetch(url, { method: 'POST', body: req.body,
+                     headers: { ...forwardableRequestHeaders(req.headers), 'content-type': … } })
+   - Cookie / Authorization に加え、リクエストの Content-Type を転送（urlencoded / multipart の境界維持）
    - 以降のレスポンス処理（rewriteHtml・sanitize・ステータス中継）は GET と共通
 ```
 
-> リクエストの `Cookie` / `Authorization` 転送・SW 経由の POST はスコープ外（[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）。
+> SW 経由の POST はスコープ外（[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）。`redirect: "follow"` によるクロスオリジンへの認証情報漏えいは既知の制約（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）。
 
 ### アドレスバー注入
 
@@ -81,7 +84,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 1. searchParams.get('url') を取得
 2. url が null → 400
 3. assetRateLimiter.check(getClientIp(headers)) → 超過なら 429
-4. proxyFetch(url) → SSRF ブロックなら 403
+4. proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) }) → SSRF ブロックなら 403
+   - 認証が要るアセットを取得できるよう Cookie / Authorization を転送
 5. Content-Type が text/css → rewriteCss(body, baseUrl)
 6. headers.sanitize(responseHeaders)
 7. Response を中継して返す
@@ -101,8 +105,9 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 `options` でメソッド・ボディ・追加リクエストヘッダーを受け取り、ターゲットへ転送する（省略時は GET・ボディなし＝従来動作）。
 
 - リクエスト構築（メソッド・ヘッダー結合・ボディ／`duplex` の決定）は純粋関数 **`buildProxyRequestInit(options)`** に分離し、実 `fetch`（I/O）から切り離してテスト可能にする（[テスト方針](../testing/policy.md)：外部 I/O は対象外のため、構築ロジックのみ検証）。
-- `User-Agent` / `Accept-Encoding: identity` は既定ヘッダーとして維持し、`options.headers`（例: `Content-Type`）を上書き結合する。
+- `User-Agent` / `Accept-Encoding: identity` は既定ヘッダーとして維持し、`options.headers`（例: `Content-Type`・`Cookie`・`Authorization`）を上書き結合する。認証ヘッダーの抽出は呼び出し側（Route Handler）が `forwardableRequestHeaders` で行い、`proxyFetch` 自体は渡されたヘッダーを転送するのみ。
 - ボディは `GET` / `HEAD` 以外かつ `body` 指定時のみ設定する。`ReadableStream` をボディに用いるため `duplex: "half"` を付与する（Node 22 / Next.js では `ReadableStream` ボディに必須）。
+- **リダイレクト**: `redirect: "follow"`。クロスオリジンへのリダイレクト時に `Authorization` / `Cookie` が漏れ得る既知の制約がある（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）。ハードニングは v2。
 
 ### SSRF チェック
 
@@ -203,11 +208,17 @@ document に submit を capture で委任（動的フォームにも効く）:
 
 ## `src/lib/proxy/headers.ts`
 
-**役割**: ターゲットのレスポンスヘッダーから不要なものを除去する。
+**役割**: ターゲットのレスポンスヘッダーから不要なものを除去する。加えて、リクエスト側で転送する認証ヘッダーの抽出も担う。
 
 除去対象（`Speculation-Rules` を含む）は [プロキシ機能仕様 §レスポンスヘッダー処理](../spec/features/proxy.md) を参照。前段 CDN が後段で注入する `Speculation-Rules` はコードからは除去できないため CDN 側設定で無効化する（同仕様の注記参照）。
 
-`Set-Cookie` の `Domain` 属性を除去する処理もここで行う。
+`Set-Cookie` の `Domain` 属性を除去する処理（`sanitizeSetCookie`）もここで行う。
+
+### `forwardableRequestHeaders(incoming)`
+
+> 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)
+
+受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。各 Route Handler はこの結果を `proxyFetch` の `options.headers` へ渡す（POST は `content-type` も併せて渡す）。
 
 ---
 

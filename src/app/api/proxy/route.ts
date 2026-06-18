@@ -1,7 +1,10 @@
 import { NextRequest } from "next/server";
 import { proxyFetch, SsrfBlockedError } from "@/lib/proxy/fetch";
 import { rewriteCss } from "@/lib/proxy/rewrite";
-import { sanitizeHeaders } from "@/lib/proxy/headers";
+import {
+  sanitizeHeaders,
+  forwardableRequestHeaders,
+} from "@/lib/proxy/headers";
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { assetRateLimiter } from "@/lib/proxy/rateLimit";
 import { getClientIp } from "@/lib/proxy/clientIp";
@@ -29,7 +32,10 @@ export async function GET(req: NextRequest) {
 
   let res: Response;
   try {
-    res = await proxyFetch(parsed.href);
+    // 認証が要るアセットを取得できるよう Cookie / Authorization を転送する。
+    res = await proxyFetch(parsed.href, {
+      headers: forwardableRequestHeaders(req.headers),
+    });
   } catch (err) {
     if (err instanceof SsrfBlockedError) {
       return new Response("Forbidden", { status: 403 });
