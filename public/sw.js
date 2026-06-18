@@ -1,0 +1,157 @@
+// web-proxy 実行時リクエスト横取り Service Worker。
+// 閲覧ページ（/browse?url=<target>）内で JS が動的に発行する GET リクエストを
+// 横取りし、/api/proxy?url=... 経由へ振り向ける。
+// 仕様: docs/spec/features/proxy.md §Service Worker による実行時リクエスト横取り
+//      docs/arch/proxy.md §Service Worker
+//
+// 純粋ロジック（下記関数）は module.exports で公開してテストする。
+// SW ランタイム配線は importScripts の有無でガードし、Node（テスト）環境では実行しない。
+(function (global) {
+  "use strict";
+
+  // 登録スコープ（例: https://host/proxy/3000/）から BASE_PATH（例: /proxy/3000）を導出する。
+  function deriveBasePath(scope) {
+    try {
+      const p = new URL(scope).pathname;
+      return p === "/" ? "" : p.replace(/\/$/, "");
+    } catch {
+      return "";
+    }
+  }
+
+  // 横取りしてはいけない自前ルートか判定する（BASE_PATH を取り除いた上で判定）。
+  function isProxyOwnPath(pathname, basePath) {
+    let p = pathname;
+    if (basePath && p.startsWith(basePath)) {
+      p = p.slice(basePath.length) || "/";
+    }
+    if (p === "" || p === "/") return true; // ホーム
+    if (p === "/sw.js") return true;
+    // 完全一致＋パス境界で判定する（ターゲット側の /browser や /api/proxyData を誤判定しない）
+    if (p === "/browse" || p.startsWith("/browse/")) return true;
+    if (p === "/api/proxy" || p.startsWith("/api/proxy/")) return true;
+    if (p.startsWith("/_next/")) return true;
+    if (p === "/favicon.ico") return true;
+    return false;
+  }
+
+  // 要求元ページ URL（/browse?url=<target>）からターゲット URL を取り出す。
+  function extractTarget(pageUrl) {
+    try {
+      return new URL(pageUrl).searchParams.get("url");
+    } catch {
+      return null;
+    }
+  }
+
+  // リクエスト URL を /api/proxy 経由の振り向け先へ書き換える。
+  // 横取り不要（自前ルート・ターゲット不明）なら null を返す。
+  function rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) {
+    let req;
+    try {
+      req = new URL(requestUrl);
+    } catch {
+      return null;
+    }
+
+    const toProxy = (absolute) =>
+      basePath + "/api/proxy?url=" + encodeURIComponent(absolute);
+
+    // クロスオリジンの絶対 URL → そのまま中継
+    if (req.origin !== swOrigin) {
+      return toProxy(req.href);
+    }
+
+    // 同一オリジン: 自前ルートは横取りしない
+    if (isProxyOwnPath(req.pathname, basePath)) {
+      return null;
+    }
+
+    // 同一オリジンの非自前パス（ルート絶対パス等）→ ターゲット origin に解決
+    const target = extractTarget(pageUrl);
+    if (!target) return null;
+    let targetOrigin;
+    try {
+      targetOrigin = new URL(target).origin;
+    } catch {
+      return null;
+    }
+
+    let path = req.pathname;
+    if (basePath && path.startsWith(basePath)) {
+      path = path.slice(basePath.length) || "/";
+    }
+    let resolved;
+    try {
+      resolved = new URL(path + req.search + req.hash, targetOrigin).href;
+    } catch {
+      return null;
+    }
+    return toProxy(resolved);
+  }
+
+  // ---- SW ランタイム配線（テスト環境では実行しない）----
+  if (typeof importScripts === "function") {
+    self.addEventListener("install", function () {
+      self.skipWaiting();
+    });
+    self.addEventListener("activate", function (event) {
+      event.waitUntil(self.clients.claim());
+    });
+    self.addEventListener("fetch", function (event) {
+      const req = event.request;
+      if (req.method !== "GET") return;
+      if (req.mode === "navigate") return; // 閲覧ページ遷移は素通し
+
+      const basePath = deriveBasePath(self.registration.scope);
+      const swOrigin = self.location.origin;
+
+      let reqUrl;
+      try {
+        reqUrl = new URL(req.url);
+      } catch {
+        return;
+      }
+
+      // 同一オリジンの自前ルートは介在しない
+      if (reqUrl.origin === swOrigin && isProxyOwnPath(reqUrl.pathname, basePath)) {
+        return;
+      }
+
+      // クロスオリジンは要求元ページに依存しないので同期的に振り向ける
+      if (reqUrl.origin !== swOrigin) {
+        event.respondWith(
+          fetch(basePath + "/api/proxy?url=" + encodeURIComponent(reqUrl.href), {
+            credentials: "omit",
+          }),
+        );
+        return;
+      }
+
+      // 同一オリジンの非自前パスは要求元ページからターゲットを解決する
+      event.respondWith(
+        (async function () {
+          let pageUrl = req.referrer;
+          if (event.clientId) {
+            const client = await self.clients.get(event.clientId);
+            if (client && client.url) pageUrl = client.url;
+          }
+          const dest = rewriteRequestUrl(req.url, pageUrl, swOrigin, basePath);
+          return dest ? fetch(dest, { credentials: "omit" }) : fetch(req);
+        })(),
+      );
+    });
+  }
+
+  // ---- テスト用エクスポート ----
+  if (typeof module !== "undefined" && module.exports) {
+    module.exports = {
+      deriveBasePath,
+      isProxyOwnPath,
+      extractTarget,
+      rewriteRequestUrl,
+    };
+  }
+
+  void global;
+})(typeof self !== "undefined" ? self : globalThis);

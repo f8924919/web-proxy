@@ -16,13 +16,17 @@ src/
 │   └── api/
 │       └── proxy/
 │           └── route.ts      # アセット中継 Route Handler
-└── lib/
-    └── proxy/
-        ├── fetch.ts          # SSRF チェック付き fetch
-        ├── rewrite.ts        # HTML / CSS URL 書き換え
-        ├── headers.ts        # レスポンスヘッダー処理
-        ├── rateLimit.ts      # インメモリ レート制限
-        └── response.ts       # nullBodyStatus 判定ユーティリティ
+├── lib/
+│   └── proxy/
+│       ├── fetch.ts          # SSRF チェック付き fetch
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録 <script> 注入含む）
+│       ├── headers.ts        # レスポンスヘッダー処理
+│       ├── rateLimit.ts      # インメモリ レート制限
+│       └── response.ts       # nullBodyStatus 判定ユーティリティ
+└── ...
+
+public/
+└── sw.js                     # 実行時リクエスト横取り Service Worker
 ```
 
 ---
@@ -116,6 +120,41 @@ src/
 ### アドレスバー注入
 
 `rewriteHtml` は URL 書き換えに加え、アドレスバー HTML スニペットを `<body>` 直後に注入する。
+
+---
+
+## Service Worker: `public/sw.js`
+
+> 関連仕様: [プロキシ機能仕様 §Service Worker による実行時リクエスト横取り](../spec/features/proxy.md#service-worker-による実行時リクエスト横取り)
+
+**役割**: 閲覧ページ内で JS が実行時に発行する **GET リクエスト**を横取りし、`/api/proxy` 経由へ振り向ける。サーバー側 `rewriteHtml` が捕捉できない動的ロード（画像・スクリプト・XHR）を補完する。
+
+### 登録
+
+`rewriteHtml` が閲覧ページの `<body>` 直後（アドレスバーに続けて）に登録用 `<script>` を注入する。登録 URL は `${BASE_PATH}/sw.js`、スコープは `${BASE_PATH}/`。
+
+- SW スクリプトは `self.registration.scope` から自身の `BASE_PATH` を導出する（リバースプロキシのパスプレフィックス対応。`next.config.ts` は `basePath` 未使用のため、ブラウザから見えるスコープ＝プレフィックス込みのパスになる）。
+
+### `fetch` ハンドラの処理
+
+```
+1. method が GET 以外 → 素通し（respondWith しない）
+2. clientId から要求元ページ URL（/browse?url=<target>）を取得し、url パラメータをターゲットとする
+3. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
+   - クロスオリジンの絶対 URL → /api/proxy?url=<absolute>
+   - 同一オリジンのルート絶対パス（自前ルート以外）→ ターゲット origin に解決し /api/proxy?url=<resolved>
+   - 自前ルート（/browse・/api/proxy・/_next/*・/sw.js・/favicon.ico・ホーム /）→ 素通し（null）
+4. 振り向け先があれば fetch(振り向け先) で応答、なければ素通し
+```
+
+### 純粋ロジックの分離とテスト
+
+横取り判定・URL 解決・`/api/proxy` への書き換えは純粋関数として `public/sw.js` 内に定義し、`module.exports`（CommonJS）で公開する。SW ランタイム配線（`addEventListener('fetch', ...)`）は `importScripts` の有無で**ガード**し、Node（テスト）環境では実行されないようにする。これにより、配信される SW 本体の純粋ロジックを Node 環境のテストで直接検証でき、ロジックの重複を避ける（[テスト方針](../testing/policy.md) / `tests/lib/proxy/sw-intercept.test.ts`）。
+
+### 制約（MVP）
+
+- **GET のみ**。POST / 認証付き / プリフライト要のリクエストは横取りしない。
+- **パス相対 URL は best-effort**。閲覧ページ URL（`/browse`）基準で解決されるため、ターゲット上のパス文脈を完全には復元できない。ルート絶対・絶対 URL は正しく振り向く。
 
 ---
 

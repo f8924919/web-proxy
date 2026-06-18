@@ -89,10 +89,25 @@ url("/api/proxy?url=<encodeURIComponent(absoluteURL)>")
 
 ## JavaScript
 
-**v1 では書き換えを行わない。**
+**JS ソースコード自体の書き換え（AST パース）は行わない。** 実装コスト・壊れやすさのリスクが高く、スコープ外とする。
 
-- 動的な `fetch()` / XHR の相対パスは壊れる可能性があるが許容する。
-- JSのASTパースは実装コスト・壊れやすさのリスクが高く、初期スコープ外とする。
+代わりに、JS が実行時に発行するリクエストを **Service Worker（SW）で横取り**して `/api/proxy` 経由へ振り向ける（下記）。
+
+### Service Worker による実行時リクエスト横取り
+
+JS 依存サイト（Google 等）では、画像・スクリプト・XHR などがサーバー側の HTML 書き換え後に **JS が実行時に動的ロード**するため、`rewriteHtml` の属性書き換えだけでは捕捉できず、相対/絶対 URL がプロキシ origin やターゲット origin へ直接飛んで 404 / CORS エラーになる。これを補うため、閲覧ページに SW を登録し、ページ内の **GET リクエスト**を横取りして書き換える。
+
+| リクエスト種別 | 横取り後 |
+| -------------- | -------- |
+| クロスオリジンの絶対 URL（例 `https://ssl.gstatic.com/...`） | `/api/proxy?url=<absolute>` |
+| 同一オリジンのルート絶対パス（例 `/images/x.png`、`/xjs/...`） | ターゲット origin に解決し `/api/proxy?url=<resolved>` |
+| 自前ルート（`/browse`・`/api/proxy`・`/_next/*`・`/sw.js`・`/favicon.ico`・ホーム `/`） | 横取りせず素通し |
+| GET 以外（POST 等） | 横取りせず素通し |
+
+- **ターゲット origin の特定**: SW は `fetch` イベントの `clientId` から要求元ページ（`/browse?url=<target>`）の URL を取得し、`url` パラメータをターゲットとして用いる。
+- **対象は GET のみ（MVP）**: POST / 認証付き（`credentials: include`）/ プリフライトを要するリクエスト（ログ・rpc 等）は横取り対象外。これらは引き続き CORS で失敗し得るが、ページ閲覧の主要素（画像・CSS・JS）には影響しない。
+- **残存制約（パス相対 URL）**: `foo/bar.png` のようなパス相対 URL はブラウザが閲覧ページ URL（`/browse`）を基準に解決するため、元のターゲット上のパス文脈を復元できず best-effort に留まる。ルート絶対・絶対 URL は正しく振り向けられる。
+- **配信と適用範囲**: SW は `public/sw.js` で配信し、登録スコープは `${NEXT_PUBLIC_BASE_PATH}/`。リバースプロキシのパスプレフィックスは SW 自身の登録スコープ（`self.registration.scope`）から導出する。詳細は [arch/proxy.md §Service Worker](../../arch/proxy.md#service-worker-publicswjs)。
 
 ---
 
