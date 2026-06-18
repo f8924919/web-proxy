@@ -7,7 +7,8 @@ import {
 import { rewriteHtml } from "@/lib/proxy/rewrite";
 import { sanitizeHeaders } from "@/lib/proxy/headers";
 import { isNullBodyStatus } from "@/lib/proxy/response";
-import { rateLimiter } from "@/lib/proxy/rateLimit";
+import { pageRateLimiter } from "@/lib/proxy/rateLimit";
+import { getClientIp } from "@/lib/proxy/clientIp";
 
 function errorHtml(message: string): string {
   return `<!DOCTYPE html><html lang="ja"><body style="font-family:sans-serif;padding:2rem">
@@ -32,10 +33,9 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip = getClientIp(req.headers);
   try {
-    rateLimiter.check(ip);
+    pageRateLimiter.check(ip);
   } catch {
     return new Response("Too Many Requests", { status: 429 });
   }

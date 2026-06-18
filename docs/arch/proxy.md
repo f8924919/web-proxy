@@ -21,7 +21,8 @@ src/
 │       ├── fetch.ts          # SSRF チェック付き fetch
 │       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り <script> 注入含む）
 │       ├── headers.ts        # レスポンスヘッダー処理
-│       ├── rateLimit.ts      # インメモリ レート制限
+│       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
+│       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
 │       └── response.ts       # nullBodyStatus 判定ユーティリティ
 └── ...
 
@@ -40,7 +41,7 @@ public/
 ```
 1. searchParams.get('url') を取得
 2. url が null / パース失敗 → 307 リダイレクト to /
-3. rateLimit.check(ip) → 超過なら 429
+3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
 4. proxyFetch(url) → SSRF ブロックなら 403 / 到達不能なら 502
 5. rewriteHtml(html, baseUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
 6. headers.sanitize(responseHeaders) でヘッダーを除去
@@ -64,7 +65,7 @@ public/
 ```
 1. searchParams.get('url') を取得
 2. url が null → 400
-3. rateLimit.check(ip) → 超過なら 429
+3. assetRateLimiter.check(getClientIp(headers)) → 超過なら 429
 4. proxyFetch(url) → SSRF ブロックなら 403
 5. Content-Type が text/css → rewriteCss(body, baseUrl)
 6. headers.sanitize(responseHeaders)
@@ -181,7 +182,7 @@ document に submit を capture で委任（動的フォームにも効く）:
 
 **役割**: ターゲットのレスポンスヘッダーから不要なものを除去する。
 
-除去対象は [プロキシ機能仕様 §レスポンスヘッダー処理](../spec/features/proxy.md) を参照。
+除去対象（`Speculation-Rules` を含む）は [プロキシ機能仕様 §レスポンスヘッダー処理](../spec/features/proxy.md) を参照。前段 CDN が後段で注入する `Speculation-Rules` はコードからは除去できないため CDN 側設定で無効化する（同仕様の注記参照）。
 
 `Set-Cookie` の `Domain` 属性を除去する処理もここで行う。
 
@@ -194,20 +195,39 @@ document に submit を capture で委任（動的フォームにも効く）:
 ### データ構造
 
 ```ts
-// Map<ip, タイムスタンプ配列（直近60秒分）>
+// Map<ip, タイムスタンプ配列（直近 windowMs 分）>
 const store = new Map<string, number[]>();
 ```
 
-### `check(ip: string): void`
+### `RateLimiter`（上限を設定可能）
 
-- 現在時刻から60秒以内のタイムスタンプのみ残す
-- 60件以上なら `RateLimitExceededError` を throw
+`RateLimiter` は上限 `maxRequests` とウィンドウ `windowMs` をコンストラクタ引数で受け取る（既定: 60 件 / 60 秒）。ページ遷移とアセット中継で別々の上限・別々のバケット（独立インスタンス）を使うため、用途別に 2 つのインスタンスを公開する。
+
+```ts
+export const pageRateLimiter = new RateLimiter(60);   // /browse 用
+export const assetRateLimiter = new RateLimiter(600); // /api/proxy 用
+```
+
+`check(ip: string): void` の挙動:
+
+- 現在時刻から `windowMs` 以内のタイムスタンプのみ残す
+- `maxRequests` 件以上なら `RateLimitExceededError` を throw
 - 現在時刻を追記
+
+> 上限値の根拠・分離の理由は [機能仕様 §レート制限](../spec/features/proxy.md#レート制限) を参照。
 
 ### 制約
 
 - Node.js runtime のインメモリのみ。プロセス再起動でリセットされる。
 - 複数 Next.js インスタンスをまたいだ共有は非対応（v2 以降）。
+
+---
+
+## `src/lib/proxy/clientIp.ts`
+
+**役割**: リクエストヘッダーからレート制限のバケットキーに使うクライアント IP を解決する純粋関数 `getClientIp(headers: Headers): string`。
+
+優先順は `cf-connecting-ip` → `x-forwarded-for`（先頭の値）→ `x-real-ip` → `"unknown"`。`/browse` と `/api/proxy` の両 Route Handler から共通利用する（解決ロジックの重複を排除）。詳細は [機能仕様 §クライアント IP の特定](../spec/features/proxy.md#クライアント-ip-の特定)。
 
 ---
 

@@ -3,7 +3,8 @@ import { proxyFetch, SsrfBlockedError } from "@/lib/proxy/fetch";
 import { rewriteCss } from "@/lib/proxy/rewrite";
 import { sanitizeHeaders } from "@/lib/proxy/headers";
 import { isNullBodyStatus } from "@/lib/proxy/response";
-import { rateLimiter } from "@/lib/proxy/rateLimit";
+import { assetRateLimiter } from "@/lib/proxy/rateLimit";
+import { getClientIp } from "@/lib/proxy/clientIp";
 
 export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
@@ -19,10 +20,9 @@ export async function GET(req: NextRequest) {
     return new Response("Bad Request", { status: 400 });
   }
 
-  const ip =
-    req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  const ip = getClientIp(req.headers);
   try {
-    rateLimiter.check(ip);
+    assetRateLimiter.check(ip);
   } catch {
     return new Response("Too Many Requests", { status: 429 });
   }
