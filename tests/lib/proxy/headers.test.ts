@@ -9,6 +9,7 @@ describe("sanitizeHeaders", () => {
     "x-frame-options",
     "content-encoding",
     "transfer-encoding",
+    "speculation-rules",
   ];
 
   test.each(BLOCKED)("%s ヘッダーを除去する", (name) => {
