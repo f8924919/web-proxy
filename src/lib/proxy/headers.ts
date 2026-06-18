@@ -52,3 +52,54 @@ export function forwardableRequestHeaders(
   }
   return result;
 }
+
+// 非 GET 中継で転送しない hop-by-hop・インフラ系ヘッダー（拒否リスト）。
+// accept-encoding は proxyFetch が identity 固定のため除外する。
+const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
+  "host",
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+  "content-length",
+  "accept-encoding",
+]);
+
+// SW が /api/proxy へ振り向けた非 GET 中継向けに、リクエストヘッダーを
+// 拒否リスト方式で広めに転送する純粋関数。Content-Type / Authorization /
+// Cookie / X-* などカスタムヘッダーを保持し、ターゲットの API を動かす。
+// 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
+export function relayRequestHeaders(incoming: Headers): Record<string, string> {
+  const result: Record<string, string> = {};
+  incoming.forEach((value, name) => {
+    if (!RELAY_BLOCKED_REQUEST_HEADERS.has(name.toLowerCase())) {
+      result[name] = value;
+    }
+  });
+  return result;
+}
+
+// OPTIONS（CORS プリフライト）応答用の許可ヘッダーを組み立てる純粋関数。
+// origin をエコーし（無ければ *）、Access-Control-Request-Headers をエコーする。
+// origin がある場合のみ Allow-Credentials を付ける（* と credentials は併用不可）。
+// 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
+export function buildCorsPreflightHeaders(
+  origin: string | null,
+  requestHeaders: string | null
+): Headers {
+  const headers = new Headers();
+  headers.set("Access-Control-Allow-Origin", origin ?? "*");
+  headers.set(
+    "Access-Control-Allow-Methods",
+    "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+  );
+  headers.set("Access-Control-Allow-Headers", requestHeaders ?? "*");
+  if (origin) headers.set("Access-Control-Allow-Credentials", "true");
+  headers.set("Access-Control-Max-Age", "600");
+  headers.set("Vary", "Origin");
+  return headers;
+}
