@@ -55,7 +55,12 @@ export async function GET(req: NextRequest) {
         headers: { "Content-Type": "text/html; charset=utf-8" },
       });
     }
-    throw err;
+    // DNS 解決失敗など、その他の予期しないエラー
+    console.error("[proxy/browse]", err);
+    return new Response(errorHtml("サイトへの接続に失敗しました。"), {
+      status: 502,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
   }
 
   const contentType = res.headers.get("content-type") ?? "";
