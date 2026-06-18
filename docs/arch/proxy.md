@@ -21,7 +21,8 @@ src/
         ├── fetch.ts          # SSRF チェック付き fetch
         ├── rewrite.ts        # HTML / CSS URL 書き換え
         ├── headers.ts        # レスポンスヘッダー処理
-        └── rateLimit.ts      # インメモリ レート制限
+        ├── rateLimit.ts      # インメモリ レート制限
+        └── response.ts       # nullBodyStatus 判定ユーティリティ
 ```
 
 ---
@@ -40,6 +41,8 @@ src/
 5. rewriteHtml(html, baseUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
 6. headers.sanitize(responseHeaders) でヘッダーを除去
 7. new Response(rewrittenHtml, { headers }) を返す
+   （非 HTML はそのまま中継。204/205/304 はボディ null、1xx・範囲外・変換中の例外は 502。
+    [機能仕様 §ステータスコードの中継](../spec/features/proxy.md#ステータスコードの中継) 参照）
 ```
 
 ### アドレスバー注入
@@ -61,7 +64,10 @@ src/
 4. proxyFetch(url) → SSRF ブロックなら 403
 5. Content-Type が text/css → rewriteCss(body, baseUrl)
 6. headers.sanitize(responseHeaders)
-7. Response をそのまま返す
+7. Response を中継して返す
+   （204/205/304 はボディを null として返す。1xx・ステータス範囲外・
+    Response 構築・CSS 読取り/変換中の未捕捉例外は 502。
+    [機能仕様 §ステータスコードの中継](../spec/features/proxy.md#ステータスコードの中継) 参照）
 ```
 
 ---

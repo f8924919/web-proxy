@@ -2,6 +2,7 @@ import { NextRequest } from "next/server";
 import { proxyFetch, SsrfBlockedError } from "@/lib/proxy/fetch";
 import { rewriteCss } from "@/lib/proxy/rewrite";
 import { sanitizeHeaders } from "@/lib/proxy/headers";
+import { isNullBodyStatus } from "@/lib/proxy/response";
 import { rateLimiter } from "@/lib/proxy/rateLimit";
 
 export async function GET(req: NextRequest) {
@@ -39,12 +40,27 @@ export async function GET(req: NextRequest) {
   const contentType = res.headers.get("content-type") ?? "";
   const outHeaders = sanitizeHeaders(res.headers);
 
-  if (contentType.includes("text/css")) {
-    const css = await res.text();
-    const rewritten = rewriteCss(css, parsed.href);
-    outHeaders.set("Content-Type", "text/css; charset=utf-8");
-    return new Response(rewritten, { status: res.status, headers: outHeaders });
-  }
+  try {
+    // 204/304 などボディを持てないステータスはボディを null にして中継する
+    // （ボディ付きで Response を構築すると例外になり 500 クラッシュするため）。
+    if (isNullBodyStatus(res.status)) {
+      return new Response(null, { status: res.status, headers: outHeaders });
+    }
 
-  return new Response(res.body, { status: res.status, headers: outHeaders });
+    if (contentType.includes("text/css")) {
+      const css = await res.text();
+      const rewritten = rewriteCss(css, parsed.href);
+      outHeaders.set("Content-Type", "text/css; charset=utf-8");
+      return new Response(rewritten, {
+        status: res.status,
+        headers: outHeaders,
+      });
+    }
+
+    return new Response(res.body, { status: res.status, headers: outHeaders });
+  } catch (err) {
+    // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
+    console.error("[proxy/asset]", err);
+    return new Response("Bad Gateway", { status: 502 });
+  }
 }
