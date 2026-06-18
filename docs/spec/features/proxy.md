@@ -108,7 +108,7 @@ POST 時もリクエストの `Cookie` / `Authorization` を転送する（[§�
 
 ### スコープ外（本機能では扱わない）
 
-- **SW 経由の XHR / `fetch` の POST 中継**: Service Worker は引き続き GET のみ横取りする（[§Service Worker](#service-worker-による実行時リクエスト横取り)）。JS が発行する POST はプロキシを経由せずターゲット origin へ直接飛ぶため、本機能の対象外。
+- **フォーム POST 以外の POST（JS 発行の XHR / `fetch`）**: SW はナビゲーション（`request.mode === "navigate"`）を除く全メソッドを横取りし、`/api/proxy` へ振り向ける（[§Service Worker](#service-worker-による実行時リクエスト横取り)）。フォーム POST 送信はブラウザが `navigate` モードで発行するため SW は素通しし、本節（`/browse` POST ハンドラ）が担う。JS が直接発行する非フォーム POST は SW が `/api/proxy` へ振り向けるため、`/browse` POST ハンドラのスコープ外。
 
 ---
 
@@ -141,19 +141,61 @@ url("/api/proxy?url=<encodeURIComponent(absoluteURL)>")
 
 ### Service Worker による実行時リクエスト横取り
 
-JS 依存サイト（Google 等）では、画像・スクリプト・XHR などがサーバー側の HTML 書き換え後に **JS が実行時に動的ロード**するため、`rewriteHtml` の属性書き換えだけでは捕捉できず、相対/絶対 URL がプロキシ origin やターゲット origin へ直接飛んで 404 / CORS エラーになる。これを補うため、閲覧ページに SW を登録し、ページ内の **GET リクエスト**を横取りして書き換える。
+JS 依存サイト（Google 等）では、画像・スクリプト・XHR などがサーバー側の HTML 書き換え後に **JS が実行時に動的ロード**するため、`rewriteHtml` の属性書き換えだけでは捕捉できず、相対/絶対 URL がプロキシ origin やターゲット origin へ直接飛んで 404 / CORS エラーになる。これを補うため、閲覧ページに SW を登録し、ページ内のリクエスト（**ページ遷移ナビゲーションを除く全メソッド**）を横取りして書き換える。
 
-| リクエスト種別                                                                          | 横取り後                                               |
-| --------------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| クロスオリジンの絶対 URL（例 `https://ssl.gstatic.com/...`）                            | `/api/proxy?url=<absolute>`                            |
-| 同一オリジンのルート絶対パス（例 `/images/x.png`、`/xjs/...`）                          | ターゲット origin に解決し `/api/proxy?url=<resolved>` |
-| 自前ルート（`/browse`・`/api/proxy`・`/_next/*`・`/sw.js`・`/favicon.ico`・ホーム `/`） | 横取りせず素通し                                       |
-| GET 以外（POST 等）                                                                     | 横取りせず素通し                                       |
+| リクエスト種別                                                                          | 横取り後                                                     |
+| --------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| クロスオリジンの絶対 URL（例 `https://ssl.gstatic.com/...`）                            | `/api/proxy?url=<absolute>`                                  |
+| 同一オリジンのルート絶対パス（例 `/images/x.png`、`/xjs/...`）                          | ターゲット origin に解決し `/api/proxy?url=<resolved>`       |
+| 自前ルート（`/browse`・`/api/proxy`・`/_next/*`・`/sw.js`・`/favicon.ico`・ホーム `/`） | 横取りせず素通し                                             |
+| ページ遷移ナビゲーション（`request.mode === "navigate"`）                               | 横取りせず素通し（サーバー側書き換え・フォーム送信に委ねる） |
 
+- **対象メソッド**: ナビゲーションを除き **GET / POST / PUT / PATCH / DELETE** を横取りする（[§CORS プリフライト対応](#cors-プリフライト対応) のため非 GET も同一オリジンの `/api/proxy` へ振り向ける）。非 GET の振り向けではメソッド・ボディ・リクエストヘッダーを保持する。
 - **ターゲット origin の特定**: SW は `fetch` イベントの `clientId` から要求元ページ（`/browse?url=<target>`）の URL を取得し、`url` パラメータをターゲットとして用いる。
-- **対象は GET のみ（MVP）**: POST / 認証付き（`credentials: include`）/ プリフライトを要するリクエスト（ログ・rpc 等）は横取り対象外。これらは引き続き CORS で失敗し得るが、ページ閲覧の主要素（画像・CSS・JS）には影響しない。
 - **残存制約（パス相対 URL）**: `foo/bar.png` のようなパス相対 URL はブラウザが閲覧ページ URL（`/browse`）を基準に解決するため、元のターゲット上のパス文脈を復元できず best-effort に留まる。ルート絶対・絶対 URL は正しく振り向けられる。
 - **配信と適用範囲**: SW は `public/sw.js` で配信し、登録スコープは `${NEXT_PUBLIC_BASE_PATH}/`。リバースプロキシのパスプレフィックスは SW 自身の登録スコープ（`self.registration.scope`）から導出する。詳細は [arch/proxy.md §Service Worker](../../arch/proxy.md#service-worker-publicswjs)。
+
+---
+
+## CORS プリフライト対応
+
+JS アプリが発行するクロスオリジンの `fetch` / XHR（非単純メソッド・カスタムヘッダー・`application/json` POST 等）は、本来ブラウザがターゲット origin へ **CORS プリフライト（`OPTIONS`）** を飛ばし、ターゲットがプロキシ origin を許可しないため失敗する。
+
+### 方針: プリフライトを「消す」
+
+プリフライトは**クロスオリジン**リクエストでのみ発生する。SW がこれらのリクエストを**同一オリジンの `/api/proxy?url=<target>` へ振り向ける**と、ブラウザから見て同一オリジンになり**プリフライト自体が発生しない**。実際のクロスオリジン取得はサーバー側（`/api/proxy`）が行う（サーバー間通信は CORS の対象外）。
+
+| 層             | 対応                                                                                                                                                                                                                     |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Service Worker | 非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向ける（[§Service Worker](#service-worker-による実行時リクエスト横取り)）。メソッド・ボディ・リクエストヘッダーを保持。`request.mode === "navigate"` は対象外 |
+| `/api/proxy`   | `GET` / `POST` / `PUT` / `PATCH` / `DELETE` を中継する。さらに防御的に **`OPTIONS` ハンドラ**を持ち、万一の真のクロスオリジン `OPTIONS`（同一オリジン化されなかった経路）にも応答できる                                  |
+
+### `/api/proxy` の OPTIONS 応答（防御的）
+
+要求元 `Origin` をエコーした CORS 許可ヘッダーを **204** で返す（純粋関数 `buildCorsPreflightHeaders`）。
+
+| ヘッダー                           | 値                                                                                      |
+| ---------------------------------- | --------------------------------------------------------------------------------------- |
+| `Access-Control-Allow-Origin`      | 要求元 `Origin`（無ければ `*`）                                                         |
+| `Access-Control-Allow-Methods`     | `GET, POST, PUT, PATCH, DELETE, OPTIONS`                                                |
+| `Access-Control-Allow-Headers`     | `Access-Control-Request-Headers` をエコー（無ければ `*`）                               |
+| `Access-Control-Allow-Credentials` | `Origin` がある場合 `true`（`*` と `credentials` は併用不可のため Origin エコー時のみ） |
+| `Access-Control-Max-Age` / `Vary`  | `600` / `Origin`                                                                        |
+
+`GET` / 中継レスポンスにも、要求に `Origin` がある場合のみ同様の `Access-Control-Allow-Origin` / `-Credentials` を付与する（同一オリジン取得には `Origin` が付かないため、通常のアセット中継には影響しない）。
+
+### 非 GET 中継のリクエストヘッダー転送
+
+SW が振り向けた非 GET リクエストは、ターゲットの API が要求する `Content-Type` やカスタムヘッダー（`X-CSRF-Token` 等）を保持する必要がある。そのため `/api/proxy` の非 GET 中継では、**拒否リスト方式**でリクエストヘッダーを広めに転送する（純粋関数 `relayRequestHeaders`）。
+
+- **拒否（転送しない）**: `host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`（`proxyFetch` が `identity` 固定のため）など hop-by-hop・インフラ系。
+- **転送する**: 上記以外（`Content-Type`・`Authorization`・`Cookie`・`X-*` 等）。
+- `GET` 中継は従来どおり許可リスト（`forwardableRequestHeaders`＝`Cookie` / `Authorization`）を維持する（既存挙動の回帰を避けるため）。
+
+### セキュリティ上の制約（v2 でハードニング）
+
+- **任意オリジンへ広めにヘッダーを送る**: 非 GET 中継は拒否リスト方式のため、`Cookie` / `Authorization` を含むクライアント設定ヘッダーが**中継先のサイトを問わず**転送され得る（[§認証情報の転送](#認証情報の転送cookie--authorization) と同じリスク区分）。サイト別のヘッダーアイソレーションは v2 課題。
+- **`credentials` の扱い**: SW は振り向け時に `credentials: "omit"` を用いる（同一オリジン `/api/proxy` への内部 `fetch`）。`Authorization` 等の明示ヘッダーは転送されるが、**Cookie ベースのクロスオリジン XHR は best-effort**（プロキシ origin の Cookie は振り向け `fetch` に付かない）。完全な `credentials: include` 相当はサイト別アイソレーションとともに v2 課題。
 
 ---
 
@@ -175,7 +217,7 @@ JS 依存サイト（Google 等）では、画像・スクリプト・XHR など
 
 - **任意オリジンへ認証情報を送る**: プロキシ origin に保存された `Cookie` は、アイソレーションが無いため**中継先のサイトを問わず**送出される（あるサイトの Cookie が別サイトの中継リクエストにも乗り得る）。サイト間 Cookie アイソレーションは v2 以降の課題。
 - **リダイレクト追従時の漏えい**: `proxyFetch` は `redirect: "follow"` のため、ターゲットが**クロスオリジンへリダイレクト**すると `fetch` は `Authorization` / `Cookie` をリダイレクト先へもそのまま送る（ブラウザのように別オリジンで `Authorization` を落とさない）。意図しない別オリジンへ認証情報が漏れ得る。`redirect: "manual"` 化＋リダイレクト先検証によるハードニングは v2 以降の課題とし、本リスクは既知の制約として明記する。
-- **`credentials: include` 付きリクエスト**: Service Worker は GET のみ横取りし認証付きリクエストには介入しない（[§Service Worker](#service-worker-による実行時リクエスト横取り)）。JS が `credentials: include` で発行する `fetch` / XHR はプロキシを経由せずブラウザがターゲット origin へ直接送るため、本転送の対象外。
+- **`credentials: include` 付きリクエスト**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向けるが（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "omit"` を用いるため、`Cookie` ベースのクロスオリジン XHR は best-effort に留まる（`Authorization` 等の明示ヘッダーは転送される）。完全な `credentials: include` 相当は v2 課題。
 
 ---
 

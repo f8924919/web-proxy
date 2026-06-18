@@ -1,10 +1,12 @@
 /** @jest-environment node */
-// 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §認証情報の転送
+// 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §認証情報の転送 / §CORS プリフライト対応
 
 import {
   sanitizeHeaders,
   sanitizeSetCookie,
   forwardableRequestHeaders,
+  relayRequestHeaders,
+  buildCorsPreflightHeaders,
 } from "@/lib/proxy/headers";
 
 describe("sanitizeHeaders", () => {
@@ -83,5 +85,53 @@ describe("forwardableRequestHeaders", () => {
     });
     const result = forwardableRequestHeaders(headers);
     expect(result).toEqual({ cookie: "session=abc" });
+  });
+});
+
+describe("relayRequestHeaders", () => {
+  test("Content-Type / 認証 / カスタムヘッダーを広めに転送する", () => {
+    const headers = new Headers({
+      "content-type": "application/json",
+      authorization: "Bearer xyz",
+      cookie: "session=abc",
+      "x-csrf-token": "tok",
+    });
+    expect(relayRequestHeaders(headers)).toEqual({
+      "content-type": "application/json",
+      authorization: "Bearer xyz",
+      cookie: "session=abc",
+      "x-csrf-token": "tok",
+    });
+  });
+
+  test.each([
+    ["host", "example.com"],
+    ["connection", "keep-alive"],
+    ["content-length", "10"],
+    ["transfer-encoding", "chunked"],
+    ["accept-encoding", "gzip"],
+  ])("hop-by-hop・インフラ系の %s は転送しない", (name, value) => {
+    const headers = new Headers({ [name]: value, "x-keep": "1" });
+    const result = relayRequestHeaders(headers);
+    expect(result[name]).toBeUndefined();
+    expect(result["x-keep"]).toBe("1");
+  });
+});
+
+describe("buildCorsPreflightHeaders", () => {
+  test("Origin をエコーし Allow-Credentials と Request-Headers を反映する", () => {
+    const h = buildCorsPreflightHeaders("https://app.example", "x-csrf-token");
+    expect(h.get("Access-Control-Allow-Origin")).toBe("https://app.example");
+    expect(h.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(h.get("Access-Control-Allow-Headers")).toBe("x-csrf-token");
+    expect(h.get("Access-Control-Allow-Methods")).toContain("POST");
+    expect(h.get("Vary")).toBe("Origin");
+  });
+
+  test("Origin が無ければ * とし Allow-Credentials を付けない", () => {
+    const h = buildCorsPreflightHeaders(null, null);
+    expect(h.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(h.get("Access-Control-Allow-Credentials")).toBeNull();
+    expect(h.get("Access-Control-Allow-Headers")).toBe("*");
   });
 });
