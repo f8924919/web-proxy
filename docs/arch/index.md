@@ -15,7 +15,7 @@
 
 | ドキュメント         | モジュール                                                                                           | 関連仕様                                                                                      |
 | -------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| [proxy.md](proxy.md) | `src/app/browse/`・`src/app/api/proxy/`・`src/lib/proxy/` — プロキシ中継・書き換え・SSRF・レート制限 | [プロキシ機能仕様](../spec/features/proxy.md) / [ブラウズ画面仕様](../spec/screens/browse.md) |
+| [proxy.md](proxy.md) | `src/app/browse/`・`src/app/api/proxy/`・`src/lib/proxy/`・`public/sw.js` — プロキシ中継・書き換え・SSRF・レート制限・SW リクエスト横取り | [プロキシ機能仕様](../spec/features/proxy.md) / [ブラウズ画面仕様](../spec/screens/browse.md) |
 
 <!-- モジュール追加時はここへ 1 行追加。例:
 | [foo.md](foo.md) | `src/foo` — 役割の 1 行サマリ | [機能 X](../spec/features/x.md) |

@@ -36,6 +36,15 @@ const ADDRESS_BAR_HTML = (currentUrl: string) =>
   <a href="${BASE_PATH}/" style="color:#aaa;font-size:13px;text-decoration:none">ホーム</a>
 </div>`.trim();
 
+// 実行時リクエスト横取り Service Worker（public/sw.js）の登録スニペット。
+// 登録スコープは ${BASE_PATH}/。SW 側は scope から BASE_PATH を導出する。
+const SW_REGISTER_HTML =
+  `<script>` +
+  `if('serviceWorker' in navigator){` +
+  `navigator.serviceWorker.register('${BASE_PATH}/sw.js',{scope:'${BASE_PATH}/'}).catch(function(){});` +
+  `}` +
+  `</script>`;
+
 export function rewriteHtml(html: string, baseUrl: string): string {
   const root = parse(html);
 
@@ -77,7 +86,7 @@ export function rewriteHtml(html: string, baseUrl: string): string {
 
   const rewritten = root.toString();
   const bar = ADDRESS_BAR_HTML(baseUrl);
-  return rewritten.replace(/(<body[^>]*>)/i, `$1${bar}`);
+  return rewritten.replace(/(<body[^>]*>)/i, `$1${bar}${SW_REGISTER_HTML}`);
 }
 
 export function rewriteCss(css: string, baseUrl: string): string {
