@@ -15,6 +15,13 @@ function errorHtml(message: string): string {
 <h2>エラー</h2><p>${message}</p><a href="/">ホームへ戻る</a></body></html>`;
 }
 
+function htmlResponse(message: string, status: number): Response {
+  return new Response(errorHtml(message), {
+    status,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
 export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
 
@@ -27,10 +34,7 @@ export async function GET(req: NextRequest) {
   try {
     parsed = new URL(url);
   } catch {
-    return new Response(errorHtml("URL が正しくありません。"), {
-      status: 400,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
+    return htmlResponse("URL が正しくありません。", 400);
   }
 
   const ip = getClientIp(req.headers);
@@ -40,28 +44,65 @@ export async function GET(req: NextRequest) {
     return new Response("Too Many Requests", { status: 429 });
   }
 
+  return relayBrowse(parsed);
+}
+
+// フォーム POST 送信の中継。リクエストの method / body / Content-Type をターゲットへ転送する。
+// 仕様: docs/spec/features/proxy.md §POST 中継
+export async function POST(req: NextRequest) {
+  const url = req.nextUrl.searchParams.get("url");
+
+  // POST は GET のホームリダイレクトと異なり、url 欠落・不正は 400 とする。
+  if (!url) {
+    return htmlResponse("URL が指定されていません。", 400);
+  }
+
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return htmlResponse("URL が正しくありません。", 400);
+  }
+
+  const ip = getClientIp(req.headers);
+  try {
+    pageRateLimiter.check(ip);
+  } catch {
+    return new Response("Too Many Requests", { status: 429 });
+  }
+
+  // Content-Type を転送して urlencoded / multipart の境界情報を維持する。
+  // Cookie / Authorization 等の認証ヘッダー転送はスコープ外（別 Issue）。
+  const headers: Record<string, string> = {};
+  const contentType = req.headers.get("content-type");
+  if (contentType) headers["content-type"] = contentType;
+
+  return relayBrowse(parsed, {
+    method: "POST",
+    body: req.body,
+    headers,
+  });
+}
+
+// proxyFetch とレスポンス処理（HTML 書き換え・サニタイズ・ステータス中継）を
+// GET / POST で共通化する。SSRF・到達不能のエラー処理もここに集約する。
+async function relayBrowse(
+  parsed: URL,
+  fetchOptions?: Parameters<typeof proxyFetch>[1]
+): Promise<Response> {
   let res: Response;
   try {
-    res = await proxyFetch(parsed.href);
+    res = await proxyFetch(parsed.href, fetchOptions);
   } catch (err) {
     if (err instanceof SsrfBlockedError) {
-      return new Response(errorHtml("アクセスできない URL です。"), {
-        status: 403,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+      return htmlResponse("アクセスできない URL です。", 403);
     }
     if (err instanceof FetchTimeoutError) {
-      return new Response(errorHtml("サイトに接続できませんでした。"), {
-        status: 502,
-        headers: { "Content-Type": "text/html; charset=utf-8" },
-      });
+      return htmlResponse("サイトに接続できませんでした。", 502);
     }
     // DNS 解決失敗など、その他の予期しないエラー
     console.error("[proxy/browse]", err);
-    return new Response(errorHtml("サイトへの接続に失敗しました。"), {
-      status: 502,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
+    return htmlResponse("サイトへの接続に失敗しました。", 502);
   }
 
   const contentType = res.headers.get("content-type") ?? "";
@@ -88,9 +129,6 @@ export async function GET(req: NextRequest) {
   } catch (err) {
     // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
     console.error("[proxy/browse-render]", err);
-    return new Response(errorHtml("サイトの読み込みに失敗しました。"), {
-      status: 502,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
-    });
+    return htmlResponse("サイトの読み込みに失敗しました。", 502);
   }
 }
