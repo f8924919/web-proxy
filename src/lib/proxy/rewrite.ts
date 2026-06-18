@@ -11,11 +11,19 @@ function resolve(href: string, base: string): string {
 }
 
 function browseUrl(href: string, base: string): string {
-  return `${BASE_PATH}/browse?url=${encodeURIComponent(resolve(href, base))}`;
+  const resolved = resolve(href, base);
+  if (!resolved.startsWith("http://") && !resolved.startsWith("https://")) {
+    return resolved;
+  }
+  return `${BASE_PATH}/browse?url=${encodeURIComponent(resolved)}`;
 }
 
 function assetUrl(href: string, base: string): string {
-  return `${BASE_PATH}/api/proxy?url=${encodeURIComponent(resolve(href, base))}`;
+  const resolved = resolve(href, base);
+  if (!resolved.startsWith("http://") && !resolved.startsWith("https://")) {
+    return resolved;
+  }
+  return `${BASE_PATH}/api/proxy?url=${encodeURIComponent(resolved)}`;
 }
 
 const ADDRESS_BAR_HTML = (currentUrl: string) =>
@@ -50,7 +58,19 @@ export function rewriteHtml(html: string, baseUrl: string): string {
     });
   }
 
+  const RESOURCE_LINK_RELS = new Set([
+    "stylesheet",
+    "preload",
+    "modulepreload",
+    "prefetch",
+  ]);
   root.querySelectorAll("link[href]").forEach((el) => {
+    const rel = el.getAttribute("rel") ?? "";
+    const isResource = rel
+      .toLowerCase()
+      .split(/\s+/)
+      .some((r) => RESOURCE_LINK_RELS.has(r));
+    if (!isResource) return;
     const href = el.getAttribute("href");
     if (href) el.setAttribute("href", assetUrl(href, baseUrl));
   });
