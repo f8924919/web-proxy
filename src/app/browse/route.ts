@@ -5,7 +5,10 @@ import {
   FetchTimeoutError,
 } from "@/lib/proxy/fetch";
 import { rewriteHtml } from "@/lib/proxy/rewrite";
-import { sanitizeHeaders } from "@/lib/proxy/headers";
+import {
+  sanitizeHeaders,
+  forwardableRequestHeaders,
+} from "@/lib/proxy/headers";
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
 import { getClientIp } from "@/lib/proxy/clientIp";
@@ -44,7 +47,10 @@ export async function GET(req: NextRequest) {
     return new Response("Too Many Requests", { status: 429 });
   }
 
-  return relayBrowse(parsed);
+  // 受信リクエストの Cookie / Authorization をターゲットへ転送し、認証セッションを維持する。
+  return relayBrowse(parsed, {
+    headers: forwardableRequestHeaders(req.headers),
+  });
 }
 
 // フォーム POST 送信の中継。リクエストの method / body / Content-Type をターゲットへ転送する。
@@ -71,9 +77,11 @@ export async function POST(req: NextRequest) {
     return new Response("Too Many Requests", { status: 429 });
   }
 
-  // Content-Type を転送して urlencoded / multipart の境界情報を維持する。
-  // Cookie / Authorization 等の認証ヘッダー転送はスコープ外（別 Issue）。
-  const headers: Record<string, string> = {};
+  // Cookie / Authorization に加え、Content-Type を転送して
+  // urlencoded / multipart の境界情報を維持する。
+  const headers: Record<string, string> = forwardableRequestHeaders(
+    req.headers
+  );
   const contentType = req.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
 
