@@ -1,7 +1,11 @@
 /** @jest-environment node */
 // 仕様: docs/spec/features/proxy.md §HTML 書き換え / §CSS URL 書き換え
 
-import { rewriteHtml, rewriteCss } from "@/lib/proxy/rewrite";
+import {
+  rewriteHtml,
+  rewriteCss,
+  buildGetFormDestination,
+} from "@/lib/proxy/rewrite";
 
 const BASE = "https://example.com";
 
@@ -37,7 +41,12 @@ describe("rewriteHtml", () => {
   describe("静的アセット → /api/proxy", () => {
     test.each([
       ["<img src>", `<img src="/logo.png">`, "src", "/logo.png"],
-      ["<link rel=stylesheet href>", `<link rel="stylesheet" href="/style.css">`, "href", "/style.css"],
+      [
+        "<link rel=stylesheet href>",
+        `<link rel="stylesheet" href="/style.css">`,
+        "href",
+        "/style.css",
+      ],
       ["<script src>", `<script src="/app.js"></script>`, "src", "/app.js"],
     ])("%s を /api/proxy に書き換える", (_label, html, attr, path) => {
       const result = rewriteHtml(html, BASE);
@@ -52,6 +61,70 @@ describe("rewriteHtml", () => {
     const bodyIdx = result.indexOf("<body>");
     const barIdx = result.indexOf('id="proxy-addressbar"');
     expect(barIdx).toBeGreaterThan(bodyIdx);
+  });
+
+  test("GET フォーム送信横取りスクリプトを <body> 直後に注入する", () => {
+    const html = `<html><body><p>hello</p></body></html>`;
+    const result = rewriteHtml(html, BASE);
+    const bodyIdx = result.indexOf("<body>");
+    const scriptIdx = result.indexOf("addEventListener('submit'");
+    expect(scriptIdx).toBeGreaterThan(bodyIdx);
+  });
+});
+
+describe("buildGetFormDestination", () => {
+  // 仕様: docs/spec/features/proxy.md §GET フォーム送信の横取り
+  const PAGE = `https://proxy.test/browse?url=${encodeURIComponent("https://example.com")}`;
+
+  test("GET フォーム: ターゲットのクエリをフォーム項目で置き換えて /browse へ遷移", () => {
+    const action = `/browse?url=${encodeURIComponent("https://example.com/search")}`;
+    const dest = buildGetFormDestination("get", action, PAGE, [
+      ["q", "hello world"],
+    ]);
+    expect(dest).toBe(
+      `/browse?url=${encodeURIComponent("https://example.com/search?q=hello+world")}`
+    );
+  });
+
+  test("method 未指定は GET 扱いで横取りする", () => {
+    const action = `/browse?url=${encodeURIComponent("https://example.com/search")}`;
+    const dest = buildGetFormDestination("", action, PAGE, [["q", "x"]]);
+    expect(dest).toBe(
+      `/browse?url=${encodeURIComponent("https://example.com/search?q=x")}`
+    );
+  });
+
+  test("BASE_PATH（リバースプロキシのパスプレフィックス）を遷移先で保持する", () => {
+    const action = `/proxy/3000/browse?url=${encodeURIComponent("https://example.com/search")}`;
+    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent("https://example.com")}`;
+    const dest = buildGetFormDestination("get", action, page, [["q", "x"]]);
+    expect(dest).toBe(
+      `/proxy/3000/browse?url=${encodeURIComponent("https://example.com/search?q=x")}`
+    );
+  });
+
+  test("POST フォームは横取りしない（null を返す）", () => {
+    const action = `/browse?url=${encodeURIComponent("https://example.com/search")}`;
+    expect(
+      buildGetFormDestination("post", action, PAGE, [["q", "x"]])
+    ).toBeNull();
+  });
+
+  test("action 属性なし: 閲覧ページの url パラメータをターゲットにフォールバックする", () => {
+    const page = `https://proxy.test/browse?url=${encodeURIComponent("https://example.com/page")}`;
+    const dest = buildGetFormDestination("get", "", page, [["q", "x"]]);
+    expect(dest).toBe(
+      `/browse?url=${encodeURIComponent("https://example.com/page?q=x")}`
+    );
+  });
+
+  test("ターゲットを復元できない場合は null を返す", () => {
+    // url パラメータが無く、ページ側にも無い
+    expect(
+      buildGetFormDestination("get", "/browse", "https://proxy.test/", [
+        ["q", "x"],
+      ])
+    ).toBeNull();
   });
 });
 

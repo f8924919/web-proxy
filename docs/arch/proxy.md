@@ -19,7 +19,7 @@ src/
 ├── lib/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
-│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録 <script> 注入含む）
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り <script> 注入含む）
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── rateLimit.ts      # インメモリ レート制限
 │       └── response.ts       # nullBodyStatus 判定ユーティリティ
@@ -121,6 +121,24 @@ public/
 
 `rewriteHtml` は URL 書き換えに加え、アドレスバー HTML スニペットを `<body>` 直後に注入する。
 
+### GET フォーム送信横取りスクリプト注入
+
+> 関連仕様: [プロキシ機能仕様 §GET フォーム送信の横取り](../spec/features/proxy.md#get-フォーム送信の横取り)
+
+`rewriteHtml` は `<body>` 直後（アドレスバー・SW 登録に続けて）に、GET フォーム送信を横取りする `<script>` を注入する。GET フォーム送信ではブラウザが `action` のクエリ文字列（`?url=<target>`）を破棄し、`url` が消失して [ブラウズ Route Handler](#route-handler-srcappbrowseroutets) がホームへリダイレクトしてしまうため、それを補う。
+
+```
+document に submit を capture で委任（動的フォームにも効く）:
+1. method が GET 以外 → 何もしない（POST 等は action のクエリが保たれるため素通し）
+2. 送信フォームの action から url パラメータを取り出してターゲットとする
+   （action に url が無い場合は window.location の url パラメータをフォールバック）
+3. preventDefault し、ターゲットのクエリ全体を FormData（フォーム項目）で置き換える
+4. action（または window.location）のパス部（BASE_PATH 込みの …/browse）を再利用し、
+   <path>?url=<encodeURIComponent(ターゲット)> へ window.location.href で遷移する
+```
+
+`BASE_PATH` は `action`/`window.location` のパス部をそのまま再利用することで保持される（スクリプト内で個別に組み立てない）。
+
 ---
 
 ## Service Worker: `public/sw.js`
@@ -206,7 +224,7 @@ NEXT_PUBLIC_BASE_PATH=/proxy/3000
 ### `next.config.ts` — `assetPrefix`
 
 ```ts
-assetPrefix: process.env.NEXT_PUBLIC_BASE_PATH ?? ""
+assetPrefix: process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 ```
 
 `basePath` ではなく `assetPrefix` を使う理由：
