@@ -34,9 +34,9 @@ public/
 
 ## Route Handler: `src/app/browse/route.ts`
 
-**役割**: ブラウズ画面の生 HTML レスポンスを返す。React を介さない。
+**役割**: ブラウズ画面の生 HTML レスポンスを返す。React を介さない。`GET`（ページ閲覧）と `POST`（フォーム送信の中継、[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）をエクスポートする。
 
-### 処理フロー
+### 処理フロー（GET）
 
 ```
 1. searchParams.get('url') を取得
@@ -49,6 +49,21 @@ public/
    （非 HTML はそのまま中継。204/205/304 はボディ null、1xx・範囲外・変換中の例外は 502。
     [機能仕様 §ステータスコードの中継](../spec/features/proxy.md#ステータスコードの中継) 参照）
 ```
+
+### 処理フロー（POST）
+
+GET との差分のみ記載（共通部はレスポンス処理ヘルパーに集約）。
+
+```
+1. searchParams.get('url') を取得
+2. url が null / パース失敗 → 400（GET のホームリダイレクトとは異なる）
+3. pageRateLimiter.check(...)（GET と同じバケット）→ 超過なら 429
+4. proxyFetch(url, { method: 'POST', body: req.body, headers: { 'content-type': … } })
+   - リクエストの Content-Type を転送（urlencoded / multipart の境界維持）
+   - 以降のレスポンス処理（rewriteHtml・sanitize・ステータス中継）は GET と共通
+```
+
+> リクエストの `Cookie` / `Authorization` 転送・SW 経由の POST はスコープ外（[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）。
 
 ### アドレスバー注入
 
@@ -81,13 +96,21 @@ public/
 
 **役割**: SSRF チェックを行ったうえでターゲットへ fetch する。
 
+### `proxyFetch(url, options?)`
+
+`options` でメソッド・ボディ・追加リクエストヘッダーを受け取り、ターゲットへ転送する（省略時は GET・ボディなし＝従来動作）。
+
+- リクエスト構築（メソッド・ヘッダー結合・ボディ／`duplex` の決定）は純粋関数 **`buildProxyRequestInit(options)`** に分離し、実 `fetch`（I/O）から切り離してテスト可能にする（[テスト方針](../testing/policy.md)：外部 I/O は対象外のため、構築ロジックのみ検証）。
+- `User-Agent` / `Accept-Encoding: identity` は既定ヘッダーとして維持し、`options.headers`（例: `Content-Type`）を上書き結合する。
+- ボディは `GET` / `HEAD` 以外かつ `body` 指定時のみ設定する。`ReadableStream` をボディに用いるため `duplex: "half"` を付与する（Node 22 / Next.js では `ReadableStream` ボディに必須）。
+
 ### SSRF チェック
 
 1. `URL` でパース（失敗なら例外）
 2. `dns.promises.lookup(hostname)` で IP を解決
 3. 解決した IP を CIDR ブロックリストと照合（[プロキシ機能仕様 §SSRF 対策](../spec/features/proxy.md) 参照）
 4. ブロック対象なら `SsrfBlockedError` を throw
-5. `fetch(url, { redirect: 'follow', signal: AbortSignal.timeout(10_000) })` で取得
+5. `fetch(url, { ...buildProxyRequestInit(options), signal: AbortSignal.timeout(10_000) })` で取得
 
 ### エラー型
 
@@ -204,7 +227,7 @@ const store = new Map<string, number[]>();
 `RateLimiter` は上限 `maxRequests` とウィンドウ `windowMs` をコンストラクタ引数で受け取る（既定: 60 件 / 60 秒）。ページ遷移とアセット中継で別々の上限・別々のバケット（独立インスタンス）を使うため、用途別に 2 つのインスタンスを公開する。
 
 ```ts
-export const pageRateLimiter = new RateLimiter(60);   // /browse 用
+export const pageRateLimiter = new RateLimiter(60); // /browse 用
 export const assetRateLimiter = new RateLimiter(600); // /api/proxy 用
 ```
 
