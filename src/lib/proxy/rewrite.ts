@@ -92,11 +92,14 @@ export function buildGetFormDestination(
 // GET フォーム送信を横取りする注入スクリプト。
 // 純粋ロジック（buildGetFormDestination）を toString() で埋め込み、ブラウザでは
 // document への submit イベント委任（capture）で動的フォームも含めて捕捉する。
+// 自前のアドレスバー（#proxy-addressbar 内のフォーム）は独自の onsubmit を持つため
+// 横取り対象から除外する（横取りすると入力 URL が無視され得る）。
 const GET_FORM_INTERCEPT_HTML =
   `<script>(function(){` +
   `var build=${buildGetFormDestination.toString()};` +
   `document.addEventListener('submit',function(e){` +
   `var f=e.target;if(!f||f.tagName!=='FORM')return;` +
+  `if(f.closest&&f.closest('#proxy-addressbar'))return;` +
   `var fd;try{fd=new FormData(f,e.submitter)}catch(_){fd=new FormData(f)}` +
   `var dest=build(f.getAttribute('method')||'get',f.getAttribute('action')||'',location.href,Array.from(fd.entries()));` +
   `if(dest){e.preventDefault();location.href=dest;}` +

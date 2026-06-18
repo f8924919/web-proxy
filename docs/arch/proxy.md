@@ -129,6 +129,7 @@ public/
 
 ```
 document に submit を capture で委任（動的フォームにも効く）:
+0. 自前のアドレスバー（#proxy-addressbar 内のフォーム）は独自 onsubmit を持つため除外
 1. method が GET 以外 → 何もしない（POST 等は action のクエリが保たれるため素通し）
 2. 送信フォームの action から url パラメータを取り出してターゲットとする
    （action に url が無い場合は window.location の url パラメータをフォールバック）
