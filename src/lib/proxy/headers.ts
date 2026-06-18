@@ -9,10 +9,14 @@ export function sanitizeHeaders(headers: Headers): Headers {
   const result = new Headers();
   headers.forEach((value, name) => {
     if (!BLOCKED_HEADERS.has(name.toLowerCase())) {
-      if (name.toLowerCase() === "set-cookie") {
-        result.append(name, sanitizeSetCookie(value));
-      } else {
-        result.set(name, value);
+      try {
+        if (name.toLowerCase() === "set-cookie") {
+          result.append(name, sanitizeSetCookie(value));
+        } else {
+          result.set(name, value);
+        }
+      } catch {
+        // 不正な値（改行文字など）を含むヘッダーはスキップ
       }
     }
   });
