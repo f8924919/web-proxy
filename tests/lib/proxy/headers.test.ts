@@ -1,7 +1,11 @@
 /** @jest-environment node */
-// 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §Cookie 処理
+// 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §認証情報の転送
 
-import { sanitizeHeaders, sanitizeSetCookie } from "@/lib/proxy/headers";
+import {
+  sanitizeHeaders,
+  sanitizeSetCookie,
+  forwardableRequestHeaders,
+} from "@/lib/proxy/headers";
 
 describe("sanitizeHeaders", () => {
   const BLOCKED = [
@@ -51,5 +55,33 @@ describe("sanitizeSetCookie", () => {
     expect(sanitizeSetCookie(value)).toBe(
       "token=xyz; Path=/; Secure; SameSite=Strict"
     );
+  });
+});
+
+describe("forwardableRequestHeaders", () => {
+  test("Cookie と Authorization を転送対象として抽出する", () => {
+    const headers = new Headers({
+      cookie: "session=abc",
+      authorization: "Bearer xyz",
+    });
+    expect(forwardableRequestHeaders(headers)).toEqual({
+      cookie: "session=abc",
+      authorization: "Bearer xyz",
+    });
+  });
+
+  test("存在しない認証ヘッダーは含めない（無ければ空オブジェクト）", () => {
+    const headers = new Headers({ "user-agent": "test" });
+    expect(forwardableRequestHeaders(headers)).toEqual({});
+  });
+
+  test("許可リスト外のヘッダーは転送しない", () => {
+    const headers = new Headers({
+      cookie: "session=abc",
+      "x-secret": "leak",
+      "user-agent": "test",
+    });
+    const result = forwardableRequestHeaders(headers);
+    expect(result).toEqual({ cookie: "session=abc" });
   });
 });
