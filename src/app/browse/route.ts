@@ -6,6 +6,7 @@ import {
 } from "@/lib/proxy/fetch";
 import { rewriteHtml } from "@/lib/proxy/rewrite";
 import { sanitizeHeaders } from "@/lib/proxy/headers";
+import { isNullBodyStatus } from "@/lib/proxy/response";
 import { rateLimiter } from "@/lib/proxy/rateLimit";
 
 function errorHtml(message: string): string {
@@ -66,12 +67,30 @@ export async function GET(req: NextRequest) {
   const contentType = res.headers.get("content-type") ?? "";
   const outHeaders = sanitizeHeaders(res.headers);
 
-  if (!contentType.includes("text/html")) {
-    return new Response(res.body, { status: res.status, headers: outHeaders });
-  }
+  try {
+    // 204/304 などボディを持てないステータスはボディを null にして中継する
+    // （ボディ付きで Response を構築すると例外になり 500 クラッシュするため）。
+    if (isNullBodyStatus(res.status)) {
+      return new Response(null, { status: res.status, headers: outHeaders });
+    }
 
-  const html = await res.text();
-  const rewritten = rewriteHtml(html, parsed.href);
-  outHeaders.set("Content-Type", "text/html; charset=utf-8");
-  return new Response(rewritten, { status: res.status, headers: outHeaders });
+    if (!contentType.includes("text/html")) {
+      return new Response(res.body, {
+        status: res.status,
+        headers: outHeaders,
+      });
+    }
+
+    const html = await res.text();
+    const rewritten = rewriteHtml(html, parsed.href);
+    outHeaders.set("Content-Type", "text/html; charset=utf-8");
+    return new Response(rewritten, { status: res.status, headers: outHeaders });
+  } catch (err) {
+    // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
+    console.error("[proxy/browse-render]", err);
+    return new Response(errorHtml("サイトの読み込みに失敗しました。"), {
+      status: 502,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
+  }
 }
