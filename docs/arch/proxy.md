@@ -19,7 +19,7 @@ src/
 ├── lib/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
-│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り <script> 注入含む）
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・document.domain シム <script> 注入含む）
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
@@ -178,6 +178,16 @@ document に submit を capture で委任（動的フォームにも効く）:
 ```
 
 `BASE_PATH` は `action`/`window.location` のパス部をそのまま再利用することで保持される（スクリプト内で個別に組み立てない）。
+
+### `document.domain` ドメインガード無効化シム注入
+
+> 関連仕様: [プロキシ機能仕様 §`document.domain` ドメインガードの無効化](../spec/features/proxy.md#documentdomain-ドメインガードの無効化)
+
+`rewriteHtml` は、ターゲットの**ホスト名（`new URL(baseUrl).hostname`）を返すよう `document.domain` を見せかけるシム `<script>`** を、ページ内スクリプトより先に実行されるよう **`<head>` 最先頭**へ注入する（他の注入が `<body>` 直後なのに対し、本シムだけは `<head>` 先頭）。一部サイト（例 Yahoo の `yjsecure.js`）が `document.domain` を正規表現で検査し、自オリジン外と判定するとトップフレームを実サイトへリダイレクトするため、プロキシ配下（`document.domain` がプロキシのホスト名）でガードが誤発火するのを防ぐ。
+
+- **実装方式**: `Object.defineProperty(Document.prototype, 'domain', { get: () => <hostname>, set: () => {} })` で getter を上書きする（代入方式は `Origin-Agent-Cluster` 等で禁止され得るため不採用）。`try/catch` で例外を吸収する。
+- **注入位置と最先頭性**: `yjsecure.js` は `templa.min.js` が `<head>` 段階で動的挿入し得るため、`<body>` 直後注入では間に合わない。`<head[^>]*>` 直後へ正規表現置換で注入する。`<head>` が無い HTML は `<html>` 直後、それも無ければ文書先頭へフォールバックする。
+- **スコープ外**: `location.hostname` / `location.href` など `location` 全体を偽装する汎用シムは対象外（`document.domain` ベースのガード無効化に範囲を限定）。
 
 ---
 

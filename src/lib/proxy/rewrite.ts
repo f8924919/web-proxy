@@ -115,6 +115,39 @@ const SW_REGISTER_HTML =
   `}` +
   `</script>`;
 
+// document.domain ベースのドメインガードを無効化するシム。
+// 一部サイト（例 Yahoo の yjsecure.js）は document.domain を正規表現で検査し、自オリジン外と
+// 判定するとトップフレームを実サイトへリダイレクトする。プロキシ配下では document.domain が
+// プロキシのホスト名になりガードが誤発火するため、Document.prototype.domain の getter を
+// ターゲットのホスト名返却に上書きして無効化する（document.domain への代入は一部オリジンで
+// 禁止され得るため getter 上書き方式を採る）。例外は握り潰す。
+// ページ内スクリプトより先に実行させるため <head> 最先頭へ注入する。
+// 仕様: docs/spec/features/proxy.md §document.domain ドメインガードの無効化
+const DOMAIN_SHIM_HTML = (hostname: string) =>
+  `<script>(function(){try{Object.defineProperty(Document.prototype,'domain',` +
+  `{configurable:true,get:function(){return ${JSON.stringify(hostname)};},set:function(){}});` +
+  `}catch(_){}})()</script>`;
+
+function targetHostname(baseUrl: string): string {
+  try {
+    return new URL(baseUrl).hostname;
+  } catch {
+    return "";
+  }
+}
+
+// スニペットを <head> 最先頭へ注入する。<head> が無ければ <html> 直後、
+// それも無ければ文書先頭へフォールバックする。
+function injectAtHeadStart(html: string, snippet: string): string {
+  if (/<head[^>]*>/i.test(html)) {
+    return html.replace(/(<head[^>]*>)/i, `$1${snippet}`);
+  }
+  if (/<html[^>]*>/i.test(html)) {
+    return html.replace(/(<html[^>]*>)/i, `$1${snippet}`);
+  }
+  return snippet + html;
+}
+
 export function rewriteHtml(html: string, baseUrl: string): string {
   const root = parse(html);
 
@@ -156,10 +189,14 @@ export function rewriteHtml(html: string, baseUrl: string): string {
 
   const rewritten = root.toString();
   const bar = ADDRESS_BAR_HTML(baseUrl);
-  return rewritten.replace(
+  const withBody = rewritten.replace(
     /(<body[^>]*>)/i,
     `$1${bar}${GET_FORM_INTERCEPT_HTML}${SW_REGISTER_HTML}`
   );
+
+  const hostname = targetHostname(baseUrl);
+  if (!hostname) return withBody;
+  return injectAtHeadStart(withBody, DOMAIN_SHIM_HTML(hostname));
 }
 
 export function rewriteCss(css: string, baseUrl: string): string {

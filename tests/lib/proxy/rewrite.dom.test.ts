@@ -81,3 +81,37 @@ describe("GET フォーム横取りスクリプト（注入）", () => {
     expect(interceptedByInjectedScript(form)).toBe(false);
   });
 });
+
+describe("document.domain ドメインガード無効化シム（注入実行）", () => {
+  // 仕様: docs/spec/features/proxy.md §document.domain ドメインガードの無効化
+  // Document.prototype を書き換えるため、前後でディスクリプタを復元する。
+  let original: PropertyDescriptor | undefined;
+  beforeEach(() => {
+    original = Object.getOwnPropertyDescriptor(Document.prototype, "domain");
+  });
+  afterEach(() => {
+    if (original) {
+      Object.defineProperty(Document.prototype, "domain", original);
+    }
+  });
+
+  function evalDomainShim(baseUrl: string): void {
+    const out = rewriteHtml(`<html><head></head><body></body></html>`, baseUrl);
+    const m = out.match(
+      /<script>((?:(?!<\/script>)[\s\S])*Document\.prototype(?:(?!<\/script>)[\s\S])*)<\/script>/
+    );
+    expect(m).not.toBeNull();
+    // eslint-disable-next-line no-eval
+    eval(m![1]);
+  }
+
+  test("シム実行後、document.domain がターゲットのホスト名を返す", () => {
+    evalDomainShim("https://news.yahoo.co.jp/categories/science");
+    expect(document.domain).toBe("news.yahoo.co.jp");
+  });
+
+  test("Yahoo のドメインガード正規表現にマッチする値を返す", () => {
+    evalDomainShim("https://news.yahoo.co.jp/categories/science");
+    expect(document.domain).toMatch(/^(.+\.)?yahoo(\.co|-labs)?\.jp$/);
+  });
+});
