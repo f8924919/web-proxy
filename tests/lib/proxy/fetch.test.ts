@@ -1,7 +1,11 @@
 /** @jest-environment node */
 // 仕様: docs/spec/features/proxy.md §SSRF 対策 / §POST 中継
 
-import { isSsrfBlocked, buildProxyRequestInit } from "@/lib/proxy/fetch";
+import {
+  isSsrfBlocked,
+  buildProxyRequestInit,
+  DEFAULT_USER_AGENT,
+} from "@/lib/proxy/fetch";
 
 describe("isSsrfBlocked", () => {
   test.each([
@@ -40,8 +44,44 @@ describe("buildProxyRequestInit", () => {
     expect(init.body).toBeUndefined();
     expect(init.duplex).toBeUndefined();
     const headers = init.headers as Record<string, string>;
-    expect(headers["User-Agent"]).toContain("web-proxy");
+    expect(headers["User-Agent"]).toBe(DEFAULT_USER_AGENT);
     expect(headers["Accept-Encoding"]).toBe("identity");
+  });
+
+  describe("既定 User-Agent（#41）", () => {
+    // 仕様: docs/spec/features/proxy.md §ターゲットへ送る既定 User-Agent
+    // process.env を変えるテストは前後で復元する（テストルール）。
+    const ORIGINAL_UA = process.env.PROXY_USER_AGENT;
+    afterEach(() => {
+      if (ORIGINAL_UA === undefined) delete process.env.PROXY_USER_AGENT;
+      else process.env.PROXY_USER_AGENT = ORIGINAL_UA;
+    });
+
+    test("既定 UA は現代ブラウザ相当（Chrome 系）の文字列である", () => {
+      expect(DEFAULT_USER_AGENT).toMatch(/^Mozilla\/5\.0 /);
+      expect(DEFAULT_USER_AGENT).toContain("Chrome/");
+      expect(DEFAULT_USER_AGENT).not.toContain("web-proxy");
+    });
+
+    test("PROXY_USER_AGENT が設定されていれば既定 UA に用いる", () => {
+      process.env.PROXY_USER_AGENT = "CustomAgent/9.9";
+      const headers = buildProxyRequestInit().headers as Record<string, string>;
+      expect(headers["User-Agent"]).toBe("CustomAgent/9.9");
+    });
+
+    test("PROXY_USER_AGENT が空文字なら既定 UA にフォールバックする", () => {
+      process.env.PROXY_USER_AGENT = "";
+      const headers = buildProxyRequestInit().headers as Record<string, string>;
+      expect(headers["User-Agent"]).toBe(DEFAULT_USER_AGENT);
+    });
+
+    test("呼び出し側が options.headers で渡した User-Agent が優先される", () => {
+      process.env.PROXY_USER_AGENT = "EnvAgent/1.0";
+      const headers = buildProxyRequestInit({
+        headers: { "User-Agent": "CallerAgent/2.0" },
+      }).headers as Record<string, string>;
+      expect(headers["User-Agent"]).toBe("CallerAgent/2.0");
+    });
   });
 
   test("forwards_post_method_with_stream_body_and_sets_duplex_half", () => {
