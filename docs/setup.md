@@ -135,3 +135,57 @@ ss -ltnp | grep :3000
 ### TypeScript エラーが出る
 
 `next-env.d.ts` が生成されていない場合は、一度 `npm run build` または `npm run dev` を実行してください（Next.js が自動生成します）。
+
+---
+
+## 8. ヘッドレスブラウザでのデバッグ（方式B）
+
+プロキシの描画を確認・デバッグする手段は 2 系統あります。
+
+| 経路              | 利用者                  | 概要                                                                                                                                       |
+| ----------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| 方式A: 実ブラウザ | 人間                    | code-server のポート転送 `/proxy/3000/` を実ブラウザで開き、F12 DevTools でデバッグ（[§5](#5-環境変数) の `NEXT_PUBLIC_BASE_PATH` が前提） |
+| 方式B: ヘッドレス | Claude 等（コンテナ内） | Playwright headless chromium で `http://localhost:3000` 経由ページを開き、各種記録を取得                                                   |
+
+方式A は追加設定不要で最も確実です。コンテナ内から（実ブラウザを使わずに）描画後の状態・console エラー・network を機械的に取得したい場合に方式B を使います。とくに JS 実行後にしか再現しない不具合（例: リダイレクトループ）の調査に有効です。
+
+### 8.1 セットアップ（初回のみ）
+
+`playwright` は devDependency に含まれるため `npm install` で入りますが、chromium 本体は別途ダウンロードが必要です。
+
+```bash
+# chromium 本体 + 実行に必要な OS 依存ライブラリを取得（--with-deps は root/sudo 権限が必要）
+npx playwright install --with-deps chromium
+```
+
+### 8.2 実行
+
+dev サーバを起動した状態で実行します（方式B はサーバ起動済みを前提とします）。
+
+```bash
+# 別ターミナルで dev サーバを起動しておく
+npm run dev
+
+# プロキシ対象サイトを開く（http(s):// 始まりは自動で /browse?url= 経由になる）
+npm run debug:browser -- https://example.com
+
+# dev サーバ上のパスを直接開く（/ トップや /browse?url=... を指定）
+npm run debug:browser -- /
+npm run debug:browser -- '/browse?url=https://example.com'
+```
+
+実行ごとに `scripts/.debug-out/<timestamp>/` へ以下を出力します（このディレクトリは `.gitignore` 済み）。
+
+| ファイル         | 内容                                      |
+| ---------------- | ----------------------------------------- |
+| `screenshot.png` | 描画後ページのフルスクリーンショット      |
+| `console.log`    | console 出力・ページエラー                |
+| `network.json`   | リクエスト / レスポンス（ステータス含む） |
+| `page.html`      | 描画後の HTML                             |
+
+| 環境変数                | 既定値                  | 用途                                     |
+| ----------------------- | ----------------------- | ---------------------------------------- |
+| `DEBUG_BROWSER_ORIGIN`  | `http://localhost:3000` | dev サーバの接続先。ポート変更時に上書き |
+| `DEBUG_BROWSER_WAIT_MS` | `1500`                  | 読み込み後に状態取得まで待つミリ秒       |
+
+> dev サーバを 3000 以外で起動した場合は `DEBUG_BROWSER_ORIGIN=http://localhost:3001 npm run debug:browser -- ...` のように接続先を合わせること。
