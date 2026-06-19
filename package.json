@@ -12,7 +12,8 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --noEmit",
     "test": "jest --passWithNoTests",
-    "test:watch": "jest --watch"
+    "test:watch": "jest --watch",
+    "debug:browser": "node scripts/debug-browser.mjs"
   },
   "dependencies": {
     "next": "^15.5.19",
@@ -32,6 +33,7 @@
     "eslint-config-next": "^16.2.9",
     "jest": "^30.4.2",
     "jest-environment-jsdom": "^30.4.1",
+    "playwright": "^1.61.0",
     "prettier": "^3.8.4",
     "ts-jest": "^29.4.11",
     "typescript": "^5.9.3",
