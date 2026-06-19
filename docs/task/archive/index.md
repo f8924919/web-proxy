@@ -10,6 +10,7 @@
 | [project-bootstrap.md](project-bootstrap.md)                       | プロジェクト初期構築（Next.js 15 + TypeScript + Jest）PR #1                                                         | 2026-06-17 |
 | [proxy-core.md](proxy-core.md)                                     | プロキシコア実装（中継・HTML書き換え・SSRF対策・レート制限）Issue #4 / PR #5 #6                                     | 2026-06-17 |
 | [29-access-cookie-credentials.md](29-access-cookie-credentials.md) | Cloudflare Access 背後でプロキシ自身の認証 cookie が落ちサブリソースが CORS で失敗する問題の修正 Issue #29 / PR #30 | 2026-06-19 |
+| [headless-browser-debug.md](headless-browser-debug.md)             | Playwright によるヘッドレスブラウザデバッグ環境（方式B）の導入 Issue #32 / PR #33                                   | 2026-06-19 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
