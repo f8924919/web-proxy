@@ -136,17 +136,28 @@
           const dest = rewriteRequestUrl(req.url, pageUrl, swOrigin, basePath);
           if (!dest) return fetch(req);
 
-          // GET/HEAD はボディなし。非 GET はメソッド・ヘッダー・ボディを保持する。
-          if (req.method === "GET" || req.method === "HEAD") {
-            return fetch(dest, { credentials: "omit" });
+          // 振り向け先は常に同一オリジンの /api/proxy。プロキシ自身が認証プロキシ
+          // （Cloudflare Access 等）の背後にある場合に備え、same-origin の Cookie
+          // （CF_Authorization 等）を送る。omit だと Access が未認証とみなして
+          // ログインページへ 302 し、クロスオリジンに着地して CORS で失敗する。
+          // プロキシ自身のインフラ認証 cookie は /api/proxy 側で上流転送から除去する。
+          try {
+            // GET/HEAD はボディなし。非 GET はメソッド・ヘッダー・ボディを保持する。
+            if (req.method === "GET" || req.method === "HEAD") {
+              return await fetch(dest, { credentials: "same-origin" });
+            }
+            const body = await req.arrayBuffer();
+            return await fetch(dest, {
+              method: req.method,
+              headers: req.headers,
+              body: body.byteLength ? body : undefined,
+              credentials: "same-origin",
+            });
+          } catch {
+            // 振り向け fetch が失敗（ネットワーク/CORS 等）しても未処理 reject に
+            // しない。ネットワークエラー応答を返して respondWith を解決させる。
+            return Response.error();
           }
-          const body = await req.arrayBuffer();
-          return fetch(dest, {
-            method: req.method,
-            headers: req.headers,
-            body: body.byteLength ? body : undefined,
-            credentials: "omit",
-          });
         })()
       );
     });
