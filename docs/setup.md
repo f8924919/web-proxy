@@ -183,9 +183,21 @@ npm run debug:browser -- '/browse?url=https://example.com'
 | `network.json`   | リクエスト / レスポンス（ステータス含む） |
 | `page.html`      | 描画後の HTML                             |
 
-| 環境変数                | 既定値                  | 用途                                     |
-| ----------------------- | ----------------------- | ---------------------------------------- |
-| `DEBUG_BROWSER_ORIGIN`  | `http://localhost:3000` | dev サーバの接続先。ポート変更時に上書き |
-| `DEBUG_BROWSER_WAIT_MS` | `1500`                  | 読み込み後に状態取得まで待つミリ秒       |
+| 環境変数                  | 既定値                                  | 用途                                                                      |
+| ------------------------- | --------------------------------------- | ------------------------------------------------------------------------- |
+| `DEBUG_BROWSER_ORIGIN`    | `http://localhost:3000`                 | dev サーバの接続先。ポート変更時に上書き                                  |
+| `DEBUG_BROWSER_WAIT_MS`   | `1500`                                  | 読み込み後に状態取得まで待つミリ秒                                        |
+| `DEBUG_BROWSER_BASE_PATH` | `.env.local` の `NEXT_PUBLIC_BASE_PATH` | 方式B が再現する BASE_PATH（§8.3）。通常は指定不要（`.env.local` を読む） |
 
 > dev サーバを 3000 以外で起動した場合は `DEBUG_BROWSER_ORIGIN=http://localhost:3001 npm run debug:browser -- ...` のように接続先を合わせること。
+
+### 8.3 BASE_PATH（リバースプロキシ）の再現（#34）
+
+方式A は code-server のポート転送（`/proxy/3000/`）越しに実ブラウザで開くため、リバースプロキシが先頭の `/proxy/3000` を除去してから dev サーバへ転送する。一方、方式B は `http://localhost:3000` を直叩きするためこのプレフィックス除去を経由しない。そのまま `/proxy/3000/sw.js` 等の BASE_PATH 付きパスを取得すると dev サーバで **404** になる（[§5](#5-環境変数) の `NEXT_PUBLIC_BASE_PATH` 参照）。
+
+このため `debug:browser` は方式A を次のように再現する。
+
+1. `.env.local` の `NEXT_PUBLIC_BASE_PATH` を読み、方式A と同じく **プレフィックス込みの URL**（例 `…/proxy/3000/browse?url=…`）でページを開く。これにより Service Worker のスコープ（`${BASE_PATH}/`）がページを覆い、ページ内リンク・サブリソースも方式A と同じパスで解決される。
+2. 同一オリジンへの BASE_PATH 付きリクエストを Playwright の `route` で横取りし、**プレフィックスを除去**して dev サーバへ中継する（リバースプロキシの肩代わり）。Service Worker スクリプトの取得も対象。
+
+通常は `.env.local` を正本に自動解決するため設定不要。一時的に上書きしたい場合のみ `DEBUG_BROWSER_BASE_PATH` を使う（dev サーバ側の `NEXT_PUBLIC_BASE_PATH` と一致させること。食い違うと SW 登録などが 404 になる）。
