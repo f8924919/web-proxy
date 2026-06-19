@@ -39,3 +39,6 @@ npm-debug.log*
 
 # TypeScript
 tsconfig.tsbuildinfo
+
+# Debug tooling output (scripts/debug-browser.mjs)
+scripts/.debug-out/
