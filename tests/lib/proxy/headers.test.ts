@@ -4,6 +4,7 @@
 import {
   sanitizeHeaders,
   sanitizeSetCookie,
+  stripInfraCookies,
   forwardableRequestHeaders,
   relayRequestHeaders,
   buildCorsPreflightHeaders,
@@ -60,6 +61,36 @@ describe("sanitizeSetCookie", () => {
   });
 });
 
+describe("stripInfraCookies", () => {
+  test("CF_Authorization を除去し他の cookie は残す", () => {
+    expect(stripInfraCookies("CF_Authorization=jwt; session=abc")).toBe(
+      "session=abc"
+    );
+  });
+
+  test("CF_AppSession も除去する", () => {
+    expect(
+      stripInfraCookies("session=abc; CF_AppSession=zzz; theme=dark")
+    ).toBe("session=abc; theme=dark");
+  });
+
+  test("cookie 名は大文字小文字を区別せず除去する", () => {
+    expect(stripInfraCookies("cf_authorization=jwt; session=abc")).toBe(
+      "session=abc"
+    );
+  });
+
+  test("インフラ cookie だけなら空文字を返す", () => {
+    expect(stripInfraCookies("CF_Authorization=jwt")).toBe("");
+  });
+
+  test("インフラ cookie が無ければそのまま返す", () => {
+    expect(stripInfraCookies("session=abc; theme=dark")).toBe(
+      "session=abc; theme=dark"
+    );
+  });
+});
+
 describe("forwardableRequestHeaders", () => {
   test("Cookie と Authorization を転送対象として抽出する", () => {
     const headers = new Headers({
@@ -85,6 +116,22 @@ describe("forwardableRequestHeaders", () => {
     });
     const result = forwardableRequestHeaders(headers);
     expect(result).toEqual({ cookie: "session=abc" });
+  });
+
+  test("Cookie からプロキシ自身のインフラ認証 cookie を除去する", () => {
+    const headers = new Headers({
+      cookie: "CF_Authorization=jwt; session=abc",
+      authorization: "Bearer xyz",
+    });
+    expect(forwardableRequestHeaders(headers)).toEqual({
+      cookie: "session=abc",
+      authorization: "Bearer xyz",
+    });
+  });
+
+  test("除去後に cookie が残らなければ Cookie ヘッダーを付けない", () => {
+    const headers = new Headers({ cookie: "CF_Authorization=jwt" });
+    expect(forwardableRequestHeaders(headers)).toEqual({});
   });
 });
 
@@ -115,6 +162,26 @@ describe("relayRequestHeaders", () => {
     const result = relayRequestHeaders(headers);
     expect(result[name]).toBeUndefined();
     expect(result["x-keep"]).toBe("1");
+  });
+
+  test("Cookie からプロキシ自身のインフラ認証 cookie を除去する", () => {
+    const headers = new Headers({
+      cookie: "CF_Authorization=jwt; session=abc",
+      "content-type": "application/json",
+    });
+    const result = relayRequestHeaders(headers);
+    expect(result.cookie).toBe("session=abc");
+    expect(result["content-type"]).toBe("application/json");
+  });
+
+  test("除去後に cookie が残らなければ Cookie ヘッダーを付けない", () => {
+    const headers = new Headers({
+      cookie: "CF_Authorization=jwt",
+      "content-type": "application/json",
+    });
+    const result = relayRequestHeaders(headers);
+    expect(result.cookie).toBeUndefined();
+    expect(result["content-type"]).toBe("application/json");
   });
 });
 
