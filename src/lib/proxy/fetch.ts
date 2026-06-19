@@ -49,8 +49,15 @@ export interface ProxyRequestOptions {
 // （ReadableStream ボディ送信時に Node が要求する）。
 type ProxyRequestInit = RequestInit & { duplex?: "half" };
 
+// ターゲットへ送る既定 User-Agent。現代ブラウザ相当（Chrome 系）の固定文字列。
+// 独自 UA だと一部サイト（例: yahoo.co.jp）が UA 判定で簡易レイアウトや「推奨ブラウザー」
+// 警告ページを返し表示が崩れるため、フル版を取得できる現代ブラウザ UA を送る。
+// 環境変数 PROXY_USER_AGENT（サーバー専用）で上書き可能。
+// 仕様: docs/spec/features/proxy.md §ターゲットへ送る既定 User-Agent
+export const DEFAULT_USER_AGENT =
+  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
 const BASE_HEADERS: Record<string, string> = {
-  "User-Agent": "Mozilla/5.0 (compatible; web-proxy/1.0)",
   "Accept-Encoding": "identity",
 };
 
@@ -61,10 +68,12 @@ export function buildProxyRequestInit(
   options: ProxyRequestOptions = {}
 ): ProxyRequestInit {
   const method = (options.method ?? "GET").toUpperCase();
+  // 既定 UA は env で上書き可能。空文字は無効値として既定にフォールバックさせるため `||` を使う。
+  const userAgent = process.env.PROXY_USER_AGENT || DEFAULT_USER_AGENT;
   const init: ProxyRequestInit = {
     method,
     redirect: "follow",
-    headers: { ...BASE_HEADERS, ...options.headers },
+    headers: { "User-Agent": userAgent, ...BASE_HEADERS, ...options.headers },
   };
 
   // GET / HEAD はボディを持てない。それ以外でボディ指定時のみ転送する。
