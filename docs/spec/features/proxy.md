@@ -191,11 +191,12 @@ SW が振り向けた非 GET リクエストは、ターゲットの API が要�
 - **拒否（転送しない）**: `host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`（`proxyFetch` が `identity` 固定のため）など hop-by-hop・インフラ系。
 - **転送する**: 上記以外（`Content-Type`・`Authorization`・`Cookie`・`X-*` 等）。
 - `GET` 中継は従来どおり許可リスト（`forwardableRequestHeaders`＝`Cookie` / `Authorization`）を維持する（既存挙動の回帰を避けるため）。
+- **プロキシ自身のインフラ認証 cookie の除去**: 転送する `Cookie` から、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に付与される認証 cookie（`CF_Authorization` / `CF_AppSession`、大文字小文字非依存）を除去する（純粋関数 `stripInfraCookies`、`forwardableRequestHeaders` / `relayRequestHeaders` の両方で適用）。これらはプロキシ自身の認証情報であり、ターゲットへ漏らすと別サイトへ Access の JWT が渡る。除去後に cookie が残らなければ `Cookie` ヘッダー自体を付けない。SW が同一オリジン化のため `credentials: "same-origin"` で振り向ける（下記）ことでこれらの cookie が `/api/proxy` に届くようになるため、上流転送の手前で遮断する。
 
 ### セキュリティ上の制約（v2 でハードニング）
 
 - **任意オリジンへ広めにヘッダーを送る**: 非 GET 中継は拒否リスト方式のため、`Cookie` / `Authorization` を含むクライアント設定ヘッダーが**中継先のサイトを問わず**転送され得る（[§認証情報の転送](#認証情報の転送cookie--authorization) と同じリスク区分）。サイト別のヘッダーアイソレーションは v2 課題。
-- **`credentials` の扱い**: SW は振り向け時に `credentials: "omit"` を用いる（同一オリジン `/api/proxy` への内部 `fetch`）。`Authorization` 等の明示ヘッダーは転送されるが、**Cookie ベースのクロスオリジン XHR は best-effort**（プロキシ origin の Cookie は振り向け `fetch` に付かない）。完全な `credentials: include` 相当はサイト別アイソレーションとともに v2 課題。
+- **`credentials` の扱い**: SW は振り向け時に `credentials: "same-origin"` を用いる（振り向け先は常に同一オリジンの `/api/proxy`）。これにより、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でも、プロキシ origin の認証 cookie（`CF_Authorization` 等）が `/api/proxy` へ届き、プロキシ自身の認証を通過できる（`omit` だと未認証とみなされログインページへ 302 され CORS で失敗していた）。届いたプロキシ origin の cookie のうち**プロキシ自身のインフラ認証 cookie は上流転送の手前で除去する**（[§非 GET 中継のリクエストヘッダー転送](#非-get-中継のリクエストヘッダー転送)）。サイト別アイソレーション・完全な credentials 制御は引き続き v2 課題。
 
 ---
 
@@ -217,7 +218,7 @@ SW が振り向けた非 GET リクエストは、ターゲットの API が要�
 
 - **任意オリジンへ認証情報を送る**: プロキシ origin に保存された `Cookie` は、アイソレーションが無いため**中継先のサイトを問わず**送出される（あるサイトの Cookie が別サイトの中継リクエストにも乗り得る）。サイト間 Cookie アイソレーションは v2 以降の課題。
 - **リダイレクト追従時の漏えい**: `proxyFetch` は `redirect: "follow"` のため、ターゲットが**クロスオリジンへリダイレクト**すると `fetch` は `Authorization` / `Cookie` をリダイレクト先へもそのまま送る（ブラウザのように別オリジンで `Authorization` を落とさない）。意図しない別オリジンへ認証情報が漏れ得る。`redirect: "manual"` 化＋リダイレクト先検証によるハードニングは v2 以降の課題とし、本リスクは既知の制約として明記する。
-- **`credentials: include` 付きリクエスト**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向けるが（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "omit"` を用いるため、`Cookie` ベースのクロスオリジン XHR は best-effort に留まる（`Authorization` 等の明示ヘッダーは転送される）。完全な `credentials: include` 相当は v2 課題。
+- **`credentials` 付きリクエスト**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向け（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "same-origin"` を用いる。これは主にプロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に、プロキシ origin の認証 cookie を `/api/proxy` まで届かせるための措置で、プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）は上流転送の手前で除去する。任意ターゲットに対する完全な `credentials: include` 相当（クロスオリジン XHR の Cookie 同送）はサイト別アイソレーションとともに v2 課題。
 
 ---
 

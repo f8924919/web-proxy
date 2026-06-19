@@ -34,6 +34,28 @@ export function sanitizeSetCookie(value: string): string {
     .join("; ");
 }
 
+// プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合、ブラウザは
+// プロキシ origin の認証 cookie（CF_Authorization 等）も /api/proxy へ送る
+// （SW が credentials: "same-origin" で振り向けるため）。これらはプロキシ自身の
+// 認証情報であり、ターゲットへ転送すると別サイトへ Access の JWT が漏れる。
+// 上流転送する Cookie からは除去する（小文字で比較）。
+const STRIPPED_COOKIE_NAMES = new Set(["cf_authorization", "cf_appsession"]);
+
+// Cookie ヘッダー値から、プロキシ自身のインフラ認証 cookie を除去する純粋関数。
+// 除去後に残る cookie が無ければ空文字を返す（呼び出し側は Cookie を付けない）。
+// 仕様: docs/spec/features/proxy.md §非 GET 中継のリクエストヘッダー転送
+export function stripInfraCookies(cookieHeader: string): string {
+  return cookieHeader
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => {
+      if (part === "") return false;
+      const name = part.split("=", 1)[0].trim().toLowerCase();
+      return !STRIPPED_COOKIE_NAMES.has(name);
+    })
+    .join("; ");
+}
+
 // ターゲットへ転送してよいリクエスト認証ヘッダーの許可リスト。
 // 全ヘッダー素通しを避け、明示的に限定する。
 const FORWARD_REQUEST_HEADERS = ["cookie", "authorization"] as const;
@@ -48,7 +70,13 @@ export function forwardableRequestHeaders(
   const result: Record<string, string> = {};
   for (const name of FORWARD_REQUEST_HEADERS) {
     const value = incoming.get(name);
-    if (value) result[name] = value;
+    if (!value) continue;
+    if (name === "cookie") {
+      const stripped = stripInfraCookies(value);
+      if (stripped) result[name] = stripped;
+    } else {
+      result[name] = value;
+    }
   }
   return result;
 }
@@ -76,9 +104,14 @@ const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
 export function relayRequestHeaders(incoming: Headers): Record<string, string> {
   const result: Record<string, string> = {};
   incoming.forEach((value, name) => {
-    if (!RELAY_BLOCKED_REQUEST_HEADERS.has(name.toLowerCase())) {
-      result[name] = value;
+    const lower = name.toLowerCase();
+    if (RELAY_BLOCKED_REQUEST_HEADERS.has(lower)) return;
+    if (lower === "cookie") {
+      const stripped = stripInfraCookies(value);
+      if (stripped) result[name] = stripped;
+      return;
     }
+    result[name] = value;
   });
   return result;
 }

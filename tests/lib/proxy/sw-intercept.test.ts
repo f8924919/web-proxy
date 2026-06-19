@@ -51,13 +51,13 @@ describe("isProxyOwnPath", () => {
 describe("extractTarget", () => {
   test("url パラメータを取り出す", () => {
     expect(extractTarget(PAGE("https://www.google.com"))).toBe(
-      "https://www.google.com",
+      "https://www.google.com"
     );
   });
 
   test("BASE_PATH 付きページからも取り出す", () => {
     expect(extractTarget(PAGE("https://www.google.com", "/proxy/3000"))).toBe(
-      "https://www.google.com",
+      "https://www.google.com"
     );
   });
 
@@ -71,12 +71,7 @@ describe("rewriteRequestUrl", () => {
 
   test("クロスオリジンの絶対 URL → /api/proxy", () => {
     expect(
-      rewriteRequestUrl(
-        "https://ssl.gstatic.com/foo.js",
-        page,
-        SW_ORIGIN,
-        "",
-      ),
+      rewriteRequestUrl("https://ssl.gstatic.com/foo.js", page, SW_ORIGIN, "")
     ).toBe(PROXY("https://ssl.gstatic.com/foo.js"));
   });
 
@@ -86,8 +81,8 @@ describe("rewriteRequestUrl", () => {
         `${SW_ORIGIN}/images/nav_logo229.png`,
         page,
         SW_ORIGIN,
-        "",
-      ),
+        ""
+      )
     ).toBe(PROXY("https://www.google.com/images/nav_logo229.png"));
   });
 
@@ -106,8 +101,8 @@ describe("rewriteRequestUrl", () => {
         `${SW_ORIGIN}/images/x.png`,
         `${SW_ORIGIN}/browse`,
         SW_ORIGIN,
-        "",
-      ),
+        ""
+      )
     ).toBeNull();
   });
 
@@ -117,19 +112,29 @@ describe("rewriteRequestUrl", () => {
 
     test("クロスオリジン → /proxy/3000/api/proxy", () => {
       expect(
-        rewriteRequestUrl("https://ssl.gstatic.com/foo.js", pageBp, SW_ORIGIN, bp),
+        rewriteRequestUrl(
+          "https://ssl.gstatic.com/foo.js",
+          pageBp,
+          SW_ORIGIN,
+          bp
+        )
       ).toBe(PROXY("https://ssl.gstatic.com/foo.js", bp));
     });
 
     test("ルート絶対パス → ターゲット解決して /proxy/3000/api/proxy", () => {
       expect(
-        rewriteRequestUrl(`${SW_ORIGIN}/images/x.png`, pageBp, SW_ORIGIN, bp),
+        rewriteRequestUrl(`${SW_ORIGIN}/images/x.png`, pageBp, SW_ORIGIN, bp)
       ).toBe(PROXY("https://www.google.com/images/x.png", bp));
     });
 
     test("prefix 付き自前ルート → null", () => {
       expect(
-        rewriteRequestUrl(`${SW_ORIGIN}/proxy/3000/api/proxy?url=x`, pageBp, SW_ORIGIN, bp),
+        rewriteRequestUrl(
+          `${SW_ORIGIN}/proxy/3000/api/proxy?url=x`,
+          pageBp,
+          SW_ORIGIN,
+          bp
+        )
       ).toBeNull();
     });
   });
