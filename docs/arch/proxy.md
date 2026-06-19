@@ -115,7 +115,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 `options` でメソッド・ボディ・追加リクエストヘッダーを受け取り、ターゲットへ転送する（省略時は GET・ボディなし＝従来動作）。
 
 - リクエスト構築（メソッド・ヘッダー結合・ボディ／`duplex` の決定）は純粋関数 **`buildProxyRequestInit(options)`** に分離し、実 `fetch`（I/O）から切り離してテスト可能にする（[テスト方針](../testing/policy.md)：外部 I/O は対象外のため、構築ロジックのみ検証）。
-- `User-Agent` / `Accept-Encoding: identity` は既定ヘッダーとして維持し、`options.headers`（例: `Content-Type`・`Cookie`・`Authorization`）を上書き結合する。認証ヘッダーの抽出は呼び出し側（Route Handler）が `forwardableRequestHeaders` で行い、`proxyFetch` 自体は渡されたヘッダーを転送するのみ。
+- `User-Agent` / `Accept-Encoding: identity` は既定ヘッダー（`BASE_HEADERS`）として維持し、`options.headers`（例: `Content-Type`・`Cookie`・`Authorization`）を上書き結合する。認証ヘッダーの抽出は呼び出し側（Route Handler）が `forwardableRequestHeaders` で行い、`proxyFetch` 自体は渡されたヘッダーを転送するのみ。
+- **既定 `User-Agent`**: 現代ブラウザ相当（Chrome 系）の固定文字列を用いる。`process.env.PROXY_USER_AGENT`（サーバー専用 env。`NEXT_PUBLIC_` なし）が設定されていればそれを、未設定なら固定 Chrome UA を `BASE_HEADERS` の既定値に用いる（`process.env.PROXY_USER_AGENT ?? "<default chrome UA>"`）。独自 UA（旧 `web-proxy/1.0`）はサイトの UA 判定で簡易レイアウト／非対応ページを返されることがあり、表示崩れの原因になるため（[機能仕様 §ターゲットへ送る既定 User-Agent](../spec/features/proxy.md#ターゲットへ送る既定-user-agent)）。
 - ボディは `GET` / `HEAD` 以外かつ `body` 指定時のみ設定する。`ReadableStream` をボディに用いるため `duplex: "half"` を付与する（Node 22 / Next.js では `ReadableStream` ボディに必須）。
 - **リダイレクト**: `redirect: "follow"`。クロスオリジンへのリダイレクト時に `Authorization` / `Cookie` が漏れ得る既知の制約がある（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）。ハードニングは v2。
 
