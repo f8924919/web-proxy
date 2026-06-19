@@ -70,6 +70,62 @@ describe("rewriteHtml", () => {
     const scriptIdx = result.indexOf("addEventListener('submit'");
     expect(scriptIdx).toBeGreaterThan(bodyIdx);
   });
+
+  describe("document.domain ドメインガード無効化シム", () => {
+    // 仕様: docs/spec/features/proxy.md §document.domain ドメインガードの無効化
+    const YAHOO = "https://news.yahoo.co.jp/categories/science";
+
+    test("シムを <head> 最先頭（既存 head 要素より前）に注入する", () => {
+      const html = `<html><head><title>t</title></head><body><p>hi</p></body></html>`;
+      const result = rewriteHtml(html, YAHOO);
+      const headIdx = result.indexOf("<head>");
+      const shimIdx = result.indexOf("Document.prototype");
+      const titleIdx = result.indexOf("<title>");
+      expect(shimIdx).toBeGreaterThan(headIdx);
+      expect(shimIdx).toBeLessThan(titleIdx);
+    });
+
+    test("ターゲット URL のホスト名（パス・スキーム抜き）を見せかける", () => {
+      const result = rewriteHtml(
+        `<html><head></head><body></body></html>`,
+        YAHOO
+      );
+      expect(result).toContain('return "news.yahoo.co.jp"');
+    });
+
+    test("シムは <body> 直後の既存注入より前に位置する（先に実行される）", () => {
+      const html = `<html><head></head><body><p>hi</p></body></html>`;
+      const result = rewriteHtml(html, BASE);
+      const shimIdx = result.indexOf("Document.prototype");
+      const barIdx = result.indexOf('id="proxy-addressbar"');
+      expect(shimIdx).toBeGreaterThan(-1);
+      expect(shimIdx).toBeLessThan(barIdx);
+    });
+
+    test("<head> が無ければ <html> 直後にフォールバック注入する", () => {
+      const html = `<html><body><p>hi</p></body></html>`;
+      const result = rewriteHtml(html, BASE);
+      const htmlIdx = result.indexOf("<html>");
+      const shimIdx = result.indexOf("Document.prototype");
+      const bodyIdx = result.indexOf("<body>");
+      expect(shimIdx).toBeGreaterThan(htmlIdx);
+      expect(shimIdx).toBeLessThan(bodyIdx);
+    });
+
+    test("<head> も <html> も無ければ文書先頭に注入する", () => {
+      const result = rewriteHtml(`<p>hi</p>`, BASE);
+      expect(result.trimStart().startsWith("<script>")).toBe(true);
+      expect(result).toContain("Document.prototype");
+    });
+
+    test("baseUrl が不正でホスト名を導出できない場合はシムを注入しない", () => {
+      const result = rewriteHtml(
+        `<html><head></head><body></body></html>`,
+        "not a url"
+      );
+      expect(result).not.toContain("Document.prototype");
+    });
+  });
 });
 
 describe("buildGetFormDestination", () => {
