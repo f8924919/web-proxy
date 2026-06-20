@@ -14,6 +14,7 @@
 | [34-headless-debug-basepath-strip.md](34-headless-debug-basepath-strip.md) | 方式B（headless debug）で BASE_PATH 付き sw.js/リンクが 404 になる問題の修正 Issue #34 / PR #36                     | 2026-06-19 |
 | [53-enablejs-loop-guard.md](53-enablejs-loop-guard.md)                     | enablejs 自己再ナビ無限ループを検出し案内ページで遮断（B 調査は #52）Issue #53 / PR #54                             | 2026-06-20 |
 | [55-relative-home-redirect.md](55-relative-home-redirect.md)               | /browse の missing-url リダイレクトを相対 Location 化し localhost 漏えいを修正 Issue #55 / PR #56                   | 2026-06-20 |
+| [58-client-side-nav-rewrite.md](58-client-side-nav-rewrite.md)             | JS 動的描画リンクのクライアント側ナビゲーションを横取りしプロキシ離脱を防止 Issue #58 / PR #59                      | 2026-06-20 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
