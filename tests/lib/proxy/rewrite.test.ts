@@ -5,6 +5,7 @@ import {
   rewriteHtml,
   rewriteCss,
   buildGetFormDestination,
+  buildClickNavDestination,
 } from "@/lib/proxy/rewrite";
 
 const BASE = "https://example.com";
@@ -234,6 +235,61 @@ describe("buildGetFormDestination", () => {
       buildGetFormDestination("get", "/browse", "https://proxy.test/", [
         ["q", "x"],
       ])
+    ).toBeNull();
+  });
+});
+
+describe("buildClickNavDestination", () => {
+  // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
+  const PAGE = `https://proxy.test/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/")}`;
+
+  test("http(s) 絶対 URL: 閲覧ページのパスを再利用して /browse へ", () => {
+    const href = "https://news.yahoo.co.jp/articles/abc";
+    expect(buildClickNavDestination(href, PAGE)).toBe(
+      `/browse?url=${encodeURIComponent(href)}`
+    );
+  });
+
+  test("http の絶対 URL も対象", () => {
+    const href = "http://example.com/p";
+    expect(buildClickNavDestination(href, PAGE)).toBe(
+      `/browse?url=${encodeURIComponent(href)}`
+    );
+  });
+
+  test("BASE_PATH（リバースプロキシのパスプレフィックス）を遷移先で保持する", () => {
+    const href = "https://news.yahoo.co.jp/articles/abc";
+    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/")}`;
+    expect(buildClickNavDestination(href, page)).toBe(
+      `/proxy/3000/browse?url=${encodeURIComponent(href)}`
+    );
+  });
+
+  test("ルート相対 URL は対象外（null）", () => {
+    expect(buildClickNavDestination("/articles/abc", PAGE)).toBeNull();
+  });
+
+  test("相対 URL は対象外（null）", () => {
+    expect(buildClickNavDestination("articles/abc", PAGE)).toBeNull();
+  });
+
+  test("プロトコル相対 URL は対象外（null）", () => {
+    expect(buildClickNavDestination("//news.yahoo.co.jp/x", PAGE)).toBeNull();
+  });
+
+  test("# アンカー・javascript: は対象外（null）", () => {
+    expect(buildClickNavDestination("#section", PAGE)).toBeNull();
+    expect(buildClickNavDestination("javascript:void(0)", PAGE)).toBeNull();
+  });
+
+  test("既に書き換え済みの自前リンク（/browse?url=…）は対象外（null）", () => {
+    const self = `/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/articles/abc")}`;
+    expect(buildClickNavDestination(self, PAGE)).toBeNull();
+  });
+
+  test("pageUrl が不正なら null", () => {
+    expect(
+      buildClickNavDestination("https://news.yahoo.co.jp/x", "not a url")
     ).toBeNull();
   });
 });

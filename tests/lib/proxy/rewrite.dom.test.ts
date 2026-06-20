@@ -82,6 +82,98 @@ describe("GET フォーム横取りスクリプト（注入）", () => {
   });
 });
 
+describe("クリックナビ横取りスクリプト（注入）", () => {
+  // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
+  // 注入スクリプト（CLICK_NAV_INTERCEPT_HTML）のランタイム挙動を jsdom で検証する。
+  // 純粋ロジック（buildClickNavDestination）の検証は rewrite.test.ts（node 環境）が担当。
+  function injectClickInterceptor() {
+    const out = rewriteHtml(
+      `<html><body><p>hi</p></body></html>`,
+      "https://www.yahoo.co.jp/"
+    );
+    document.body.innerHTML = out
+      .replace(/^[\s\S]*?<body[^>]*>/i, "")
+      .replace(/<\/body>[\s\S]*$/i, "");
+    document.querySelectorAll("script").forEach((s) => {
+      if (s.textContent && s.textContent.includes("addEventListener('click'")) {
+        // eslint-disable-next-line no-eval
+        eval(s.textContent);
+      }
+    });
+  }
+
+  // 注入スクリプトは capture で先に走る。後続の capture リスナで defaultPrevented を観察する。
+  function interceptedClick(
+    target: Element,
+    init: MouseEventInit = {}
+  ): boolean {
+    let intercepted = false;
+    const probe = (e: Event) => {
+      intercepted = e.defaultPrevented;
+    };
+    document.addEventListener("click", probe, true);
+    try {
+      target.dispatchEvent(
+        new MouseEvent("click", { bubbles: true, cancelable: true, ...init })
+      );
+    } catch {
+      // jsdom はナビゲーション未実装で例外を投げ得るが、判定には影響しない
+    }
+    document.removeEventListener("click", probe, true);
+    return intercepted;
+  }
+
+  function anchor(href: string, target?: string): HTMLAnchorElement {
+    const a = document.createElement("a");
+    a.setAttribute("href", href);
+    if (target) a.setAttribute("target", target);
+    document.body.appendChild(a);
+    return a;
+  }
+
+  beforeEach(() => {
+    injectClickInterceptor();
+  });
+
+  test("動的描画された http(s) 絶対 URL の <a> クリックを横取りする", () => {
+    const a = anchor("https://news.yahoo.co.jp/articles/abc");
+    expect(interceptedClick(a)).toBe(true);
+  });
+
+  test("<a> 内の子要素クリックでも横取りする（closest）", () => {
+    const a = anchor("https://news.yahoo.co.jp/articles/abc");
+    const span = document.createElement("span");
+    a.appendChild(span);
+    expect(interceptedClick(span)).toBe(true);
+  });
+
+  test("修飾キー付きクリック（Ctrl/Meta）は横取りしない", () => {
+    const a = anchor("https://news.yahoo.co.jp/articles/abc");
+    expect(interceptedClick(a, { ctrlKey: true })).toBe(false);
+    expect(interceptedClick(a, { metaKey: true })).toBe(false);
+  });
+
+  test("中クリック（補助ボタン）は横取りしない", () => {
+    const a = anchor("https://news.yahoo.co.jp/articles/abc");
+    expect(interceptedClick(a, { button: 1 })).toBe(false);
+  });
+
+  test('target="_blank" は横取りしない', () => {
+    const a = anchor("https://news.yahoo.co.jp/articles/abc", "_blank");
+    expect(interceptedClick(a)).toBe(false);
+  });
+
+  test("http(s) 絶対 URL でない自前リンク（ルート相対 /browse?url= 済み・# アンカー）は横取りしない", () => {
+    const wrapped = anchor(
+      "/proxy/3000/browse?url=" +
+        encodeURIComponent("https://news.yahoo.co.jp/articles/abc")
+    );
+    expect(interceptedClick(wrapped)).toBe(false);
+    const hash = anchor("#section");
+    expect(interceptedClick(hash)).toBe(false);
+  });
+});
+
 describe("document.domain ドメインガード無効化シム（注入実行）", () => {
   // 仕様: docs/spec/features/proxy.md §document.domain ドメインガードの無効化
   // Document.prototype を書き換えるため、前後でディスクリプタを復元する。
