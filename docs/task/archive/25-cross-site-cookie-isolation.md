@@ -2,7 +2,7 @@
 
 - **Issue**: [#25](https://github.com/f8924919/web-proxy/issues/25) feat(v2): サイト間 Cookie アイソレーション
 - **ブランチ**: `feature/25-cross-site-cookie-isolation`
-- **ステータス**: 進行中
+- **ステータス**: 完了（PR #61 マージ済み）
 - **関連**: 由来 #20 / #21、リダイレクト漏えい対策 #26
 
 ## 目的
