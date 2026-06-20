@@ -15,6 +15,7 @@
 | [53-enablejs-loop-guard.md](53-enablejs-loop-guard.md)                     | enablejs 自己再ナビ無限ループを検出し案内ページで遮断（B 調査は #52）Issue #53 / PR #54                             | 2026-06-20 |
 | [55-relative-home-redirect.md](55-relative-home-redirect.md)               | /browse の missing-url リダイレクトを相対 Location 化し localhost 漏えいを修正 Issue #55 / PR #56                   | 2026-06-20 |
 | [58-client-side-nav-rewrite.md](58-client-side-nav-rewrite.md)             | JS 動的描画リンクのクライアント側ナビゲーションを横取りしプロキシ離脱を防止 Issue #58 / PR #59                      | 2026-06-20 |
+| [25-cross-site-cookie-isolation.md](25-cross-site-cookie-isolation.md)     | サイト間 Cookie アイソレーション（Cookie 名スコープ方式・ステートレス）Issue #25 / PR #61                           | 2026-06-20 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
