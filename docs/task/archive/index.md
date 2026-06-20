@@ -12,6 +12,8 @@
 | [29-access-cookie-credentials.md](29-access-cookie-credentials.md)         | Cloudflare Access 背後でプロキシ自身の認証 cookie が落ちサブリソースが CORS で失敗する問題の修正 Issue #29 / PR #30 | 2026-06-19 |
 | [headless-browser-debug.md](headless-browser-debug.md)                     | Playwright によるヘッドレスブラウザデバッグ環境（方式B）の導入 Issue #32 / PR #33                                   | 2026-06-19 |
 | [34-headless-debug-basepath-strip.md](34-headless-debug-basepath-strip.md) | 方式B（headless debug）で BASE_PATH 付き sw.js/リンクが 404 になる問題の修正 Issue #34 / PR #36                     | 2026-06-19 |
+| [53-enablejs-loop-guard.md](53-enablejs-loop-guard.md)                     | enablejs 自己再ナビ無限ループを検出し案内ページで遮断（B 調査は #52）Issue #53 / PR #54                             | 2026-06-20 |
+| [55-relative-home-redirect.md](55-relative-home-redirect.md)               | /browse の missing-url リダイレクトを相対 Location 化し localhost 漏えいを修正 Issue #55 / PR #56                   | 2026-06-20 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
