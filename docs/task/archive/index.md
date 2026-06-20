@@ -16,6 +16,7 @@
 | [55-relative-home-redirect.md](55-relative-home-redirect.md)               | /browse の missing-url リダイレクトを相対 Location 化し localhost 漏えいを修正 Issue #55 / PR #56                   | 2026-06-20 |
 | [58-client-side-nav-rewrite.md](58-client-side-nav-rewrite.md)             | JS 動的描画リンクのクライアント側ナビゲーションを横取りしプロキシ離脱を防止 Issue #58 / PR #59                      | 2026-06-20 |
 | [25-cross-site-cookie-isolation.md](25-cross-site-cookie-isolation.md)     | サイト間 Cookie アイソレーション（Cookie 名スコープ方式・ステートレス）Issue #25 / PR #61                           | 2026-06-20 |
+| [27-cors-hardening.md](27-cors-hardening.md)                               | CORS ハードニング（非 GET の origin/referer 除外・許可オリジンの同一オリジン照合）Issue #27 / PR #63                | 2026-06-20 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |

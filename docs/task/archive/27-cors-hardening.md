@@ -2,7 +2,7 @@
 
 - **Issue**: [#27](https://github.com/f8924919/web-proxy/issues/27) feat(v2): CORS ハードニング
 - **ブランチ**: `feature/27-cors-hardening`
-- **ステータス**: 進行中（実装・テスト green、PR 前）
+- **ステータス**: 完了（PR #63 マージ済み）
 - **関連**: 由来 #21、Cookie アイソレーション #25
 
 ## 目的
