@@ -22,7 +22,10 @@ function browseUrl(href: string, base: string): string {
 // browseUrl() で書き換える。url が無い純粋な遅延 refresh はそのまま返す。
 // url= の前後空白・大文字小文字・クォート（' / "）を許容し、遅延部は保持する。
 // 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
-export function rewriteMetaRefreshContent(content: string, base: string): string {
+export function rewriteMetaRefreshContent(
+  content: string,
+  base: string
+): string {
   return content.replace(
     /(url\s*=\s*)(['"]?)([^'"]*)\2/i,
     (whole, prefix: string, quote: string, target: string) => {
@@ -186,7 +189,9 @@ export function rewriteHtml(html: string, baseUrl: string): string {
   // 解決され、閲覧ページから離脱する（例 Google の enablejs リトライ）。
   // 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
   root.querySelectorAll("meta[http-equiv]").forEach((el) => {
-    if ((el.getAttribute("http-equiv") ?? "").trim().toLowerCase() !== "refresh")
+    if (
+      (el.getAttribute("http-equiv") ?? "").trim().toLowerCase() !== "refresh"
+    )
       return;
     const content = el.getAttribute("content");
     if (!content) return;
