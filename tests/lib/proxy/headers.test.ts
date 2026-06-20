@@ -1,14 +1,42 @@
 /** @jest-environment node */
-// 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §認証情報の転送 / §CORS プリフライト対応
+// 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §認証情報の転送 / §サイト間 Cookie アイソレーション / §CORS プリフライト対応
 
 import {
   sanitizeHeaders,
   sanitizeSetCookie,
-  stripInfraCookies,
+  cookieScopeKey,
+  scopedCookieHeader,
   forwardableRequestHeaders,
   relayRequestHeaders,
   buildCorsPreflightHeaders,
 } from "@/lib/proxy/headers";
+
+const ORIGIN_A = "https://a.example";
+const ORIGIN_B = "https://b.example";
+
+// テスト用: ある origin にスコープされた Cookie 文字列（name=value）を組み立てる。
+const scoped = (origin: string, name: string, value: string): string =>
+  `__pxy.${cookieScopeKey(origin)}.${name}=${value}`;
+
+describe("cookieScopeKey", () => {
+  test("URL セーフ文字（base64url）のみ・パディング無しで返す", () => {
+    expect(cookieScopeKey(ORIGIN_A)).toMatch(/^[A-Za-z0-9_-]+$/);
+  });
+
+  test("同じ origin には同じ鍵を返す（決定的）", () => {
+    expect(cookieScopeKey(ORIGIN_A)).toBe(cookieScopeKey(ORIGIN_A));
+  });
+
+  test("異なる origin には異なる鍵を返す", () => {
+    expect(cookieScopeKey(ORIGIN_A)).not.toBe(cookieScopeKey(ORIGIN_B));
+  });
+
+  test("鍵は origin の base64url であり復元できる", () => {
+    const key = cookieScopeKey(ORIGIN_A);
+    const decoded = atob(key.replace(/-/g, "+").replace(/_/g, "/"));
+    expect(decoded).toBe(ORIGIN_A);
+  });
+});
 
 describe("sanitizeHeaders", () => {
   const BLOCKED = [
@@ -24,131 +52,182 @@ describe("sanitizeHeaders", () => {
       [name]: "some-value",
       "content-type": "text/html",
     });
-    const result = sanitizeHeaders(headers);
+    const result = sanitizeHeaders(headers, ORIGIN_A);
     expect(result.has(name)).toBe(false);
   });
 
   test("content-type はそのまま維持する", () => {
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
-    const result = sanitizeHeaders(headers);
+    const result = sanitizeHeaders(headers, ORIGIN_A);
     expect(result.get("content-type")).toBe("text/html; charset=utf-8");
   });
 
   test("cache-control はそのまま維持する", () => {
     const headers = new Headers({ "cache-control": "max-age=3600" });
-    const result = sanitizeHeaders(headers);
+    const result = sanitizeHeaders(headers, ORIGIN_A);
     expect(result.get("cache-control")).toBe("max-age=3600");
+  });
+
+  test("Set-Cookie をターゲット origin でスコープ化する", () => {
+    const headers = new Headers();
+    headers.append("set-cookie", "session=abc; Path=/; Domain=example.com");
+    const result = sanitizeHeaders(headers, ORIGIN_A);
+    expect(result.get("set-cookie")).toBe(
+      `${scoped(ORIGIN_A, "session", "abc")}; Path=/`
+    );
   });
 });
 
 describe("sanitizeSetCookie", () => {
-  test("Domain 属性を除去する", () => {
+  test("Domain 除去に加え Cookie 名をスコープ化する", () => {
     const value = "session=abc; Path=/; Domain=example.com; HttpOnly";
-    expect(sanitizeSetCookie(value)).toBe("session=abc; Path=/; HttpOnly");
+    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
+      `${scoped(ORIGIN_A, "session", "abc")}; Path=/; HttpOnly`
+    );
   });
 
-  test("Domain 属性がない場合はそのまま返す", () => {
+  test("Domain が無くてもスコープ化する", () => {
     const value = "session=abc; Path=/; HttpOnly";
-    expect(sanitizeSetCookie(value)).toBe("session=abc; Path=/; HttpOnly");
+    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
+      `${scoped(ORIGIN_A, "session", "abc")}; Path=/; HttpOnly`
+    );
   });
 
-  test("Secure / SameSite はそのまま維持する", () => {
+  test("Secure / SameSite / Path は維持する", () => {
     const value =
       "token=xyz; Path=/; Domain=example.com; Secure; SameSite=Strict";
-    expect(sanitizeSetCookie(value)).toBe(
-      "token=xyz; Path=/; Secure; SameSite=Strict"
+    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
+      `${scoped(ORIGIN_A, "token", "xyz")}; Path=/; Secure; SameSite=Strict`
+    );
+  });
+
+  test("origin が異なれば異なるスコープ名になる", () => {
+    const value = "session=abc; Path=/";
+    expect(sanitizeSetCookie(value, ORIGIN_A)).not.toBe(
+      sanitizeSetCookie(value, ORIGIN_B)
+    );
+  });
+
+  test("値に = を含んでも値はそのまま維持する", () => {
+    const value = "t=YWJj==; Path=/";
+    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
+      `${scoped(ORIGIN_A, "t", "YWJj==")}; Path=/`
     );
   });
 });
 
-describe("stripInfraCookies", () => {
-  test("CF_Authorization を除去し他の cookie は残す", () => {
-    expect(stripInfraCookies("CF_Authorization=jwt; session=abc")).toBe(
-      "session=abc"
-    );
+describe("scopedCookieHeader", () => {
+  test("現ターゲット origin にスコープされた Cookie だけを接頭辞無しで返す", () => {
+    const header = [
+      scoped(ORIGIN_A, "sid", "aaa"),
+      scoped(ORIGIN_B, "sid", "bbb"),
+    ].join("; ");
+    expect(scopedCookieHeader(header, ORIGIN_B)).toBe("sid=bbb");
+    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("sid=aaa");
   });
 
-  test("CF_AppSession も除去する", () => {
+  test("別 origin にスコープされた Cookie は含めない", () => {
+    const header = scoped(ORIGIN_B, "sid", "bbb");
+    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("");
+  });
+
+  test("非スコープ Cookie（インフラ認証・レガシー）は除外する", () => {
+    const header = `CF_Authorization=jwt; theme=dark; ${scoped(ORIGIN_A, "sid", "aaa")}`;
+    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("sid=aaa");
+  });
+
+  test("一致する Cookie が無ければ空文字を返す", () => {
     expect(
-      stripInfraCookies("session=abc; CF_AppSession=zzz; theme=dark")
-    ).toBe("session=abc; theme=dark");
+      scopedCookieHeader("CF_Authorization=jwt; theme=dark", ORIGIN_A)
+    ).toBe("");
   });
 
-  test("cookie 名は大文字小文字を区別せず除去する", () => {
-    expect(stripInfraCookies("cf_authorization=jwt; session=abc")).toBe(
-      "session=abc"
-    );
-  });
-
-  test("インフラ cookie だけなら空文字を返す", () => {
-    expect(stripInfraCookies("CF_Authorization=jwt")).toBe("");
-  });
-
-  test("インフラ cookie が無ければそのまま返す", () => {
-    expect(stripInfraCookies("session=abc; theme=dark")).toBe(
-      "session=abc; theme=dark"
-    );
+  test("元の名前に . を含んでも正しく復元する", () => {
+    const header = scoped(ORIGIN_A, "app.sid", "aaa");
+    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("app.sid=aaa");
   });
 });
 
 describe("forwardableRequestHeaders", () => {
-  test("Cookie と Authorization を転送対象として抽出する", () => {
+  test("Cookie は現ターゲット origin 分だけを抽出し Authorization は転送する", () => {
     const headers = new Headers({
-      cookie: "session=abc",
+      cookie: [
+        scoped(ORIGIN_A, "sid", "aaa"),
+        scoped(ORIGIN_B, "sid", "bbb"),
+      ].join("; "),
       authorization: "Bearer xyz",
     });
-    expect(forwardableRequestHeaders(headers)).toEqual({
-      cookie: "session=abc",
+    expect(forwardableRequestHeaders(headers, ORIGIN_B)).toEqual({
+      cookie: "sid=bbb",
       authorization: "Bearer xyz",
     });
+  });
+
+  test("あるターゲットの Cookie が別ターゲットの転送に乗らない", () => {
+    const headers = new Headers({ cookie: scoped(ORIGIN_A, "sid", "aaa") });
+    expect(forwardableRequestHeaders(headers, ORIGIN_B)).toEqual({});
   });
 
   test("存在しない認証ヘッダーは含めない（無ければ空オブジェクト）", () => {
     const headers = new Headers({ "user-agent": "test" });
-    expect(forwardableRequestHeaders(headers)).toEqual({});
+    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({});
   });
 
   test("許可リスト外のヘッダーは転送しない", () => {
     const headers = new Headers({
-      cookie: "session=abc",
+      cookie: scoped(ORIGIN_A, "sid", "aaa"),
       "x-secret": "leak",
       "user-agent": "test",
     });
-    const result = forwardableRequestHeaders(headers);
-    expect(result).toEqual({ cookie: "session=abc" });
+    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({
+      cookie: "sid=aaa",
+    });
   });
 
-  test("Cookie からプロキシ自身のインフラ認証 cookie を除去する", () => {
+  test("非スコープのインフラ認証 cookie は転送しない", () => {
     const headers = new Headers({
-      cookie: "CF_Authorization=jwt; session=abc",
+      cookie: `CF_Authorization=jwt; ${scoped(ORIGIN_A, "sid", "aaa")}`,
       authorization: "Bearer xyz",
     });
-    expect(forwardableRequestHeaders(headers)).toEqual({
-      cookie: "session=abc",
+    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({
+      cookie: "sid=aaa",
       authorization: "Bearer xyz",
     });
   });
 
-  test("除去後に cookie が残らなければ Cookie ヘッダーを付けない", () => {
+  test("スコープ一致 Cookie が残らなければ Cookie ヘッダーを付けない", () => {
     const headers = new Headers({ cookie: "CF_Authorization=jwt" });
-    expect(forwardableRequestHeaders(headers)).toEqual({});
+    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({});
   });
 });
 
 describe("relayRequestHeaders", () => {
-  test("Content-Type / 認証 / カスタムヘッダーを広めに転送する", () => {
+  test("Cookie は現ターゲット origin 分だけに限定し他は広めに転送する", () => {
     const headers = new Headers({
       "content-type": "application/json",
       authorization: "Bearer xyz",
-      cookie: "session=abc",
+      cookie: [
+        scoped(ORIGIN_A, "sid", "aaa"),
+        scoped(ORIGIN_B, "sid", "bbb"),
+      ].join("; "),
       "x-csrf-token": "tok",
     });
-    expect(relayRequestHeaders(headers)).toEqual({
+    expect(relayRequestHeaders(headers, ORIGIN_B)).toEqual({
       "content-type": "application/json",
       authorization: "Bearer xyz",
-      cookie: "session=abc",
+      cookie: "sid=bbb",
       "x-csrf-token": "tok",
     });
+  });
+
+  test("あるターゲットの Cookie が別ターゲットの非 GET 転送に乗らない", () => {
+    const headers = new Headers({
+      cookie: scoped(ORIGIN_A, "sid", "aaa"),
+      "content-type": "application/json",
+    });
+    const result = relayRequestHeaders(headers, ORIGIN_B);
+    expect(result.cookie).toBeUndefined();
+    expect(result["content-type"]).toBe("application/json");
   });
 
   test.each([
@@ -159,27 +238,27 @@ describe("relayRequestHeaders", () => {
     ["accept-encoding", "gzip"],
   ])("hop-by-hop・インフラ系の %s は転送しない", (name, value) => {
     const headers = new Headers({ [name]: value, "x-keep": "1" });
-    const result = relayRequestHeaders(headers);
+    const result = relayRequestHeaders(headers, ORIGIN_A);
     expect(result[name]).toBeUndefined();
     expect(result["x-keep"]).toBe("1");
   });
 
-  test("Cookie からプロキシ自身のインフラ認証 cookie を除去する", () => {
+  test("非スコープのインフラ認証 cookie は転送しない", () => {
     const headers = new Headers({
-      cookie: "CF_Authorization=jwt; session=abc",
+      cookie: `CF_Authorization=jwt; ${scoped(ORIGIN_A, "sid", "aaa")}`,
       "content-type": "application/json",
     });
-    const result = relayRequestHeaders(headers);
-    expect(result.cookie).toBe("session=abc");
+    const result = relayRequestHeaders(headers, ORIGIN_A);
+    expect(result.cookie).toBe("sid=aaa");
     expect(result["content-type"]).toBe("application/json");
   });
 
-  test("除去後に cookie が残らなければ Cookie ヘッダーを付けない", () => {
+  test("スコープ一致 Cookie が残らなければ Cookie ヘッダーを付けない", () => {
     const headers = new Headers({
       cookie: "CF_Authorization=jwt",
       "content-type": "application/json",
     });
-    const result = relayRequestHeaders(headers);
+    const result = relayRequestHeaders(headers, ORIGIN_A);
     expect(result.cookie).toBeUndefined();
     expect(result["content-type"]).toBe("application/json");
   });
