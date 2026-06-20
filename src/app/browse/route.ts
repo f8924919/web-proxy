@@ -9,7 +9,7 @@ import {
   sanitizeHeaders,
   forwardableRequestHeaders,
 } from "@/lib/proxy/headers";
-import { isNullBodyStatus } from "@/lib/proxy/response";
+import { isNullBodyStatus, relativeRedirect } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
 import { navigationLoopGuard, loopGuidanceHtml } from "@/lib/proxy/loopGuard";
 import { getClientIp } from "@/lib/proxy/clientIp";
@@ -39,8 +39,10 @@ export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
 
   if (!url) {
+    // 相対 Location でホームへ。req.url から絶対 URL を組むと、リバースプロキシ /
+    // ポート転送越しで内部オリジン（localhost）が漏れるため使わない。
     const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-    return Response.redirect(new URL(basePath + "/", req.url), 307);
+    return relativeRedirect(`${basePath}/`, 307);
   }
 
   let parsed: URL;

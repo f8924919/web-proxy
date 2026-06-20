@@ -24,7 +24,7 @@ src/
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
 │       ├── loopGuard.ts      # ナビゲーションループ検出（enablejs 自己再ナビ対策）
-│       └── response.ts       # nullBodyStatus 判定ユーティリティ
+│       └── response.ts       # nullBodyStatus 判定・相対リダイレクト生成ユーティリティ
 └── ...
 
 public/
@@ -41,7 +41,9 @@ public/
 
 ```
 1. searchParams.get('url') を取得
-2. url が null / パース失敗 → 307 リダイレクト to /
+2. url が null / パース失敗 → 307 リダイレクト to ${BASE_PATH}/
+   （相対 Location。内部オリジン漏えい防止のため req.url から絶対 URL を組まない。
+    [機能仕様 §url 未指定時のホームリダイレクト](../spec/features/proxy.md#url-未指定時のホームリダイレクト)）
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
 3b. navigationLoopGuard.check(ip, url) → ループ検出なら静的案内ページ(200) を返して打ち切り
    （host+path 単位の短時間連続遷移を検出。[機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策)）
