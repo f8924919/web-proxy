@@ -111,6 +111,9 @@ export function forwardableRequestHeaders(
 
 // 非 GET 中継で転送しない hop-by-hop・インフラ系ヘッダー（拒否リスト）。
 // accept-encoding は proxyFetch が identity 固定のため除外する。
+// origin / referer はプロキシ自身の origin・/browse?url=… 閲覧 URL をターゲットへ
+// 漏らすため除外する（#27。サーバー間中継のため Origin 無し＝同一オリジン扱いと
+// なり多くの API でむしろ整合する）。
 const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
   "host",
   "connection",
@@ -123,11 +126,15 @@ const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
   "upgrade",
   "content-length",
   "accept-encoding",
+  "origin",
+  "referer",
 ]);
 
 // SW が /api/proxy へ振り向けた非 GET 中継向けに、リクエストヘッダーを
 // 拒否リスト方式で広めに転送する純粋関数。Content-Type / Authorization /
 // Cookie / X-* などカスタムヘッダーを保持し、ターゲットの API を動かす。
+// Authorization はサーバー側のスコープ機構が無く、クライアントが当該リクエストに
+// 設定した値をそのまま転送する（#27）。
 // 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
 export function relayRequestHeaders(
   incoming: Headers,
@@ -147,22 +154,45 @@ export function relayRequestHeaders(
   return result;
 }
 
+// 要求 Origin が /api/proxy リクエスト自身の Host と同一オリジンの場合のみ、その
+// origin を返す純粋関数。不一致・いずれか欠落・不正値なら null。SW は正当な
+// サブリソースを同一オリジンの /api/proxy へ振り向けるため許可すべきは自プロキシ
+// origin のみで、第三者クロスオリジンへの無検証エコー＋Allow-Credentials を防ぐ。
+// host は scheme を含まないため Origin の host 部のみで照合する（TLS 終端
+// リバプロでも公開 Host 同士で一致する。#27）。
+// 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
+export function allowedCorsOrigin(
+  origin: string | null,
+  host: string | null
+): string | null {
+  if (!origin || !host) return null;
+  try {
+    return new URL(origin).host === host ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
 // OPTIONS（CORS プリフライト）応答用の許可ヘッダーを組み立てる純粋関数。
-// origin をエコーし（無ければ *）、Access-Control-Request-Headers をエコーする。
-// origin がある場合のみ Allow-Credentials を付ける（* と credentials は併用不可）。
+// origin は呼び出し側が allowedCorsOrigin で検証済みの値（許可 origin または null）。
+// origin が非 null の場合のみ Allow-Origin をエコーし Allow-Credentials を付ける
+// （無検証エコー・* フォールバックは行わない。#27）。
+// Access-Control-Request-Headers は従来どおりエコーする（無ければ *）。
 // 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
 export function buildCorsPreflightHeaders(
   origin: string | null,
   requestHeaders: string | null
 ): Headers {
   const headers = new Headers();
-  headers.set("Access-Control-Allow-Origin", origin ?? "*");
   headers.set(
     "Access-Control-Allow-Methods",
     "GET, POST, PUT, PATCH, DELETE, OPTIONS"
   );
   headers.set("Access-Control-Allow-Headers", requestHeaders ?? "*");
-  if (origin) headers.set("Access-Control-Allow-Credentials", "true");
+  if (origin) {
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.set("Access-Control-Allow-Credentials", "true");
+  }
   headers.set("Access-Control-Max-Age", "600");
   headers.set("Vary", "Origin");
   return headers;

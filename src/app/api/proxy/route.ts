@@ -6,6 +6,7 @@ import {
   forwardableRequestHeaders,
   relayRequestHeaders,
   buildCorsPreflightHeaders,
+  allowedCorsOrigin,
 } from "@/lib/proxy/headers";
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { assetRateLimiter } from "@/lib/proxy/rateLimit";
@@ -36,8 +37,12 @@ export async function DELETE(req: NextRequest) {
 // CORS プリフライト（防御的）。通常は SW の同一オリジン化でプリフライト自体が
 // 発生しないが、真のクロスオリジン OPTIONS にも応答できるようにする。
 export async function OPTIONS(req: NextRequest) {
-  const headers = buildCorsPreflightHeaders(
+  const allowOrigin = allowedCorsOrigin(
     req.headers.get("origin"),
+    req.headers.get("host")
+  );
+  const headers = buildCorsPreflightHeaders(
+    allowOrigin,
     req.headers.get("access-control-request-headers")
   );
   return new Response(null, { status: 204, headers });
@@ -92,11 +97,15 @@ async function relayAsset(req: NextRequest): Promise<Response> {
   // （書き換え基準 baseUrl と揃える。#42）。
   const outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
 
-  // クロスオリジン要求（Origin あり）にのみ CORS 許可ヘッダーを付与する。
+  // 要求 Origin が自プロキシと同一オリジンの場合のみ CORS 許可ヘッダーを付与する。
+  // 第三者クロスオリジンへは無検証エコー＋Allow-Credentials を返さない（#27）。
   // 同一オリジンのアセット中継には Origin が付かないため影響しない。
-  const origin = req.headers.get("origin");
-  if (origin) {
-    outHeaders.set("Access-Control-Allow-Origin", origin);
+  const allowOrigin = allowedCorsOrigin(
+    req.headers.get("origin"),
+    req.headers.get("host")
+  );
+  if (allowOrigin) {
+    outHeaders.set("Access-Control-Allow-Origin", allowOrigin);
     outHeaders.set("Access-Control-Allow-Credentials", "true");
     outHeaders.append("Vary", "Origin");
   }
