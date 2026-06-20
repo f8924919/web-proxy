@@ -23,7 +23,7 @@ src/
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
-│       └── response.ts       # nullBodyStatus 判定ユーティリティ
+│       └── response.ts       # nullBodyStatus 判定・相対リダイレクト生成ユーティリティ
 └── ...
 
 public/
@@ -40,7 +40,9 @@ public/
 
 ```
 1. searchParams.get('url') を取得
-2. url が null / パース失敗 → 307 リダイレクト to /
+2. url が null / パース失敗 → 307 リダイレクト to ${BASE_PATH}/
+   （相対 Location。内部オリジン漏えい防止のため req.url から絶対 URL を組まない。
+    [機能仕様 §url 未指定時のホームリダイレクト](../spec/features/proxy.md#url-未指定時のホームリダイレクト)）
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
 4. { response, finalUrl } = proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
    → SSRF ブロックなら 403 / 到達不能なら 502
