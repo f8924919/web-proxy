@@ -226,7 +226,9 @@ export function rewriteHtml(html: string, baseUrl: string): string {
   // 解決され、閲覧ページから離脱する（例 Google の enablejs リトライ）。
   // 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
   root.querySelectorAll("meta[http-equiv]").forEach((el) => {
-    const httpEquiv = (el.getAttribute("http-equiv") ?? "").trim().toLowerCase();
+    const httpEquiv = (el.getAttribute("http-equiv") ?? "")
+      .trim()
+      .toLowerCase();
     // inline CSP（enforce）を除去する。残すと注入スクリプト（nonce 無し）や
     // /api/proxy へ書き換えた src が CSP でブロックされ得る。Report-Only は
     // 実際のブロックを行わずレポートのみのため残す。
