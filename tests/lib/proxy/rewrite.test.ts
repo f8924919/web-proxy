@@ -38,6 +38,60 @@ describe("rewriteHtml", () => {
     });
   });
 
+  describe("<meta http-equiv=refresh> → /browse", () => {
+    // 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
+    test("ルート相対 url を baseUrl 基準で解決し /browse に書き換える（遅延は保持）", () => {
+      const html = `<meta http-equiv="refresh" content="0;url=/httpservice/retry/enablejs?sei=x">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `content="0;url=/browse?url=${encodeURIComponent("https://example.com/httpservice/retry/enablejs?sei=x")}"`
+      );
+    });
+
+    test("絶対 url をそのまま /browse に書き換える（遅延を保持）", () => {
+      const html = `<meta http-equiv="refresh" content="5; url=https://other.example/next">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `/browse?url=${encodeURIComponent("https://other.example/next")}`
+      );
+      expect(result).toMatch(/content="5;\s*url=\/browse\?url=/);
+    });
+
+    test("http-equiv の大文字小文字を無視して書き換える", () => {
+      const html = `<meta http-equiv="REFRESH" content="0;URL=/foo">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(encodeURIComponent("https://example.com/foo"));
+    });
+
+    test("シングルクォート付き url も書き換える", () => {
+      const html = `<meta http-equiv="refresh" content="0; url='/bar'">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `/browse?url=${encodeURIComponent("https://example.com/bar")}`
+      );
+    });
+
+    test("url を持たない純粋な遅延 refresh は書き換えない", () => {
+      const html = `<meta http-equiv="refresh" content="5">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`content="5"`);
+      expect(result).not.toContain("/browse?url=");
+    });
+
+    test("http(s) に解決されない url（mailto 等）は書き換えない", () => {
+      const html = `<meta http-equiv="refresh" content="0;url=mailto:a@example.com">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain("mailto:a@example.com");
+      expect(result).not.toContain("/browse?url=");
+    });
+
+    test("refresh 以外の http-equiv は対象外", () => {
+      const html = `<meta http-equiv="content-type" content="text/html;url=/x">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).not.toContain("/browse?url=");
+    });
+  });
+
   describe("静的アセット → /api/proxy", () => {
     test.each([
       ["<img src>", `<img src="/logo.png">`, "src", "/logo.png"],

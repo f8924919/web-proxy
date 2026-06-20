@@ -18,6 +18,24 @@ function browseUrl(href: string, base: string): string {
   return `${BASE_PATH}/browse?url=${encodeURIComponent(resolved)}`;
 }
 
+// <meta http-equiv="refresh"> の content（"<遅延>;url=<TARGET>"）内の url を
+// browseUrl() で書き換える。url が無い純粋な遅延 refresh はそのまま返す。
+// url= の前後空白・大文字小文字・クォート（' / "）を許容し、遅延部は保持する。
+// 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
+export function rewriteMetaRefreshContent(content: string, base: string): string {
+  return content.replace(
+    /(url\s*=\s*)(['"]?)([^'"]*)\2/i,
+    (whole, prefix: string, quote: string, target: string) => {
+      const trimmed = target.trim();
+      if (!trimmed) return whole;
+      const rewritten = browseUrl(trimmed, base);
+      // browseUrl は http(s) に解決できない URL は素通しする。素通し時は無変更。
+      if (rewritten === trimmed) return whole;
+      return `${prefix}${quote}${rewritten}${quote}`;
+    }
+  );
+}
+
 function assetUrl(href: string, base: string): string {
   const resolved = resolve(href, base);
   if (!resolved.startsWith("http://") && !resolved.startsWith("https://")) {
@@ -161,6 +179,20 @@ export function rewriteHtml(html: string, baseUrl: string): string {
   root.querySelectorAll("form[action]").forEach((el) => {
     const action = el.getAttribute("action");
     if (action) el.setAttribute("action", browseUrl(action, baseUrl));
+  });
+
+  // <meta http-equiv="refresh" content="<遅延>;url=<TARGET>"> の url を /browse へ。
+  // 書き換えないと url=/... のルート相対 refresh がプロキシ自身のオリジン直下へ
+  // 解決され、閲覧ページから離脱する（例 Google の enablejs リトライ）。
+  // 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
+  root.querySelectorAll("meta[http-equiv]").forEach((el) => {
+    if ((el.getAttribute("http-equiv") ?? "").trim().toLowerCase() !== "refresh")
+      return;
+    const content = el.getAttribute("content");
+    if (!content) return;
+    const rewrittenContent = rewriteMetaRefreshContent(content, baseUrl);
+    if (rewrittenContent !== content)
+      el.setAttribute("content", rewrittenContent);
   });
 
   for (const sel of ["img[src]", "source[src]", "script[src]"] as const) {

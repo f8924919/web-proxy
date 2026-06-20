@@ -173,6 +173,9 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | `<img src>` / `<source src>` | `/api/proxy?url=<encoded>` |
 | `<link href>`                | `/api/proxy?url=<encoded>` |
 | `<script src>`               | `/api/proxy?url=<encoded>` |
+| `<meta http-equiv=refresh>`  | `/browse?url=<encoded>`    |
+
+`<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` は `content` 内の `url=` を正規表現で抜き出し、`<a href>` と同じ `browseUrl()` で書き換える（遅延値は保持）。ルート相対 `url` がプロキシオリジン直下へ解決されて離脱するのを防ぐ。`<noscript>` 内の meta refresh はパーサが生テキスト扱いするため対象外（[機能仕様 §meta refresh の書き換え](../spec/features/proxy.md#meta-refresh-の書き換え)の制限）。
 
 ### CSS 書き換え
 
