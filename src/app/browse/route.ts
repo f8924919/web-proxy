@@ -11,6 +11,7 @@ import {
 } from "@/lib/proxy/headers";
 import { isNullBodyStatus, relativeRedirect } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
+import { navigationLoopGuard, loopGuidanceHtml } from "@/lib/proxy/loopGuard";
 import { getClientIp } from "@/lib/proxy/clientIp";
 
 function errorHtml(message: string): string {
@@ -21,6 +22,15 @@ function errorHtml(message: string): string {
 function htmlResponse(message: string, status: number): Response {
   return new Response(errorHtml(message), {
     status,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
+// ナビゲーションループ検出時の静的案内ページ（自動遷移を含まない）。
+// 仕様: docs/spec/features/proxy.md §ナビゲーションループの検出
+function loopGuidanceResponse(): Response {
+  return new Response(loopGuidanceHtml(), {
+    status: 200,
     headers: { "Content-Type": "text/html; charset=utf-8" },
   });
 }
@@ -47,6 +57,12 @@ export async function GET(req: NextRequest) {
     pageRateLimiter.check(ip);
   } catch {
     return new Response("Too Many Requests", { status: 429 });
+  }
+
+  // enablejs 等の自己再ナビゲーション無限ループを検出したら、ループを駆動する中継 HTML では
+  // なく自動遷移を含まない案内ページを返して打ち切る（429 に達する前に発火）。
+  if (navigationLoopGuard.check(ip, parsed)) {
+    return loopGuidanceResponse();
   }
 
   // 受信リクエストの Cookie / Authorization をターゲットへ転送し、認証セッションを維持する。
@@ -77,6 +93,10 @@ export async function POST(req: NextRequest) {
     pageRateLimiter.check(ip);
   } catch {
     return new Response("Too Many Requests", { status: 429 });
+  }
+
+  if (navigationLoopGuard.check(ip, parsed)) {
+    return loopGuidanceResponse();
   }
 
   // Cookie / Authorization に加え、Content-Type を転送して
