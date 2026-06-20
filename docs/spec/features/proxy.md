@@ -42,6 +42,13 @@ Next.js サーバー
 | `POST`   | `/browse?url=<encoded>`    | フォーム POST 送信の中継（リクエストボディと `Content-Type` をターゲットへ転送。詳細は [§POST 中継](#post-中継)） |
 | `GET`    | `/api/proxy?url=<encoded>` | 静的アセットの透過中継（CSS・画像・JS をそのまま返す）                                                            |
 
+### `url` 未指定時のホームリダイレクト
+
+`GET /browse` に `url` が無い場合（GET フォーム横取りの取りこぼし・`/browse` への直接遷移など）は、ホーム（`${BASE_PATH}/`）へ **307 リダイレクト**する。
+
+- **相対 `Location` を使う**: リダイレクトの `Location` は `${BASE_PATH}/` の**相対パス**（スキーム・ホストを含まない）とし、絶対 URL を生成しない。`Response.redirect(new URL(..., req.url))` のように `req.url`（サーバー内部のオリジン）から絶対 URL を組むと、リバースプロキシ / ポート転送（例: code-server）越しで**内部オリジン（`localhost`）が `Location` に漏れ**、ブラウザが公開オリジンを離れて `localhost` へ遷移してしまう。相対 `Location` はブラウザが公開オリジン基準で解決するため、この漏えいを防げる。
+- `POST /browse` の `url` 欠落・不正は、ホームリダイレクトではなく **400** を返す（[§POST 中継](#post-中継)）。
+
 ---
 
 ## HTML 書き換え
