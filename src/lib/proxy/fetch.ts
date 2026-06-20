@@ -61,6 +61,29 @@ const BASE_HEADERS: Record<string, string> = {
   "Accept-Encoding": "identity",
 };
 
+// ヘッダー名の大文字小文字を区別せずに結合する（HTTP ヘッダー名はケース非依存＝ RFC 7230）。
+// 後勝ち（後ろの source が同名ヘッダーを上書き）。非 GET 中継の relayRequestHeaders は
+// 受信ヘッダーを小文字キー（例 user-agent）で返すため、既定の User-Agent（大文字）と
+// 別キーで二重化させないために必要（#43）。同名は最後に指定されたキーの casing で 1 つに集約する。
+function mergeHeadersCaseInsensitive(
+  ...sources: (Record<string, string> | undefined)[]
+): Record<string, string> {
+  // lowercase 名 -> 出力キー の対応を持ち、同名の旧キーを消してから新キーを立てる。
+  const byLower = new Map<string, string>();
+  const merged: Record<string, string> = {};
+  for (const source of sources) {
+    if (!source) continue;
+    for (const [name, value] of Object.entries(source)) {
+      const lower = name.toLowerCase();
+      const prevKey = byLower.get(lower);
+      if (prevKey !== undefined) delete merged[prevKey];
+      byLower.set(lower, name);
+      merged[name] = value;
+    }
+  }
+  return merged;
+}
+
 // proxyFetch が fetch に渡す RequestInit（signal を除く）を組み立てる純粋関数。
 // 実 fetch（I/O）から分離してテスト可能にする。
 // 仕様: docs/spec/features/proxy.md §POST 中継
@@ -73,7 +96,11 @@ export function buildProxyRequestInit(
   const init: ProxyRequestInit = {
     method,
     redirect: "follow",
-    headers: { "User-Agent": userAgent, ...BASE_HEADERS, ...options.headers },
+    headers: mergeHeadersCaseInsensitive(
+      { "User-Agent": userAgent },
+      BASE_HEADERS,
+      options.headers
+    ),
   };
 
   // GET / HEAD はボディを持てない。それ以外でボディ指定時のみ転送する。

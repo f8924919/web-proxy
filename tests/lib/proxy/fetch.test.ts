@@ -84,6 +84,43 @@ describe("buildProxyRequestInit", () => {
     });
   });
 
+  describe("ヘッダーのケース非依存マージ（#43）", () => {
+    // 仕様: docs/spec/features/proxy.md §ターゲットへ送る既定 User-Agent §呼び出し側の優先
+    // HTTP ヘッダー名はケース非依存（RFC 7230）。非 GET 中継の relayRequestHeaders は
+    // 受信ヘッダーを小文字キー（user-agent）で返すため、既定の大文字 User-Agent と
+    // 二重化させず呼び出し側を後勝ちにする。
+
+    // 同名ヘッダーを大文字小文字を無視して数える。
+    const countCaseInsensitive = (
+      headers: Record<string, string>,
+      name: string
+    ) =>
+      Object.keys(headers).filter((k) => k.toLowerCase() === name.toLowerCase())
+        .length;
+
+    test("小文字 user-agent（relay 由来）が既定 User-Agent を上書きし二重化しない", () => {
+      const headers = buildProxyRequestInit({
+        method: "POST",
+        headers: { "user-agent": "FromRelay/1.0" },
+      }).headers as Record<string, string>;
+      // 既定の大文字キーは残らず、呼び出し側の値だけが残る。
+      expect(countCaseInsensitive(headers, "user-agent")).toBe(1);
+      expect(headers["User-Agent"]).toBeUndefined();
+      expect(headers["user-agent"]).toBe("FromRelay/1.0");
+    });
+
+    test("マージ結果に大文字小文字違いの同名ヘッダーが重複しない", () => {
+      const headers = buildProxyRequestInit({
+        method: "POST",
+        headers: { "user-agent": "R/1", "Content-Type": "text/plain" },
+      }).headers as Record<string, string>;
+      const lowerKeys = Object.keys(headers).map((k) => k.toLowerCase());
+      // 小文字化したキー集合に重複がない（= ケース違いの二重化がない）。
+      expect(lowerKeys.length).toBe(new Set(lowerKeys).size);
+      expect(countCaseInsensitive(headers, "user-agent")).toBe(1);
+    });
+  });
+
   test("forwards_post_method_with_stream_body_and_sets_duplex_half", () => {
     const body = new ReadableStream();
     const init = buildProxyRequestInit({ method: "POST", body });
