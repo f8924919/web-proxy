@@ -8,13 +8,16 @@ const BLOCKED_HEADERS = new Set([
   "speculation-rules",
 ]);
 
-export function sanitizeHeaders(headers: Headers): Headers {
+export function sanitizeHeaders(
+  headers: Headers,
+  targetOrigin: string
+): Headers {
   const result = new Headers();
   headers.forEach((value, name) => {
     if (!BLOCKED_HEADERS.has(name.toLowerCase())) {
       try {
         if (name.toLowerCase() === "set-cookie") {
-          result.append(name, sanitizeSetCookie(value));
+          result.append(name, sanitizeSetCookie(value, targetOrigin));
         } else {
           result.set(name, value);
         }
@@ -26,33 +29,57 @@ export function sanitizeHeaders(headers: Headers): Headers {
   return result;
 }
 
-export function sanitizeSetCookie(value: string): string {
-  return value
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => !/^domain=/i.test(part))
-    .join("; ");
+// サイト間 Cookie アイソレーション用の接頭辞。区切り "." は base64url が使わない
+// 文字なので、復元時に最初の "." でスコープ鍵と元の Cookie 名を一意に分離できる。
+// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
+const COOKIE_SCOPE_PREFIX = "__pxy.";
+
+// ターゲット origin から Cookie 名へ付与するスコープ鍵（base64url(origin)）を生成する
+// 純粋関数。URL.origin は IDN を punycode 化するため ASCII で、Cookie 名 token に
+// 使える文字のみになる。
+// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
+export function cookieScopeKey(origin: string): string {
+  return btoa(origin)
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
-// プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合、ブラウザは
-// プロキシ origin の認証 cookie（CF_Authorization 等）も /api/proxy へ送る
-// （SW が credentials: "same-origin" で振り向けるため）。これらはプロキシ自身の
-// 認証情報であり、ターゲットへ転送すると別サイトへ Access の JWT が漏れる。
-// 上流転送する Cookie からは除去する（小文字で比較）。
-const STRIPPED_COOKIE_NAMES = new Set(["cf_authorization", "cf_appsession"]);
+// Set-Cookie 値から Domain 属性を除去し、Cookie 名をターゲット origin でスコープ化する
+// 純粋関数。Path / Secure / SameSite は維持する。
+// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
+export function sanitizeSetCookie(value: string, targetOrigin: string): string {
+  const parts = value
+    .split(";")
+    .map((part) => part.trim())
+    .filter((part) => !/^domain=/i.test(part));
 
-// Cookie ヘッダー値から、プロキシ自身のインフラ認証 cookie を除去する純粋関数。
-// 除去後に残る cookie が無ければ空文字を返す（呼び出し側は Cookie を付けない）。
-// 仕様: docs/spec/features/proxy.md §非 GET 中継のリクエストヘッダー転送
-export function stripInfraCookies(cookieHeader: string): string {
+  const [nameValue, ...attrs] = parts;
+  const eq = nameValue.indexOf("=");
+  // name=value の形でなければスコープ化できないため、Domain 除去のみで返す。
+  if (eq === -1) return parts.join("; ");
+
+  const name = nameValue.slice(0, eq);
+  const cookieValue = nameValue.slice(eq + 1);
+  const scopedName = `${COOKIE_SCOPE_PREFIX}${cookieScopeKey(targetOrigin)}.${name}`;
+  return [`${scopedName}=${cookieValue}`, ...attrs].join("; ");
+}
+
+// 受信 Cookie ヘッダー値から、targetOrigin のスコープ鍵に一致する Cookie だけを抽出し、
+// 接頭辞を外して元の名前で連結する純粋関数。別 origin にスコープされた Cookie・
+// 非スコープの Cookie（プロキシ自身のインフラ認証 cookie 等）は除外される。
+// 残る Cookie が無ければ空文字を返す（呼び出し側は Cookie ヘッダーを付けない）。
+// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
+export function scopedCookieHeader(
+  cookieHeader: string,
+  targetOrigin: string
+): string {
+  const prefix = `${COOKIE_SCOPE_PREFIX}${cookieScopeKey(targetOrigin)}.`;
   return cookieHeader
     .split(";")
     .map((part) => part.trim())
-    .filter((part) => {
-      if (part === "") return false;
-      const name = part.split("=", 1)[0].trim().toLowerCase();
-      return !STRIPPED_COOKIE_NAMES.has(name);
-    })
+    .filter((part) => part.startsWith(prefix))
+    .map((part) => part.slice(prefix.length))
     .join("; ");
 }
 
@@ -65,15 +92,16 @@ const FORWARD_REQUEST_HEADERS = ["cookie", "authorization"] as const;
 // 各 Route Handler はこの結果を proxyFetch の options.headers へ渡す。
 // 仕様: docs/spec/features/proxy.md §認証情報の転送
 export function forwardableRequestHeaders(
-  incoming: Headers
+  incoming: Headers,
+  targetOrigin: string
 ): Record<string, string> {
   const result: Record<string, string> = {};
   for (const name of FORWARD_REQUEST_HEADERS) {
     const value = incoming.get(name);
     if (!value) continue;
     if (name === "cookie") {
-      const stripped = stripInfraCookies(value);
-      if (stripped) result[name] = stripped;
+      const scoped = scopedCookieHeader(value, targetOrigin);
+      if (scoped) result[name] = scoped;
     } else {
       result[name] = value;
     }
@@ -101,14 +129,17 @@ const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
 // 拒否リスト方式で広めに転送する純粋関数。Content-Type / Authorization /
 // Cookie / X-* などカスタムヘッダーを保持し、ターゲットの API を動かす。
 // 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
-export function relayRequestHeaders(incoming: Headers): Record<string, string> {
+export function relayRequestHeaders(
+  incoming: Headers,
+  targetOrigin: string
+): Record<string, string> {
   const result: Record<string, string> = {};
   incoming.forEach((value, name) => {
     const lower = name.toLowerCase();
     if (RELAY_BLOCKED_REQUEST_HEADERS.has(lower)) return;
     if (lower === "cookie") {
-      const stripped = stripInfraCookies(value);
-      if (stripped) result[name] = stripped;
+      const scoped = scopedCookieHeader(value, targetOrigin);
+      if (scoped) result[name] = scoped;
       return;
     }
     result[name] = value;

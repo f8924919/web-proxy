@@ -279,36 +279,46 @@ document に click を capture で委任（動的リンクにも効く）:
 ### 制約（MVP）
 
 - **ナビゲーションは対象外**。ページ遷移・フォーム送信はサーバー側書き換えに委ねる。
-- **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でもプロキシ origin の認証 cookie を届かせられる。プロキシ自身のインフラ認証 cookie は上流転送の手前で除去する（`stripInfraCookies`）。任意ターゲットへの完全な credentials 制御は v2 課題（[機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)）。
+- **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でもプロキシ origin の認証 cookie を届かせられる。届いたプロキシ origin の cookie はスコープ化されていないため、上流転送のスコープ抽出（`scopedCookieHeader`）で除外される（[機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)）。任意ターゲットへの完全な credentials 制御は対象外（[機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)）。
 - **パス相対 URL は best-effort**。閲覧ページ URL（`/browse`）基準で解決されるため、ターゲット上のパス文脈を完全には復元できない。ルート絶対・絶対 URL は正しく振り向く。
 
 ---
 
 ## `src/lib/proxy/headers.ts`
 
-**役割**: ターゲットのレスポンスヘッダーから不要なものを除去する。加えて、リクエスト側で転送する認証ヘッダーの抽出も担う。
+**役割**: ターゲットのレスポンスヘッダーから不要なものを除去する。加えて、リクエスト側で転送する認証ヘッダーの抽出と、サイト間 Cookie アイソレーションのための Cookie スコープ化も担う。
 
 除去対象（`Speculation-Rules` を含む）は [プロキシ機能仕様 §レスポンスヘッダー処理](../spec/features/proxy.md) を参照。前段 CDN が後段で注入する `Speculation-Rules` はコードからは除去できないため CDN 側設定で無効化する（同仕様の注記参照）。
 
-`Set-Cookie` の `Domain` 属性を除去する処理（`sanitizeSetCookie`）もここで行う。
+### `cookieScopeKey(origin)`
 
-### `forwardableRequestHeaders(incoming)`
+> 関連仕様: [プロキシ機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
+
+ターゲット origin（`scheme://host[:port]`）から Cookie 名へ付与するスコープ鍵（`base64url(origin)`）を生成する純粋関数。`URL.origin` は IDN を punycode 化するため ASCII で、Cookie 名 token に使える文字のみになる。区切りに `.` を使うため、base64url が `.` を含まないことを利用して復元時に鍵と元の名前を分離する。
+
+### `sanitizeHeaders(headers, targetOrigin)` / `sanitizeSetCookie(value, targetOrigin)`
+
+> 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization) / [§サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
+
+`sanitizeHeaders` はレスポンスヘッダーをサニタイズし、`Set-Cookie` は `sanitizeSetCookie` へ委譲する。`sanitizeSetCookie` は `Domain` 属性を除去したうえで Cookie 名を `__pxy.<cookieScopeKey(targetOrigin)>.<元の名前>` へスコープ化する（`Path` / `Secure` / `SameSite` は維持）。`targetOrigin` にはリダイレクト追従後の**最終 URL の origin**を渡す（書き換え基準 `baseUrl` と揃える、#42）。
+
+### `scopedCookieHeader(cookieHeader, targetOrigin)`
+
+> 関連仕様: [プロキシ機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
+
+受信 `Cookie` ヘッダー値から、`targetOrigin` のスコープ鍵に一致する `__pxy.<鍵>.` 接頭辞を持つ Cookie だけを抽出し、接頭辞を外して元の名前で連結する純粋関数。別 origin にスコープされた Cookie・非スコープの Cookie（プロキシ自身のインフラ認証 cookie 等）は除外される。残る Cookie が無ければ空文字を返し、呼び出し側は `Cookie` ヘッダーを付けない。`forwardableRequestHeaders` / `relayRequestHeaders` の両方が往路 `Cookie` の処理に用いる。
+
+### `forwardableRequestHeaders(incoming, targetOrigin)`
 
 > 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)
 
-受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。`GET` 中継（`/browse` GET / `/api/proxy` GET）が `proxyFetch` の `options.headers` へ渡す（`/browse` POST は `content-type` も併せて渡す）。転送する `Cookie` からはプロキシ自身のインフラ認証 cookie を `stripInfraCookies` で除去する（下記）。
+受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。`GET` 中継（`/browse` GET / `/api/proxy` GET）が `proxyFetch` の `options.headers` へ渡す（`/browse` POST は `content-type` も併せて渡す）。`Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。
 
-### `stripInfraCookies(cookieHeader)`
-
-> 関連仕様: [プロキシ機能仕様 §非 GET 中継のリクエストヘッダー転送](../spec/features/proxy.md#非-get-中継のリクエストヘッダー転送)
-
-`Cookie` ヘッダー値から、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にあるときに付与される認証 cookie（`CF_Authorization` / `CF_AppSession`、大文字小文字非依存）を除去する純粋関数。SW は同一オリジン化のため `credentials: "same-origin"` で `/api/proxy` へ振り向けるので、これらの cookie が `/api/proxy` に届く。プロキシ自身の認証情報をターゲットへ漏らさないよう、上流転送の手前（`forwardableRequestHeaders` / `relayRequestHeaders`）で除去する。除去後に cookie が残らなければ空文字を返し、呼び出し側は `Cookie` ヘッダーを付けない。
-
-### `relayRequestHeaders(incoming)`
+### `relayRequestHeaders(incoming, targetOrigin)`
 
 > 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
 
-SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding` 等の hop-by-hop・インフラ系を除外し、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。残す `Cookie` からはプロキシ自身のインフラ認証 cookie を `stripInfraCookies` で除去する。
+SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding` 等の hop-by-hop・インフラ系を除外し、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。残す `Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。
 
 ### `buildCorsPreflightHeaders(origin, requestHeaders)`
 
