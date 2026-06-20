@@ -226,10 +226,16 @@ export function rewriteHtml(html: string, baseUrl: string): string {
   // 解決され、閲覧ページから離脱する（例 Google の enablejs リトライ）。
   // 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
   root.querySelectorAll("meta[http-equiv]").forEach((el) => {
-    if (
-      (el.getAttribute("http-equiv") ?? "").trim().toLowerCase() !== "refresh"
-    )
+    const httpEquiv = (el.getAttribute("http-equiv") ?? "").trim().toLowerCase();
+    // inline CSP（enforce）を除去する。残すと注入スクリプト（nonce 無し）や
+    // /api/proxy へ書き換えた src が CSP でブロックされ得る。Report-Only は
+    // 実際のブロックを行わずレポートのみのため残す。
+    // 仕様: docs/spec/features/proxy.md §inline CSP（meta）の除去
+    if (httpEquiv === "content-security-policy") {
+      el.remove();
       return;
+    }
+    if (httpEquiv !== "refresh") return;
     const content = el.getAttribute("content");
     if (!content) return;
     const rewrittenContent = rewriteMetaRefreshContent(content, baseUrl);
@@ -237,12 +243,23 @@ export function rewriteHtml(html: string, baseUrl: string): string {
       el.setAttribute("content", rewrittenContent);
   });
 
-  for (const sel of ["img[src]", "source[src]", "script[src]"] as const) {
+  for (const sel of ["img[src]", "source[src]"] as const) {
     root.querySelectorAll(sel).forEach((el) => {
       const src = el.getAttribute("src");
       if (src) el.setAttribute("src", assetUrl(src, baseUrl));
     });
   }
+
+  // <script src>: src を書き換えたうえで integrity / crossorigin を除去する。
+  // 書換後は /api/proxy 経由の中継レスポンスとなり SRI ハッシュが元 URL と
+  // 一致せずブロックされる。crossorigin も同一 origin 化で不整合・不要になる。
+  // 仕様: docs/spec/features/proxy.md §サブリソース整合性（SRI）属性の除去
+  root.querySelectorAll("script[src]").forEach((el) => {
+    const src = el.getAttribute("src");
+    if (src) el.setAttribute("src", assetUrl(src, baseUrl));
+    el.removeAttribute("integrity");
+    el.removeAttribute("crossorigin");
+  });
 
   const RESOURCE_LINK_RELS = new Set([
     "stylesheet",
