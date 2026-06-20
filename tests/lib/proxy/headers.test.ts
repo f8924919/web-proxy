@@ -9,6 +9,7 @@ import {
   forwardableRequestHeaders,
   relayRequestHeaders,
   buildCorsPreflightHeaders,
+  allowedCorsOrigin,
 } from "@/lib/proxy/headers";
 
 const ORIGIN_A = "https://a.example";
@@ -243,6 +244,25 @@ describe("relayRequestHeaders", () => {
     expect(result["x-keep"]).toBe("1");
   });
 
+  test("プロキシ文脈を漏らす origin / referer は転送しない（#27）", () => {
+    const headers = new Headers({
+      origin: "https://proxy.example",
+      referer: "https://proxy.example/browse?url=https%3A%2F%2Fa.example",
+      "content-type": "application/json",
+    });
+    const result = relayRequestHeaders(headers, ORIGIN_A);
+    expect(result.origin).toBeUndefined();
+    expect(result.referer).toBeUndefined();
+    expect(result["content-type"]).toBe("application/json");
+  });
+
+  test("Authorization はクライアント設定値をそのまま転送する（#27）", () => {
+    const headers = new Headers({ authorization: "Bearer xyz" });
+    expect(relayRequestHeaders(headers, ORIGIN_A).authorization).toBe(
+      "Bearer xyz"
+    );
+  });
+
   test("非スコープのインフラ認証 cookie は転送しない", () => {
     const headers = new Headers({
       cookie: `CF_Authorization=jwt; ${scoped(ORIGIN_A, "sid", "aaa")}`,
@@ -264,8 +284,37 @@ describe("relayRequestHeaders", () => {
   });
 });
 
+describe("allowedCorsOrigin", () => {
+  test("Origin が Host と同一オリジンなら origin を返す", () => {
+    expect(allowedCorsOrigin("https://proxy.example", "proxy.example")).toBe(
+      "https://proxy.example"
+    );
+  });
+
+  test("ポート付きでも host が一致すれば許可する", () => {
+    expect(allowedCorsOrigin("http://localhost:3000", "localhost:3000")).toBe(
+      "http://localhost:3000"
+    );
+  });
+
+  test("第三者クロスオリジン（host 不一致）は null", () => {
+    expect(
+      allowedCorsOrigin("https://evil.example", "proxy.example")
+    ).toBeNull();
+  });
+
+  test("Origin / Host のいずれかが欠落していれば null", () => {
+    expect(allowedCorsOrigin(null, "proxy.example")).toBeNull();
+    expect(allowedCorsOrigin("https://proxy.example", null)).toBeNull();
+  });
+
+  test("不正な Origin 値は null", () => {
+    expect(allowedCorsOrigin("not-a-url", "proxy.example")).toBeNull();
+  });
+});
+
 describe("buildCorsPreflightHeaders", () => {
-  test("Origin をエコーし Allow-Credentials と Request-Headers を反映する", () => {
+  test("許可 Origin をエコーし Allow-Credentials と Request-Headers を反映する", () => {
     const h = buildCorsPreflightHeaders("https://app.example", "x-csrf-token");
     expect(h.get("Access-Control-Allow-Origin")).toBe("https://app.example");
     expect(h.get("Access-Control-Allow-Credentials")).toBe("true");
@@ -274,10 +323,11 @@ describe("buildCorsPreflightHeaders", () => {
     expect(h.get("Vary")).toBe("Origin");
   });
 
-  test("Origin が無ければ * とし Allow-Credentials を付けない", () => {
+  test("origin が null なら Allow-Origin / Credentials を付けない（* も使わない。#27）", () => {
     const h = buildCorsPreflightHeaders(null, null);
-    expect(h.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(h.get("Access-Control-Allow-Origin")).toBeNull();
     expect(h.get("Access-Control-Allow-Credentials")).toBeNull();
     expect(h.get("Access-Control-Allow-Headers")).toBe("*");
+    expect(h.get("Access-Control-Allow-Methods")).toContain("POST");
   });
 });
