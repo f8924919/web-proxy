@@ -19,7 +19,7 @@ src/
 ├── lib/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
-│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・document.domain シム <script> 注入含む）
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・クリックナビ横取り・document.domain シム <script> 注入含む）
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
@@ -208,6 +208,28 @@ document に submit を capture で委任（動的フォームにも効く）:
 ```
 
 `BASE_PATH` は `action`/`window.location` のパス部をそのまま再利用することで保持される（スクリプト内で個別に組み立てない）。
+
+### クライアント側ナビゲーション横取りスクリプト注入
+
+> 関連仕様: [プロキシ機能仕様 §クライアント側ナビゲーションの横取り](../spec/features/proxy.md#クライアント側ナビゲーションの横取り)
+
+`rewriteHtml` は `<body>` 直後（GET フォーム横取りに続けて）に、`<a>` クリックによるナビゲーションを横取りする `<script>` を注入する。サーバー側 `<a href>` 書き換えは初期 HTML を一度書き換えるだけで、JS が動的描画したリンク（生の http(s) 絶対 URL）は対象外となり、クリックすると実サイトへ離脱するため、それを補う。
+
+振り向け先 URL の決定は純粋関数 **`buildClickNavDestination(href, pageUrl)`** に分離し、`GET_FORM_INTERCEPT_HTML` と同様 `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
+
+```
+document に click を capture で委任（動的リンクにも効く）:
+0. 修飾キー(Ctrl/Meta/Shift/Alt)・補助ボタン(中クリック)・defaultPrevented は素通し
+1. event.target から closest('a[href]') で最寄りの <a href> を探す（無ければ素通し）
+2. target="_blank" は素通し（新規タブはブラウザ標準挙動を尊重＝離脱は既知の制限）
+3. buildClickNavDestination(href, location.href):
+   - href が http(s) 絶対 URL でなければ null（自前リンク・#・javascript:・相対は対象外）
+   - location.pathname（BASE_PATH 込みの …/browse）を再利用し
+     <path>?url=<encodeURIComponent(href)> を返す
+4. dest があれば preventDefault し location.href = dest で遷移
+```
+
+`BASE_PATH` は `window.location.pathname` をそのまま再利用することで保持される（GET フォーム横取りと同方式）。`location`/`history` API 経由の JS 駆動遷移は対象外（`<a>` クリックのみ）。
 
 ### `document.domain` ドメインガード無効化シム注入
 
