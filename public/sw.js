@@ -140,7 +140,8 @@
           // （Cloudflare Access 等）の背後にある場合に備え、same-origin の Cookie
           // （CF_Authorization 等）を送る。omit だと Access が未認証とみなして
           // ログインページへ 302 し、クロスオリジンに着地して CORS で失敗する。
-          // プロキシ自身のインフラ認証 cookie は /api/proxy 側で上流転送から除去する。
+          // プロキシ自身のインフラ認証 cookie は非スコープのため、/api/proxy 側の
+          // サイト間 Cookie アイソレーション（スコープ抽出）で上流転送から自動除外される。
           try {
             // GET/HEAD はボディなし。非 GET はメソッド・ヘッダー・ボディを保持する。
             if (req.method === "GET" || req.method === "HEAD") {
