@@ -11,3 +11,13 @@ const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);
 export function isNullBodyStatus(status: number): boolean {
   return NULL_BODY_STATUSES.has(status);
 }
+
+// 相対パスの Location を持つリダイレクト応答を返す。
+// Response.redirect(new URL(..., req.url)) のように req.url から絶対 URL を組むと、
+// リバースプロキシ / ポート転送（code-server 等）越しで内部オリジン（localhost）が
+// Location に漏れ、ブラウザが公開オリジンを離れて localhost へ遷移してしまう。
+// 相対 Location はブラウザが公開オリジン基準で解決するため漏えいを防げる。
+// 仕様: docs/spec/features/proxy.md §url 未指定時のホームリダイレクト
+export function relativeRedirect(location: string, status = 307): Response {
+  return new Response(null, { status, headers: { Location: location } });
+}
