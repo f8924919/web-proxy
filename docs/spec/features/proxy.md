@@ -225,30 +225,31 @@ JS アプリが発行するクロスオリジンの `fetch` / XHR（非単純メ
 
 ### `/api/proxy` の OPTIONS 応答（防御的）
 
-要求元 `Origin` をエコーした CORS 許可ヘッダーを **204** で返す（純粋関数 `buildCorsPreflightHeaders`）。
+要求元 `Origin` が **リクエスト自身の Host と同一オリジン**の場合のみ、その `Origin` をエコーした CORS 許可ヘッダーを **204** で返す（純粋関数 `buildCorsPreflightHeaders` ＋ `allowedCorsOrigin`）。SW は正当なサブリソースを同一オリジンの `/api/proxy` へ振り向けるため、許可すべきは自プロキシ origin のみ。第三者クロスオリジンからの無検証エコー＋`Allow-Credentials` を防ぐ（#27）。
 
-| ヘッダー                           | 値                                                                                      |
-| ---------------------------------- | --------------------------------------------------------------------------------------- |
-| `Access-Control-Allow-Origin`      | 要求元 `Origin`（無ければ `*`）                                                         |
-| `Access-Control-Allow-Methods`     | `GET, POST, PUT, PATCH, DELETE, OPTIONS`                                                |
-| `Access-Control-Allow-Headers`     | `Access-Control-Request-Headers` をエコー（無ければ `*`）                               |
-| `Access-Control-Allow-Credentials` | `Origin` がある場合 `true`（`*` と `credentials` は併用不可のため Origin エコー時のみ） |
-| `Access-Control-Max-Age` / `Vary`  | `600` / `Origin`                                                                        |
+| ヘッダー                           | 値                                                                                                                              |
+| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `Access-Control-Allow-Origin`      | 要求元 `Origin` が自プロキシと**同一オリジンの場合のみ**エコー。不一致・`Origin` 無しなら付与しない（`*` フォールバックは廃止） |
+| `Access-Control-Allow-Methods`     | `GET, POST, PUT, PATCH, DELETE, OPTIONS`                                                                                        |
+| `Access-Control-Allow-Headers`     | `Access-Control-Request-Headers` をエコー（無ければ `*`）                                                                       |
+| `Access-Control-Allow-Credentials` | 同一オリジンと判定し `Allow-Origin` をエコーした場合のみ `true`（`*` と `credentials` は併用不可）                              |
+| `Access-Control-Max-Age` / `Vary`  | `600` / `Origin`                                                                                                                |
 
-`GET` / 中継レスポンスにも、要求に `Origin` がある場合のみ同様の `Access-Control-Allow-Origin` / `-Credentials` を付与する（同一オリジン取得には `Origin` が付かないため、通常のアセット中継には影響しない）。
+`GET` / 中継レスポンスにも、要求 `Origin` が**同一オリジンと判定された場合のみ**同様の `Access-Control-Allow-Origin` / `-Credentials` を付与する（`allowedCorsOrigin` で照合。同一オリジン取得には `Origin` が付かないため、通常のアセット中継には影響しない）。
 
 ### 非 GET 中継のリクエストヘッダー転送
 
 SW が振り向けた非 GET リクエストは、ターゲットの API が要求する `Content-Type` やカスタムヘッダー（`X-CSRF-Token` 等）を保持する必要がある。そのため `/api/proxy` の非 GET 中継では、**拒否リスト方式**でリクエストヘッダーを広めに転送する（純粋関数 `relayRequestHeaders`）。
 
-- **拒否（転送しない）**: `host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`（`proxyFetch` が `identity` 固定のため）など hop-by-hop・インフラ系。
+- **拒否（転送しない）**: hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`〔`proxyFetch` が `identity` 固定のため〕）に加え、**プロキシ自身の文脈を漏らす `origin` / `referer`**（プロキシ origin・`/browse?url=…` 閲覧 URL のターゲットへの漏えい防止。サーバー間中継のため `Origin` 無し＝同一オリジン扱いとなり多くの API でむしろ整合する。#27）。
 - **転送する**: 上記以外（`Content-Type`・`Authorization`・`Cookie`・`X-*` 等）。
 - `GET` 中継は従来どおり許可リスト（`forwardableRequestHeaders`＝`Cookie` / `Authorization`）を維持する（既存挙動の回帰を避けるため）。
 - **`Cookie` のサイト別スコープ抽出**: 転送する `Cookie` は、`forwardableRequestHeaders` / `relayRequestHeaders` の両方で**現ターゲット origin にスコープされた Cookie だけ**を抽出・復元する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）はスコープ化されていないため自動的に除外される。抽出後に Cookie が残らなければ `Cookie` ヘッダー自体を付けない。
 
 ### セキュリティ上の制約
 
-- **サイト別アイソレーション適用済み**: 非 GET 中継は拒否リスト方式で `Cookie` / `Authorization` を広めに転送するが、`Cookie` は現ターゲット origin にスコープされた分のみへ限定される（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。`Authorization` ヘッダー自体のサイト別アイソレーションは対象外（クライアントが当該リクエストに設定した値をそのまま転送する）。
+- **転送ヘッダーのハードニング（#27 対応済み）**: 非 GET 中継は拒否リスト方式で広めに転送するが、`Cookie` は現ターゲット origin にスコープされた分のみへ限定し（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）、プロキシ自身の文脈を漏らす `origin` / `referer` は除外する。`Authorization` は `Set-Cookie` のようなサーバー側往復機構が無くスコープ鍵を付与できないため、**クライアントが当該リクエストに明示設定した値のみをそのまま転送する**（サイト別アイソレーションは対象外）。
+- **CORS 許可オリジンの制限（#27 対応済み）**: `OPTIONS` 応答・中継レスポンスの `Access-Control-Allow-Origin` は、要求 `Origin` がリクエスト自身の Host と同一オリジンの場合のみエコーする（純粋関数 `allowedCorsOrigin`）。第三者クロスオリジンへ無検証エコー＋`Allow-Credentials` を返さない。SW の同一オリジン化により正当なクライアントは常に自プロキシ origin であり、回帰は無い。
 - **`credentials` の扱い**: SW は振り向け時に `credentials: "same-origin"` を用いる（振り向け先は常に同一オリジンの `/api/proxy`）。これにより、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でも、プロキシ origin の認証 cookie（`CF_Authorization` 等）が `/api/proxy` へ届き、プロキシ自身の認証を通過できる（`omit` だと未認証とみなされログインページへ 302 され CORS で失敗していた）。届いたプロキシ origin の cookie はスコープ化されていないため、上流転送のスコープ抽出で除外される（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。
 
 ---

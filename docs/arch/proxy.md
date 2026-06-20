@@ -96,7 +96,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
    { response, finalUrl } = proxyFetch(url, { method, body, headers }) → SSRF ブロックなら 403
 5. Content-Type が text/css → rewriteCss(body, finalUrl)（baseUrl は追従後の最終 URL。#42）
 6. headers.sanitize(responseHeaders)
-7. 要求に Origin があれば Access-Control-Allow-Origin/-Credentials を付与
+7. allowedCorsOrigin(Origin, Host) が非 null（＝同一オリジン）の場合のみ
+   Access-Control-Allow-Origin/-Credentials を付与（第三者クロスオリジンには付けない。#27）
 8. Response を中継して返す
    （204/205/304 はボディを null として返す。1xx・ステータス範囲外・
     Response 構築・CSS 読取り/変換中の未捕捉例外は 502。
@@ -106,8 +107,9 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 ### 処理フロー（OPTIONS / プリフライト）
 
 ```
-1. buildCorsPreflightHeaders(Origin, Access-Control-Request-Headers) を組み立て
-2. 204 No Content で返す（防御的。通常は SW の同一オリジン化でプリフライト自体が発生しない）
+1. allowedCorsOrigin(Origin, Host) で同一オリジン照合し許可 Origin（または null）を得る
+2. buildCorsPreflightHeaders(許可Origin, Access-Control-Request-Headers) を組み立て
+3. 204 No Content で返す（防御的。通常は SW の同一オリジン化でプリフライト自体が発生しない）
 ```
 
 ---
@@ -318,13 +320,19 @@ document に click を capture で委任（動的リンクにも効く）:
 
 > 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
 
-SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding` 等の hop-by-hop・インフラ系を除外し、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。残す `Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。
+SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`）に加え、プロキシ自身の文脈を漏らす `origin` / `referer` を除外し（#27）、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。残す `Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。`Authorization` はサーバー側のスコープ機構が無く、クライアントが当該リクエストに設定した値をそのまま転送する。
+
+### `allowedCorsOrigin(origin, host)`
+
+> 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
+
+要求 `Origin` が `/api/proxy` リクエスト自身の `Host` と**同一オリジン**の場合のみその `origin` を返し、不一致・いずれか欠落・不正値なら `null` を返す純粋関数（#27）。`Host` は scheme を含まないため `new URL(origin).host` の host 部のみで照合する（TLS 終端リバプロでも公開 Host 同士で一致する）。SW が正当なサブリソースを同一オリジンの `/api/proxy` へ振り向けるため、許可すべきは自プロキシ origin のみ。OPTIONS 応答・中継レスポンスの CORS 許可判定に用いる。
 
 ### `buildCorsPreflightHeaders(origin, requestHeaders)`
 
 > 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
 
-`OPTIONS` 応答用の CORS 許可ヘッダー（`Access-Control-Allow-Origin/-Methods/-Headers/-Credentials`・`Max-Age`・`Vary`）を組み立てる純粋関数。`origin` をエコーし（無ければ `*`）、`Access-Control-Request-Headers` をエコーする。`origin` がある場合のみ `Allow-Credentials: true` を付ける（`*` と `credentials` は併用不可のため）。
+`OPTIONS` 応答用の CORS 許可ヘッダー（`Access-Control-Allow-Methods/-Headers`・`Max-Age`・`Vary`、および許可時の `Access-Control-Allow-Origin/-Credentials`）を組み立てる純粋関数。`origin` は呼び出し側が `allowedCorsOrigin` で検証済みの値（許可 Origin または `null`）を渡す。**`origin` が非 null の場合のみ** `Access-Control-Allow-Origin` をエコーし `Allow-Credentials: true` を付ける（無検証エコー・`*` フォールバックは行わない。#27）。`Access-Control-Request-Headers` は従来どおりエコーする（無ければ `*`）。
 
 ---
 
