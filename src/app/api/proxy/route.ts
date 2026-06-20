@@ -66,10 +66,11 @@ async function relayAsset(req: NextRequest): Promise<Response> {
 
   // GET/HEAD は既存の許可リスト（Cookie/Authorization）を維持。
   // 非 GET は拒否リスト方式で広めにヘッダーを転送し、ボディも転送する。
+  // Cookie は現ターゲット origin にスコープされた分だけを転送する（サイト間アイソレーション）。
   const isBodyMethod = req.method !== "GET" && req.method !== "HEAD";
   const headers = isBodyMethod
-    ? relayRequestHeaders(req.headers)
-    : forwardableRequestHeaders(req.headers);
+    ? relayRequestHeaders(req.headers, parsed.origin)
+    : forwardableRequestHeaders(req.headers, parsed.origin);
 
   let res: Response;
   let finalUrl: string;
@@ -87,7 +88,9 @@ async function relayAsset(req: NextRequest): Promise<Response> {
   }
 
   const contentType = res.headers.get("content-type") ?? "";
-  const outHeaders = sanitizeHeaders(res.headers);
+  // Set-Cookie のスコープ鍵にはリダイレクト追従後の最終 URL の origin を用いる
+  // （書き換え基準 baseUrl と揃える。#42）。
+  const outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
 
   // クロスオリジン要求（Origin あり）にのみ CORS 許可ヘッダーを付与する。
   // 同一オリジンのアセット中継には Origin が付かないため影響しない。

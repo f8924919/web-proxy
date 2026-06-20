@@ -66,8 +66,9 @@ export async function GET(req: NextRequest) {
   }
 
   // 受信リクエストの Cookie / Authorization をターゲットへ転送し、認証セッションを維持する。
+  // Cookie は現ターゲット origin にスコープされた分だけを転送する（サイト間アイソレーション）。
   return relayBrowse(parsed, {
-    headers: forwardableRequestHeaders(req.headers),
+    headers: forwardableRequestHeaders(req.headers, parsed.origin),
   });
 }
 
@@ -102,7 +103,8 @@ export async function POST(req: NextRequest) {
   // Cookie / Authorization に加え、Content-Type を転送して
   // urlencoded / multipart の境界情報を維持する。
   const headers: Record<string, string> = forwardableRequestHeaders(
-    req.headers
+    req.headers,
+    parsed.origin
   );
   const contentType = req.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
@@ -137,7 +139,9 @@ async function relayBrowse(
   }
 
   const contentType = res.headers.get("content-type") ?? "";
-  const outHeaders = sanitizeHeaders(res.headers);
+  // Set-Cookie のスコープ鍵にはリダイレクト追従後の最終 URL の origin を用いる
+  // （書き換え基準 baseUrl と揃える。#42）。
+  const outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
 
   try {
     // 204/304 などボディを持てないステータスはボディを null にして中継する

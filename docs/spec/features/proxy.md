@@ -244,12 +244,12 @@ SW が振り向けた非 GET リクエストは、ターゲットの API が要�
 - **拒否（転送しない）**: `host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`（`proxyFetch` が `identity` 固定のため）など hop-by-hop・インフラ系。
 - **転送する**: 上記以外（`Content-Type`・`Authorization`・`Cookie`・`X-*` 等）。
 - `GET` 中継は従来どおり許可リスト（`forwardableRequestHeaders`＝`Cookie` / `Authorization`）を維持する（既存挙動の回帰を避けるため）。
-- **プロキシ自身のインフラ認証 cookie の除去**: 転送する `Cookie` から、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に付与される認証 cookie（`CF_Authorization` / `CF_AppSession`、大文字小文字非依存）を除去する（純粋関数 `stripInfraCookies`、`forwardableRequestHeaders` / `relayRequestHeaders` の両方で適用）。これらはプロキシ自身の認証情報であり、ターゲットへ漏らすと別サイトへ Access の JWT が渡る。除去後に cookie が残らなければ `Cookie` ヘッダー自体を付けない。SW が同一オリジン化のため `credentials: "same-origin"` で振り向ける（下記）ことでこれらの cookie が `/api/proxy` に届くようになるため、上流転送の手前で遮断する。
+- **`Cookie` のサイト別スコープ抽出**: 転送する `Cookie` は、`forwardableRequestHeaders` / `relayRequestHeaders` の両方で**現ターゲット origin にスコープされた Cookie だけ**を抽出・復元する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）はスコープ化されていないため自動的に除外される。抽出後に Cookie が残らなければ `Cookie` ヘッダー自体を付けない。
 
-### セキュリティ上の制約（v2 でハードニング）
+### セキュリティ上の制約
 
-- **任意オリジンへ広めにヘッダーを送る**: 非 GET 中継は拒否リスト方式のため、`Cookie` / `Authorization` を含むクライアント設定ヘッダーが**中継先のサイトを問わず**転送され得る（[§認証情報の転送](#認証情報の転送cookie--authorization) と同じリスク区分）。サイト別のヘッダーアイソレーションは v2 課題。
-- **`credentials` の扱い**: SW は振り向け時に `credentials: "same-origin"` を用いる（振り向け先は常に同一オリジンの `/api/proxy`）。これにより、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でも、プロキシ origin の認証 cookie（`CF_Authorization` 等）が `/api/proxy` へ届き、プロキシ自身の認証を通過できる（`omit` だと未認証とみなされログインページへ 302 され CORS で失敗していた）。届いたプロキシ origin の cookie のうち**プロキシ自身のインフラ認証 cookie は上流転送の手前で除去する**（[§非 GET 中継のリクエストヘッダー転送](#非-get-中継のリクエストヘッダー転送)）。サイト別アイソレーション・完全な credentials 制御は引き続き v2 課題。
+- **サイト別アイソレーション適用済み**: 非 GET 中継は拒否リスト方式で `Cookie` / `Authorization` を広めに転送するが、`Cookie` は現ターゲット origin にスコープされた分のみへ限定される（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。`Authorization` ヘッダー自体のサイト別アイソレーションは対象外（クライアントが当該リクエストに設定した値をそのまま転送する）。
+- **`credentials` の扱い**: SW は振り向け時に `credentials: "same-origin"` を用いる（振り向け先は常に同一オリジンの `/api/proxy`）。これにより、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でも、プロキシ origin の認証 cookie（`CF_Authorization` 等）が `/api/proxy` へ届き、プロキシ自身の認証を通過できる（`omit` だと未認証とみなされログインページへ 302 され CORS で失敗していた）。届いたプロキシ origin の cookie はスコープ化されていないため、上流転送のスコープ抽出で除外される（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。
 
 ---
 
@@ -270,19 +270,29 @@ SW が振り向けた非 GET リクエストは、ターゲットの API が要�
 
 ### 転送の方向と処理
 
-| 方向                  | 処理                                                                                                                                                          |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ブラウザ → ターゲット | `Cookie` / `Authorization` を**許可リスト方式**で転送する（`headers.ts` の純粋関数 `forwardableRequestHeaders` で抽出）。全リクエストヘッダーの素通しはしない |
-| ターゲット → ブラウザ | `Set-Cookie` の `Domain` 属性を除去して返す。`Secure` / `SameSite` はそのまま維持                                                                             |
+| 方向                  | 処理                                                                                                                                                                                                                                                                                                                         |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| ブラウザ → ターゲット | `Cookie` / `Authorization` を**許可リスト方式**で転送する（`headers.ts` の純粋関数 `forwardableRequestHeaders` で抽出）。`Cookie` は**現ターゲット origin にスコープされたものだけ**を抽出・復元して転送する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。全リクエストヘッダーの素通しはしない |
+| ターゲット → ブラウザ | `Set-Cookie` の `Domain` 属性を除去し、**Cookie 名をターゲット origin でスコープ化**して返す。`Secure` / `SameSite` / `Path` はそのまま維持                                                                                                                                                                                  |
 
 - **対象ハンドラ**: `/browse`（`GET` / `POST`）と `/api/proxy`（`GET`）の両方で転送する。認証が要る画像・CSS・JS（アセット）も取得できるようにするため、アセット中継にも付与する。
-- **往復の成立**: `Set-Cookie` の `Domain` を除去することで Cookie はプロキシ origin に保存され、以降のリクエストでブラウザがプロキシ origin 宛に送る `Cookie` を本転送でターゲットへ戻す。これにより認証セッションが維持される。
+- **往復の成立**: `Set-Cookie` の `Domain` を除去することで Cookie はプロキシ origin に保存され、以降のリクエストでブラウザがプロキシ origin 宛に送る `Cookie` のうち**当該 origin にスコープされた分**を本転送でターゲットへ戻す。これにより認証セッションが維持される。
 
-### セキュリティ上の制約（重要・v2 でハードニング）
+### サイト間 Cookie アイソレーション
 
-- **任意オリジンへ認証情報を送る**: プロキシ origin に保存された `Cookie` は、アイソレーションが無いため**中継先のサイトを問わず**送出される（あるサイトの Cookie が別サイトの中継リクエストにも乗り得る）。サイト間 Cookie アイソレーションは v2 以降の課題。
-- **リダイレクト追従時の漏えい（#26 で対応済み）**: かつて `proxyFetch` は `redirect: "follow"` 固定で、クロスオリジンへのリダイレクト時に `Authorization` / `Cookie` を追従先へそのまま送っていた。現在は `redirect: "manual"` 化して自前で追従し、**追従先が元リクエストと別オリジンなら `Authorization` / `Cookie` を除去**する（[§リダイレクト追従](#リダイレクト追従) 参照）。サイト間 Cookie アイソレーション（同一オリジンでも別サイト間で Cookie を混ぜない）の課題は引き続き別途（v2）。
-- **`credentials` 付きリクエスト**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向け（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "same-origin"` を用いる。これは主にプロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に、プロキシ origin の認証 cookie を `/api/proxy` まで届かせるための措置で、プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）は上流転送の手前で除去する。任意ターゲットに対する完全な `credentials: include` 相当（クロスオリジン XHR の Cookie 同送）はサイト別アイソレーションとともに v2 課題。
+URL 書き換え方式のため、すべての中継先は**単一のプロキシ origin** から配信される。素朴に Cookie を中継すると、プロキシ origin に集約された Cookie が中継先を問わず送出され、あるサイトの Cookie が別サイトの中継リクエストに乗る（クレデンシャル混在・漏えい）。これを防ぐため、**Cookie 名にターゲット origin のスコープ鍵を付与**して保持し、往路では現ターゲット origin に一致する Cookie だけを復元して転送する（サーバー側 Cookie ストアは持たない＝ステートレス）。
+
+- **スコープ鍵**: `cookieScopeKey(origin)` = `base64url(origin)`。`origin` は `scheme://host[:port]`（`URL.origin`、IDN は punycode 化されるため ASCII）。粒度は origin 単位で、[§リダイレクト追従](#リダイレクト追従) の同一オリジン判定と揃える。
+- **スコープ名の形式**: `__pxy.<スコープ鍵>.<元の Cookie 名>`。区切り `.` は base64url が使わない文字なので、復元時に最初の `.` でスコープ鍵と元の名前を一意に分離できる。
+- **復路（Set-Cookie）**: `Domain` 除去に加えて Cookie 名を上記形式へ書き換える。スコープ鍵には**リダイレクト追従後の最終 URL の origin**を用いる（書き換え基準 `baseUrl` と揃える。#42）。`Path` / `Secure` / `SameSite` は維持する。
+- **往路（Cookie）**: 受信 `Cookie` から「現ターゲット origin のスコープ鍵に一致する `__pxy.<鍵>.` 接頭辞を持つ Cookie」だけを抽出し、接頭辞を外して元の名前で転送する。別 origin にスコープされた Cookie・スコープされていない Cookie（プロキシ自身のインフラ認証 cookie 等）は転送しない。これにより上流へ送る Cookie が現ターゲット分に限定され、サイト間の Cookie 混在が起きない。
+- **インフラ認証 cookie**: プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に付与される cookie（`CF_Authorization` 等）はスコープ化されていないため、往路のスコープ抽出で**自動的に除外**される（専用の除去処理は不要）。
+- **既知の制約**: 元 Cookie の `Path` を維持するため、`Path=/` 以外のパス限定 Cookie はプロキシパス（`/browse` / `/api/proxy`）に送り返されない（既存の限界。本機能の対象外）。また本機能の導入前に保存された非スコープ Cookie は転送対象外となるため、再ログインが必要になる。
+
+### セキュリティ上の制約
+
+- **リダイレクト追従時の漏えい（#26 で対応済み）**: かつて `proxyFetch` は `redirect: "follow"` 固定で、クロスオリジンへのリダイレクト時に `Authorization` / `Cookie` を追従先へそのまま送っていた。現在は `redirect: "manual"` 化して自前で追従し、**追従先が元リクエストと別オリジンなら `Authorization` / `Cookie` を除去**する（[§リダイレクト追従](#リダイレクト追従) 参照）。
+- **`credentials` 付きリクエスト**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向け（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "same-origin"` を用いる。これは主にプロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に、プロキシ origin の認証 cookie を `/api/proxy` まで届かせるための措置だが、これらインフラ認証 cookie はスコープ化されていないため上流へは転送されない（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。任意ターゲットに対する完全な `credentials: include` 相当（クロスオリジン XHR の Cookie 同送）は引き続き対象外。
 
 ---
 
