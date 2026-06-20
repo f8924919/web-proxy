@@ -183,13 +183,17 @@ npm run debug:browser -- '/browse?url=https://example.com'
 | `network.json`   | リクエスト / レスポンス（ステータス含む） |
 | `page.html`      | 描画後の HTML                             |
 
-| 環境変数                  | 既定値                                  | 用途                                                                      |
-| ------------------------- | --------------------------------------- | ------------------------------------------------------------------------- |
-| `DEBUG_BROWSER_ORIGIN`    | `http://localhost:3000`                 | dev サーバの接続先。ポート変更時に上書き                                  |
-| `DEBUG_BROWSER_WAIT_MS`   | `1500`                                  | 読み込み後に状態取得まで待つミリ秒                                        |
-| `DEBUG_BROWSER_BASE_PATH` | `.env.local` の `NEXT_PUBLIC_BASE_PATH` | 方式B が再現する BASE_PATH（§8.3）。通常は指定不要（`.env.local` を読む） |
+| 環境変数                   | 既定値                                  | 用途                                                                                   |
+| -------------------------- | --------------------------------------- | -------------------------------------------------------------------------------------- |
+| `DEBUG_BROWSER_ORIGIN`     | `http://localhost:3000`                 | dev サーバの接続先。ポート変更時に上書き                                               |
+| `DEBUG_BROWSER_WAIT_MS`    | `1500`                                  | 読み込み後に状態取得まで待つミリ秒                                                     |
+| `DEBUG_BROWSER_WAIT_UNTIL` | `load`                                  | `page.goto` の待機戦略（§8.4）。`load` / `domcontentloaded` / `networkidle` / `commit` |
+| `DEBUG_BROWSER_TIMEOUT_MS` | `30000`                                 | `page.goto` のタイムアウト（ミリ秒）。重いサイトでは延長して使う                       |
+| `DEBUG_BROWSER_BASE_PATH`  | `.env.local` の `NEXT_PUBLIC_BASE_PATH` | 方式B が再現する BASE_PATH（§8.3）。通常は指定不要（`.env.local` を読む）              |
 
 > dev サーバを 3000 以外で起動した場合は `DEBUG_BROWSER_ORIGIN=http://localhost:3001 npm run debug:browser -- ...` のように接続先を合わせること。
+
+> `page.goto` がタイムアウトしても、収集済みの最終 URL・スクリーンショット・console・network・HTML を**可能な範囲で出力**する（タイムアウト＝全損にしない）。出力後に終了コード `2` で終わるため、結果は確認できる。dev サーバ未起動などページ取得自体が成立しない場合は出力が空に近くなる。
 
 ### 8.3 BASE_PATH（リバースプロキシ）の再現（#34）
 
@@ -201,3 +205,24 @@ npm run debug:browser -- '/browse?url=https://example.com'
 2. 同一オリジンへの BASE_PATH 付きリクエストを Playwright の `route` で横取りし、**プレフィックスを除去**して dev サーバへ中継する（リバースプロキシの肩代わり）。Service Worker スクリプトの取得も対象。
 
 通常は `.env.local` を正本に自動解決するため設定不要。一時的に上書きしたい場合のみ `DEBUG_BROWSER_BASE_PATH` を使う（dev サーバ側の `NEXT_PUBLIC_BASE_PATH` と一致させること。食い違うと SW 登録などが 404 になる）。
+
+### 8.4 待機戦略（waitUntil）とタイムアウト（#39）
+
+`page.goto` の待機戦略は `DEBUG_BROWSER_WAIT_UNTIL` で切り替える。既定は `load`。
+
+| 値                 | 完了条件                   | 使い分け                                                                       |
+| ------------------ | -------------------------- | ------------------------------------------------------------------------------ |
+| `load`（既定）     | `load` イベント発火        | 主要リソース読み込み後に確認。重いサイトでも完走しやすく、汎用的に使える       |
+| `domcontentloaded` | DOM 構築完了               | 最速。リダイレクトの有無だけ確認したいときなど。画像等が未取得のことがある     |
+| `networkidle`      | ネットワークが概ねアイドル | 遅延描画まで待ちたいとき。広告・計測で常時通信が走るサイトでは到達せず時間切れ |
+| `commit`           | レスポンス受信・遷移確定   | 最終 URL（リダイレクト先）だけ早く知りたいとき                                 |
+
+広告・計測・ストリーミング等で**常時通信が走るサイト**（例: `news.yahoo.co.jp`）は `networkidle` に到達せずタイムアウトする。既定を `load` にしているのはこのためで、`load` 到達後に `DEBUG_BROWSER_WAIT_MS`（既定 1500ms）だけ追加で待ち、JS 実行（リダイレクト等）の落ち着きを拾う。
+
+タイムアウトは `DEBUG_BROWSER_TIMEOUT_MS`（既定 30000ms）で調整する。それでも時間切れになる場合でも、収集済みの結果はベストエフォートで出力される（§8.2 の注記）。
+
+```bash
+# 重いサイトを domcontentloaded 起点・タイムアウト延長で開く例
+DEBUG_BROWSER_WAIT_UNTIL=domcontentloaded DEBUG_BROWSER_TIMEOUT_MS=60000 \
+  npm run debug:browser -- https://news.yahoo.co.jp/categories/science
+```
