@@ -99,8 +99,9 @@ async function relayBrowse(
   fetchOptions?: Parameters<typeof proxyFetch>[1]
 ): Promise<Response> {
   let res: Response;
+  let finalUrl: string;
   try {
-    res = await proxyFetch(parsed.href, fetchOptions);
+    ({ response: res, finalUrl } = await proxyFetch(parsed.href, fetchOptions));
   } catch (err) {
     if (err instanceof SsrfBlockedError) {
       return htmlResponse("アクセスできない URL です。", 403);
@@ -131,7 +132,8 @@ async function relayBrowse(
     }
 
     const html = await res.text();
-    const rewritten = rewriteHtml(html, parsed.href);
+    // baseUrl はリダイレクト追従後の最終 URL を用いる（#42）。
+    const rewritten = rewriteHtml(html, finalUrl);
     outHeaders.set("Content-Type", "text/html; charset=utf-8");
     return new Response(rewritten, { status: res.status, headers: outHeaders });
   } catch (err) {
