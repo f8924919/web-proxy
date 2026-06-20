@@ -5,6 +5,11 @@ import {
   isSsrfBlocked,
   buildProxyRequestInit,
   DEFAULT_USER_AGENT,
+  isRedirectStatus,
+  resolveRedirectTarget,
+  sameOrigin,
+  stripCredentialHeaders,
+  nextRedirectMethod,
 } from "@/lib/proxy/fetch";
 
 describe("isSsrfBlocked", () => {
@@ -152,5 +157,94 @@ describe("buildProxyRequestInit", () => {
     const init = buildProxyRequestInit({ method: "GET", body: "a=1" });
     expect(init.body).toBeUndefined();
     expect(init.duplex).toBeUndefined();
+  });
+});
+
+// 仕様: docs/spec/features/proxy.md §リダイレクト追従（#26 / #42）
+describe("リダイレクト追従のヘルパー（#26）", () => {
+  describe("isRedirectStatus", () => {
+    test.each([301, 302, 303, 307, 308])("%i はリダイレクト", (s) => {
+      expect(isRedirectStatus(s)).toBe(true);
+    });
+    test.each([200, 204, 304, 400, 500])("%i はリダイレクトでない", (s) => {
+      expect(isRedirectStatus(s)).toBe(false);
+    });
+  });
+
+  describe("resolveRedirectTarget", () => {
+    test("相対パスは現在 URL 基準で絶対化される", () => {
+      expect(resolveRedirectTarget("/next", "https://a.com/x/y")).toBe(
+        "https://a.com/next"
+      );
+    });
+    test("絶対 URL はそのまま採用される", () => {
+      expect(resolveRedirectTarget("https://b.com/p", "https://a.com/")).toBe(
+        "https://b.com/p"
+      );
+    });
+    test("不正な base では null を返す", () => {
+      expect(resolveRedirectTarget("/next", "not a url")).toBeNull();
+    });
+  });
+
+  describe("sameOrigin", () => {
+    test("同一スキーム・ホスト・ポートは true", () => {
+      expect(sameOrigin("https://a.com/x", "https://a.com/y")).toBe(true);
+    });
+    test("既定ポートの明示有無は同一オリジン", () => {
+      expect(sameOrigin("https://a.com", "https://a.com:443/z")).toBe(true);
+    });
+    test("スキーム差は別オリジン", () => {
+      expect(sameOrigin("https://a.com", "http://a.com")).toBe(false);
+    });
+    test("ホスト差は別オリジン", () => {
+      expect(sameOrigin("https://a.com", "https://b.com")).toBe(false);
+    });
+    test("パース不能は安全側で false（別オリジン扱い）", () => {
+      expect(sameOrigin("https://a.com", "not a url")).toBe(false);
+    });
+  });
+
+  describe("stripCredentialHeaders", () => {
+    test("Authorization / Cookie をケース非依存で除去し他は残す", () => {
+      const stripped = stripCredentialHeaders({
+        "User-Agent": "UA",
+        Authorization: "Bearer x",
+        cookie: "a=1",
+        "Accept-Encoding": "identity",
+      });
+      expect(stripped).toEqual({
+        "User-Agent": "UA",
+        "Accept-Encoding": "identity",
+      });
+    });
+    test("元のオブジェクトを破壊しない", () => {
+      const src = { Cookie: "a=1", "X-Keep": "1" };
+      stripCredentialHeaders(src);
+      expect(src).toEqual({ Cookie: "a=1", "X-Keep": "1" });
+    });
+  });
+
+  describe("nextRedirectMethod", () => {
+    test.each([
+      [301, "POST", false, "GET", false],
+      [302, "GET", false, "GET", false],
+      [303, "POST", true, "GET", false],
+      [307, "POST", true, "POST", true],
+      [307, "POST", false, "GET", false], // 再送不可ボディは安全側で GET 降格
+      [308, "PUT", true, "PUT", true],
+      [308, "GET", false, "GET", false],
+    ])(
+      "status=%i method=%s replayable=%s -> %s sendBody=%s",
+      (status, method, replayable, expMethod, expSend) => {
+        expect(
+          nextRedirectMethod(
+            status as number,
+            method as string,
+            replayable as boolean
+          )
+        ).toEqual({ method: expMethod, sendBody: expSend });
+      }
+    );
   });
 });
