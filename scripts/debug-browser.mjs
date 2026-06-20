@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // プロキシ表示のヘッドレスブラウザデバッグスクリプト（方式B）。
-// 対応 Issue: https://github.com/f8924919/web-proxy/issues/32, #34
+// 対応 Issue: https://github.com/f8924919/web-proxy/issues/32, #34, #39
 // 手順・前提は docs/setup.md「8. ヘッドレスブラウザでのデバッグ（方式B）」を参照。
 //
 // 使い方:
@@ -22,7 +22,38 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ORIGIN = process.env.DEBUG_BROWSER_ORIGIN ?? "http://localhost:3000";
-const WAIT_MS = Number(process.env.DEBUG_BROWSER_WAIT_MS ?? 1500);
+
+// 非負ミリ秒の環境変数を読む。非数値・負値は警告して既定値へフォールバックする。
+// 特に TIMEOUT_MS は NaN だと Playwright が「タイムアウト無効（待ち続ける）」と解釈し、
+// ベストエフォート出力（#39）の前提が崩れるため、ここで弾く。
+function readMs(name, fallback) {
+  const raw = process.env[name];
+  if (raw == null || raw === "") return fallback;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= 0) return n;
+  console.warn(
+    `${name} の値 "${raw}" は不正です。0 以上の数値を指定してください。${fallback} にフォールバックします。`
+  );
+  return fallback;
+}
+
+const WAIT_MS = readMs("DEBUG_BROWSER_WAIT_MS", 1500);
+
+// page.goto の待機戦略・タイムアウト（#39）。
+// 広告・計測等で常時通信が走るサイトは networkidle に到達せず時間切れになるため、
+// 既定は load とし、環境変数で切り替えられるようにする。
+const VALID_WAIT_UNTIL = ["load", "domcontentloaded", "networkidle", "commit"];
+const WAIT_UNTIL = (() => {
+  const v = process.env.DEBUG_BROWSER_WAIT_UNTIL;
+  if (v == null || v === "") return "load";
+  if (VALID_WAIT_UNTIL.includes(v)) return v;
+  console.warn(
+    `DEBUG_BROWSER_WAIT_UNTIL の値 "${v}" は不正です。` +
+      `${VALID_WAIT_UNTIL.join(" / ")} のいずれかを指定してください。load にフォールバックします。`
+  );
+  return "load";
+})();
+const GOTO_TIMEOUT_MS = readMs("DEBUG_BROWSER_TIMEOUT_MS", 30000);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const OUT_ROOT = join(__dirname, ".debug-out");
@@ -143,38 +174,64 @@ async function main() {
   });
 
   console.log(`対象 URL: ${targetUrl}`);
+  console.log(`待機戦略: ${WAIT_UNTIL} / タイムアウト: ${GOTO_TIMEOUT_MS}ms`);
   let mainStatus = null;
+  let gotoError = null;
   try {
     const resp = await page.goto(targetUrl, {
-      waitUntil: "networkidle",
-      timeout: 30000,
+      waitUntil: WAIT_UNTIL,
+      timeout: GOTO_TIMEOUT_MS,
     });
     mainStatus = resp?.status() ?? null;
   } catch (err) {
+    // goto がタイムアウト/失敗してもここで終了せず、収集済みの結果を
+    // ベストエフォートで出力する（#39。タイムアウト＝全損にしない）。
+    gotoError = err;
     console.error(
       `ページの読み込みに失敗しました: ${err.message}\n` +
-        `dev サーバ (${ORIGIN}) が起動しているか確認してください（npm run dev）。`
+        `収集済みの結果をベストエフォートで出力します。` +
+        `（タイムアウト時は DEBUG_BROWSER_WAIT_UNTIL / DEBUG_BROWSER_TIMEOUT_MS の調整、` +
+        `または dev サーバ (${ORIGIN}) の起動を確認してください）`
     );
-    await browser.close();
-    process.exit(2);
   }
 
   // JS 実行（リダイレクト等）の落ち着きを待ってから状態を取る。
-  await page.waitForTimeout(WAIT_MS);
+  // goto 失敗後でも、収集済みの状態を取りに行く（個々の取得失敗は握りつぶす）。
+  await page.waitForTimeout(WAIT_MS).catch(() => {});
 
-  const finalUrl = page.url();
-  const html = await page.content();
+  let finalUrl = null;
+  try {
+    finalUrl = page.url();
+  } catch {
+    /* ページが取得不能なら null のまま */
+  }
 
-  await page.screenshot({
-    path: join(outDir, "screenshot.png"),
-    fullPage: true,
-  });
+  let html = null;
+  try {
+    html = await page.content();
+  } catch (err) {
+    consoleLines.push(
+      `[debug-browser] page.content() 取得失敗: ${err.message}`
+    );
+  }
+
+  try {
+    await page.screenshot({
+      path: join(outDir, "screenshot.png"),
+      fullPage: true,
+    });
+  } catch (err) {
+    consoleLines.push(`[debug-browser] screenshot 取得失敗: ${err.message}`);
+  }
+
   await writeFile(join(outDir, "console.log"), consoleLines.join("\n") + "\n");
   await writeFile(
     join(outDir, "network.json"),
     JSON.stringify(networkEntries, null, 2) + "\n"
   );
-  await writeFile(join(outDir, "page.html"), html);
+  if (html != null) {
+    await writeFile(join(outDir, "page.html"), html);
+  }
 
   await browser.close();
 
@@ -184,6 +241,9 @@ async function main() {
   console.log(`console 行数      : ${consoleLines.length}`);
   console.log(`network エントリ  : ${networkEntries.length}`);
   console.log(`出力先           : ${outDir}`);
+
+  // goto が失敗していた場合は、結果を出したうえで終了コード 2 を返す。
+  if (gotoError) process.exit(2);
 }
 
 main().catch((err) => {
