@@ -293,7 +293,8 @@ URL 書き換え方式のため、すべての中継先は**単一のプロキ�
 ### セキュリティ上の制約
 
 - **リダイレクト追従時の漏えい（#26 で対応済み）**: かつて `proxyFetch` は `redirect: "follow"` 固定で、クロスオリジンへのリダイレクト時に `Authorization` / `Cookie` を追従先へそのまま送っていた。現在は `redirect: "manual"` 化して自前で追従し、**追従先が元リクエストと別オリジンなら `Authorization` / `Cookie` を除去**する（[§リダイレクト追従](#リダイレクト追従) 参照）。
-- **`credentials` 付きリクエスト**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向け（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "same-origin"` を用いる。これは主にプロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に、プロキシ origin の認証 cookie を `/api/proxy` まで届かせるための措置だが、これらインフラ認証 cookie はスコープ化されていないため上流へは転送されない（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。任意ターゲットに対する完全な `credentials: include` 相当（クロスオリジン XHR の Cookie 同送）は引き続き対象外。
+- **`credentials` 付きクロスオリジン XHR（#28 対応済み）**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向け（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "same-origin"` を用いる。振り向け先が同一オリジンのため**プロキシ origin に保存されたターゲットのスコープ Cookie が `/api/proxy` まで届き**、往路のスコープ抽出（`scopedCookieHeader`）で**現ターゲット origin 分だけが上流へ転送される**。これにより `fetch(target, { credentials: "include" })` 相当の Cookie ベース・クロスオリジン XHR が、プロキシ経由で保存・スコープ化された Cookie について成立する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）は非スコープのため上流へは転送されない。
+- **`credentials` 付き XHR の既知の制約**: SW は元リクエストの `credentials` モード（`omit` / `same-origin` / `include`）を区別せず一律 `same-origin` で振り向けるため、`credentials: "omit"` の XHR でも**当該ターゲット自身のスコープ Cookie が送られ得る**。ただし送信先は常に現ターゲット origin 分のみで、サイト間の Cookie 混在・漏えいは起きない（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。また対象はプロキシ経由で保存・スコープ化された Cookie に限り、プロキシ外で取得した Cookie は対象外。
 
 ---
 
