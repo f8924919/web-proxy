@@ -2,14 +2,14 @@
 
 - **Issue**: [#28](https://github.com/f8924919/web-proxy/issues/28) feat(v2): credentials ベースのクロスオリジン XHR 対応
 - **ブランチ**: `feature/28-credentials-cross-origin-xhr`
-- **ステータス**: 進行中（docs クローズアウト・テスト green、PR 前）
+- **ステータス**: 完了（PR #65 マージ済み）
 - **関連**: 由来 #21、依存 Cookie アイソレーション #25、credentials 変更 #29
 
 ## 調査結論（重要）
 
 Issue #28 の背景欄「SW 振り向けは `credentials: "omit"` を用いる」は **#21 当時の古い記述**で、現状は既に解決済み。
 
-- SW は `credentials: "same-origin"` で振り向け済み（[public/sw.js](../../public/sw.js) L148 / L155、#29 で `omit`→`same-origin`）。
+- SW は `credentials: "same-origin"` で振り向け済み（[public/sw.js](../../../public/sw.js) L148 / L155、#29 で `omit`→`same-origin`）。
 - Cookie 往復は #25 で完成（往路 `scopedCookieHeader`・復路 `sanitizeSetCookie`）。
 - 同一オリジン `/api/proxy` への振り向けにより、プロキシ origin に保存されたターゲットのスコープ Cookie が `/api/proxy` まで届き、往路スコープ抽出で現ターゲット分だけ上流転送される＝ `credentials: include` 相当のクロスオリジン XHR が成立。
 
