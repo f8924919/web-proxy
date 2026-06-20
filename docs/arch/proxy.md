@@ -23,6 +23,7 @@ src/
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
+│       ├── loopGuard.ts      # ナビゲーションループ検出（enablejs 自己再ナビ対策）
 │       └── response.ts       # nullBodyStatus 判定ユーティリティ
 └── ...
 
@@ -42,6 +43,8 @@ public/
 1. searchParams.get('url') を取得
 2. url が null / パース失敗 → 307 リダイレクト to /
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
+3b. navigationLoopGuard.check(ip, url) → ループ検出なら静的案内ページ(200) を返して打ち切り
+   （host+path 単位の短時間連続遷移を検出。[機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策)）
 4. { response, finalUrl } = proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
    → SSRF ブロックなら 403 / 到達不能なら 502
    - 受信リクエストの Cookie / Authorization を転送（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）
@@ -323,6 +326,36 @@ export const assetRateLimiter = new RateLimiter(600); // /api/proxy 用
 
 - Node.js runtime のインメモリのみ。プロセス再起動でリセットされる。
 - 複数 Next.js インスタンスをまたいだ共有は非対応（v2 以降）。
+
+---
+
+## `src/lib/proxy/loopGuard.ts`
+
+**役割**: `enablejs` のような JS 自己再ナビゲーション無限ループを検出する。`rateLimit.ts` と同じインメモリ・スライディングウィンドウ方式だが、キーが異なる。
+
+### データ構造・キー
+
+```ts
+// Map<`${ip}\n${host}${pathname}`, タイムスタンプ配列（直近 windowMs 分）>
+const store = new Map<string, number[]>();
+```
+
+- キーは `IP + ホスト + パス`。**クエリは含めない**（`sei` 等が毎回変わってもループを同一視するため）。
+- 既定: ウィンドウ 10 秒 / 閾値 6 回。
+
+### `NavigationLoopGuard`
+
+`check(ip: string, target: URL): boolean` の挙動:
+
+- 現在時刻から `windowMs` 以内のタイムスタンプのみ残し、現在時刻を追記する。
+- 残存件数が閾値を超えたら `true`（ループ）を返す。それ以外は `false`。
+- レート制限（60 req/分）に達する前に発火するよう、閾値はそれより十分小さく取る（既定 6 回 / 10 秒）。
+
+`/browse`（GET / POST）は `pageRateLimiter.check` の後にこれを呼び、`true` なら中継 HTML を返さず**自動遷移を含まない静的案内ページ**（HTTP 200）を返してループを停止させる。上限値・誤検知・限界の根拠は [機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策) を参照。
+
+### 制約
+
+- `rateLimit.ts` と同じくインメモリのみ。プロセス再起動でリセットされ、複数インスタンス間共有は非対応（v2 以降）。
 
 ---
 
