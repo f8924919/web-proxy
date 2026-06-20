@@ -127,6 +127,43 @@ const GET_FORM_INTERCEPT_HTML =
   `},true);` +
   `})()</script>`;
 
+// クリックによるナビゲーションの振り向け先を決定する純粋関数。
+// JS が動的描画した <a href>（生の http(s) 絶対 URL）はサーバー側 rewriteHtml の
+// 書き換え対象外で、クリックすると実サイトへ離脱する。これを補い、http(s) 絶対 URL を
+// 閲覧ページのパス（BASE_PATH 込みの …/browse）を再利用して /browse?url=<再エンコード> へ振り向ける。
+// 横取り対象外（http(s) 絶対 URL でない＝自前リンク・# ・javascript: ・相対）なら null を返す。
+// 注入スクリプトはこの関数を toString() で埋め込むため、外部参照を持たず URL のみで完結させる。
+// 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
+export function buildClickNavDestination(
+  href: string,
+  pageUrl: string
+): string | null {
+  if (!/^https?:\/\//i.test(href)) return null;
+  let page: URL;
+  try {
+    page = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  return page.pathname + "?url=" + encodeURIComponent(href);
+}
+
+// <a> クリックによるナビゲーションを横取りする注入スクリプト。
+// 純粋ロジック（buildClickNavDestination）を toString() で埋め込み、document への
+// click イベント委任（capture）で動的描画リンクも含めて捕捉する。修飾キー付き・
+// 中クリック・target="_blank" は素通しし、ブラウザ標準の新規タブ挙動を尊重する。
+const CLICK_NAV_INTERCEPT_HTML =
+  `<script>(function(){` +
+  `var build=${buildClickNavDestination.toString()};` +
+  `document.addEventListener('click',function(e){` +
+  `if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;` +
+  `var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;` +
+  `var t=a.getAttribute('target');if(t&&t.toLowerCase()==='_blank')return;` +
+  `var dest=build(a.getAttribute('href')||'',location.href);` +
+  `if(dest){e.preventDefault();location.href=dest;}` +
+  `},true);` +
+  `})()</script>`;
+
 // 実行時リクエスト横取り Service Worker（public/sw.js）の登録スニペット。
 // 登録スコープは ${BASE_PATH}/。SW 側は scope から BASE_PATH を導出する。
 const SW_REGISTER_HTML =
@@ -228,7 +265,7 @@ export function rewriteHtml(html: string, baseUrl: string): string {
   const bar = ADDRESS_BAR_HTML(baseUrl);
   const withBody = rewritten.replace(
     /(<body[^>]*>)/i,
-    `$1${bar}${GET_FORM_INTERCEPT_HTML}${SW_REGISTER_HTML}`
+    `$1${bar}${GET_FORM_INTERCEPT_HTML}${CLICK_NAV_INTERCEPT_HTML}${SW_REGISTER_HTML}`
   );
 
   const hostname = targetHostname(baseUrl);
