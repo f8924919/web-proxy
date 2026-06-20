@@ -72,6 +72,14 @@ Next.js サーバー
 | `<link href>`   | `/api/proxy?url=<encoded>` | 透過中継                                                 |
 | `<script src>`  | `/api/proxy?url=<encoded>` | 透過中継                                                 |
 
+### サブリソース整合性（SRI）属性の除去
+
+`<script src>` を `/api/proxy?url=...` へ書き換えると、ブラウザが実際に取得するのは**プロキシが中継したレスポンス**になる。元の `src` に `integrity`（SRI）属性が付いている場合、中継レスポンスは元 URL のバイト列と一致する保証がなく（ヘッダーサニタイズ・エンコーディング差異等）、**SRI ハッシュ不一致でスクリプトの実行がブロック**される。これを防ぐため、`src` を書き換える `<script>` からは `integrity` 属性を除去する。
+
+- **対象**: `src` を書き換える `<script src>`。同時に `crossorigin` 属性も除去する（書換後は同一 origin の `/api/proxy` 経由となり、CORS モード指定が不整合・不要になるため）。
+- **対象外**: `src` を持たないインライン `<script>`、および `img` / `link` 等の他タグ（現状 SRI の実害が観測されていないため最小限に留める）。
+- **背景**: Google の enable JavaScript インタースティシャル等、SRI 付きスクリプトでチャレンジ JS をロードするサイトで、`solveSimpleChallenge is not defined` 等の未定義エラーを誘発し得る要因の一つ（Issue #67 / 調査 #52）。
+
 ### meta refresh の書き換え
 
 `<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` の `url` を `<a href>` と同様に `/browse?url=<encoded>` へ書き換える。これを行わないと、`url=/...`（ルート相対）の meta refresh が、閲覧ページ（`…/browse?url=…`）ではなく**プロキシ自身のオリジン直下**へ解決され、プロキシから離脱してしまう（例: `<meta http-equiv="refresh" content="3;url=/login">` のような遅延付き自動遷移）。
@@ -82,6 +90,15 @@ Next.js サーバー
 - **対象外**: `url` を持たない純粋な遅延 refresh（例 `content="5"`、自ページ再読み込み）は書き換えず素通しする。
 
 > **制限**: パーサ（`node-html-parser`）は `<noscript>` の内側を生テキストとして扱うため、**`<noscript>` 内の meta refresh は書き換えられない**。JS 有効ブラウザは `<noscript>` 内容を無視するため実害はないが、この書き換えは**プロキシオリジンへの離脱防止が目的**であり、Google 検索の「enable JavaScript」インタースティシャル（meta refresh が noscript 内・実駆動は JS の自己再ナビゲーション）による無限ループは**本書き換えの対象外**である。この無限ループ自体は別途 [ナビゲーションループの検出](#ナビゲーションループの検出enablejs-対策) で検出し、案内ページへ切り替えて停止させる。
+
+### inline CSP（meta）の除去
+
+レスポンスヘッダーの `Content-Security-Policy` は[ヘッダー処理](#レスポンスヘッダー処理)で除去するが、HTML 内に `<meta http-equiv="Content-Security-Policy" content="...">` で**インライン指定された CSP** はヘッダーサニタイズでは消せない。これが残ると、`rewriteHtml` が注入する各種スクリプト（アドレスバー・GET フォーム横取り・クリック横取り・SW 登録・`document.domain` シム。いずれも nonce 無し）や、`/api/proxy` へ書き換えた `src` が CSP 違反で**ブロック**され得る。これを防ぐため、`rewriteHtml` は inline の CSP meta を除去する。
+
+- **判定**: `http-equiv` の値を大文字小文字を無視して照合し、`content-security-policy` に一致する `<meta>` を除去する。
+- **対象外（素通し）**: `Content-Security-Policy-Report-Only` は実際のブロックを行わずレポートのみのため除去しない（`http-equiv` が `content-security-policy-report-only` のものは残す）。
+- **対象外**: `<meta http-equiv="refresh">` 等、CSP 以外の meta は影響を受けない。
+- **背景**: A1（SRI 属性除去）と同じく、注入スクリプトや書換 src のブロックを防ぐ汎用堅牢化（Issue #67 / 調査 #52）。
 
 ### GET フォーム送信の横取り
 

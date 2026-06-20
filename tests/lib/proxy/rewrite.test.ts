@@ -110,6 +110,66 @@ describe("rewriteHtml", () => {
     });
   });
 
+  describe("SRI 属性の除去（A1）", () => {
+    // 仕様: docs/spec/features/proxy.md §サブリソース整合性（SRI）属性の除去
+    test("src を書き換える script から integrity / crossorigin を除去する", () => {
+      const html = `<script src="/app.js" integrity="sha256-abc" crossorigin="anonymous"></script>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `src="/api/proxy?url=${encodeURIComponent("https://example.com/app.js")}"`
+      );
+      expect(result).not.toContain("integrity");
+      expect(result).not.toContain("crossorigin");
+    });
+
+    test("integrity を持たない script は src のみ書き換え従来どおり", () => {
+      const html = `<script src="/app.js"></script>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `src="/api/proxy?url=${encodeURIComponent("https://example.com/app.js")}"`
+      );
+      expect(result).not.toContain("integrity");
+    });
+
+    test("src を持たないインライン script の中身・属性は触らない", () => {
+      const html = `<script integrity="sha256-keep">var a = 1;</script>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain("var a = 1;");
+      expect(result).toContain(`integrity="sha256-keep"`);
+    });
+  });
+
+  describe("inline meta CSP の除去（A2）", () => {
+    // 仕様: docs/spec/features/proxy.md §inline CSP（meta）の除去
+    test("http-equiv=Content-Security-Policy の meta を除去する", () => {
+      const html = `<meta http-equiv="Content-Security-Policy" content="default-src 'self'">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).not.toContain("Content-Security-Policy");
+      expect(result).not.toContain("default-src");
+    });
+
+    test("http-equiv の大文字小文字を無視して除去する", () => {
+      const html = `<meta http-equiv="CONTENT-SECURITY-POLICY" content="default-src 'self'">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).not.toContain("default-src");
+    });
+
+    test("Content-Security-Policy-Report-Only は素通しする", () => {
+      const html = `<meta http-equiv="Content-Security-Policy-Report-Only" content="default-src 'self'">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain("Content-Security-Policy-Report-Only");
+      expect(result).toContain("default-src 'self'");
+    });
+
+    test("CSP 以外の meta（refresh）は影響を受けない", () => {
+      const html = `<meta http-equiv="refresh" content="0;url=/foo">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `/browse?url=${encodeURIComponent("https://example.com/foo")}`
+      );
+    });
+  });
+
   test("アドレスバー HTML スニペットを <body> 直後に注入する", () => {
     const html = `<html><body><p>hello</p></body></html>`;
     const result = rewriteHtml(html, BASE);
