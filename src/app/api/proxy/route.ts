@@ -72,12 +72,13 @@ async function relayAsset(req: NextRequest): Promise<Response> {
     : forwardableRequestHeaders(req.headers);
 
   let res: Response;
+  let finalUrl: string;
   try {
-    res = await proxyFetch(parsed.href, {
+    ({ response: res, finalUrl } = await proxyFetch(parsed.href, {
       method: req.method,
       body: isBodyMethod ? req.body : undefined,
       headers,
-    });
+    }));
   } catch (err) {
     if (err instanceof SsrfBlockedError) {
       return new Response("Forbidden", { status: 403 });
@@ -106,7 +107,8 @@ async function relayAsset(req: NextRequest): Promise<Response> {
 
     if (contentType.includes("text/css")) {
       const css = await res.text();
-      const rewritten = rewriteCss(css, parsed.href);
+      // baseUrl はリダイレクト追従後の最終 URL を用いる（#42）。
+      const rewritten = rewriteCss(css, finalUrl);
       outHeaders.set("Content-Type", "text/css; charset=utf-8");
       return new Response(rewritten, {
         status: res.status,

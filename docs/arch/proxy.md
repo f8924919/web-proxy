@@ -42,10 +42,11 @@ public/
 1. searchParams.get('url') を取得
 2. url が null / パース失敗 → 307 リダイレクト to /
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
-4. proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
+4. { response, finalUrl } = proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
    → SSRF ブロックなら 403 / 到達不能なら 502
    - 受信リクエストの Cookie / Authorization を転送（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）
-5. rewriteHtml(html, baseUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
+5. rewriteHtml(html, finalUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
+   （baseUrl はリダイレクト追従後の最終 URL。#42。[機能仕様 §リダイレクト追従](../spec/features/proxy.md#リダイレクト追従)）
 6. headers.sanitize(responseHeaders) でヘッダーを除去
 7. new Response(rewrittenHtml, { headers }) を返す
    （非 HTML はそのまま中継。204/205/304 はボディ null、1xx・範囲外・変換中の例外は 502。
@@ -66,7 +67,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
    - 以降のレスポンス処理（rewriteHtml・sanitize・ステータス中継）は GET と共通
 ```
 
-> JS 発行の非フォーム POST は SW が `/api/proxy` へ振り向けるため `/browse` POST ハンドラのスコープ外（[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）。`redirect: "follow"` によるクロスオリジンへの認証情報漏えいは既知の制約（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）。
+> JS 発行の非フォーム POST は SW が `/api/proxy` へ振り向けるため `/browse` POST ハンドラのスコープ外（[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）。リダイレクト追従時のクロスオリジン認証情報漏えいは `redirect: "manual"` の自前追従でハードニング済み（#26。[機能仕様 §リダイレクト追従](../spec/features/proxy.md#リダイレクト追従)）。
 
 ### アドレスバー注入
 
@@ -87,8 +88,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 4. ヘッダー方針をメソッドで分岐:
    - GET/HEAD: forwardableRequestHeaders（許可リスト＝Cookie/Authorization、既存挙動）
    - 非 GET   : relayRequestHeaders（拒否リスト方式で広めに転送）＋ body を転送
-   proxyFetch(url, { method, body, headers }) → SSRF ブロックなら 403
-5. Content-Type が text/css → rewriteCss(body, baseUrl)
+   { response, finalUrl } = proxyFetch(url, { method, body, headers }) → SSRF ブロックなら 403
+5. Content-Type が text/css → rewriteCss(body, finalUrl)（baseUrl は追従後の最終 URL。#42）
 6. headers.sanitize(responseHeaders)
 7. 要求に Origin があれば Access-Control-Allow-Origin/-Credentials を付与
 8. Response を中継して返す
@@ -118,22 +119,42 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 - `User-Agent` / `Accept-Encoding: identity` は既定ヘッダー（`BASE_HEADERS`）として維持し、`options.headers`（例: `Content-Type`・`Cookie`・`Authorization`）を上書き結合する。**結合はヘッダー名の大文字小文字を区別しない**（HTTP ヘッダー名はケース非依存＝ RFC 7230 §3.2）。非 GET 中継の `relayRequestHeaders` は受信ヘッダーを小文字キーで返すため、既定の `User-Agent`（大文字）と呼び出し側の `user-agent`（小文字）が**別キーとして二重化しないよう**、ケースを正規化して同名は呼び出し側を後勝ちにする（#43）。認証ヘッダーの抽出は呼び出し側（Route Handler）が `forwardableRequestHeaders` で行い、`proxyFetch` 自体は渡されたヘッダーを転送するのみ。
 - **既定 `User-Agent`**: 現代ブラウザ相当（Chrome 系）の固定文字列を用いる。`process.env.PROXY_USER_AGENT`（サーバー専用 env。`NEXT_PUBLIC_` なし）が設定されていればそれを、未設定なら固定 Chrome UA を `BASE_HEADERS` の既定値に用いる（`process.env.PROXY_USER_AGENT ?? "<default chrome UA>"`）。独自 UA（旧 `web-proxy/1.0`）はサイトの UA 判定で簡易レイアウト／非対応ページを返されることがあり、表示崩れの原因になるため（[機能仕様 §ターゲットへ送る既定 User-Agent](../spec/features/proxy.md#ターゲットへ送る既定-user-agent)）。
 - ボディは `GET` / `HEAD` 以外かつ `body` 指定時のみ設定する。`ReadableStream` をボディに用いるため `duplex: "half"` を付与する（Node 22 / Next.js では `ReadableStream` ボディに必須）。
-- **リダイレクト**: `redirect: "follow"`。クロスオリジンへのリダイレクト時に `Authorization` / `Cookie` が漏れ得る既知の制約がある（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）。ハードニングは v2。
+- **リダイレクト**: `redirect: "manual"` で自前追従する（#26）。詳細は下記「リダイレクト追従」。
+- **戻り値**: `proxyFetch` は `{ response, finalUrl }` を返す。`finalUrl` はリダイレクト追従後の最終 URL で、呼び出し側は `rewriteHtml` / `rewriteCss` の `baseUrl` にこれを用いる（#42。[機能仕様 §リダイレクト追従](../spec/features/proxy.md#リダイレクト追従)）。
 
-### SSRF チェック
+### リダイレクト追従（`redirect: "manual"` の自前ループ）
+
+`fetch` を `redirect: "manual"` で呼び、`3xx` + `Location` の間ループして追従する（最大 5 ホップ。超過は `TooManyRedirectsError`）。各ホップで以下を行う（検証ロジックは純粋関数に分離してテスト可能にする。[テスト方針](../testing/policy.md)）。
+
+| 純粋関数                                             | 役割                                                                |
+| ---------------------------------------------------- | ------------------------------------------------------------------- |
+| `isRedirectStatus(status)`                           | `301/302/303/307/308` 判定                                          |
+| `resolveRedirectTarget(loc, base)`                   | `Location` を現在 URL 基準で絶対 URL 化（不正なら `null`）          |
+| `sameOrigin(a, b)`                                   | 2 URL の origin 一致判定                                            |
+| `stripCredentialHeaders(h)`                          | `Authorization` / `Cookie` をケース非依存で除去（別オリジン追従時） |
+| `nextRedirectMethod(status, method, replayableBody)` | 追従時のメソッド／ボディ送出可否を決定                              |
+
+- **認証情報の保護**: 追従先が**元リクエストと別オリジン**なら `stripCredentialHeaders` で `Authorization` / `Cookie` を落としてから次へ。
+- **SSRF 再チェック**: 毎ホップ `assertSsrfAllowed(url)`（後述 SSRF チェックを関数化したもの）を適用。追従先が内部 IP 等でも `SsrfBlockedError`（403）。
+- **メソッド / ボディ**: `301/302/303` は `GET`・ボディなしへ降格。`307/308` はメソッド保持だが、`ReadableStream` ボディ（再送不可）は安全側で `GET`・ボディなしに降格。
+- **タイムアウト**: 全ホップで 1 つの `AbortSignal.timeout(10_000)` を共有（合計 10 秒）。
+
+### SSRF チェック（`assertSsrfAllowed(url)`）
+
+初回・追従先の双方から呼ぶ非同期ヘルパーに集約する。
 
 1. `URL` でパース（失敗なら例外）
-2. `dns.promises.lookup(hostname)` で IP を解決
+2. `dns.promises.lookup(hostname, { family: 4 })` で IPv4 解決
 3. 解決した IP を CIDR ブロックリストと照合（[プロキシ機能仕様 §SSRF 対策](../spec/features/proxy.md) 参照）
 4. ブロック対象なら `SsrfBlockedError` を throw
-5. `fetch(url, { ...buildProxyRequestInit(options), signal: AbortSignal.timeout(10_000) })` で取得
 
 ### エラー型
 
-| エラークラス        | 意味                                  |
-| ------------------- | ------------------------------------- |
-| `SsrfBlockedError`  | SSRF ブロック（403 を返す）           |
-| `FetchTimeoutError` | タイムアウト / 到達不能（502 を返す） |
+| エラークラス            | 意味                                     |
+| ----------------------- | ---------------------------------------- |
+| `SsrfBlockedError`      | SSRF ブロック（403 を返す）              |
+| `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）    |
+| `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す） |
 
 ---
 
