@@ -281,7 +281,7 @@ document に click を capture で委任（動的リンクにも効く）:
 ### 制約（MVP）
 
 - **ナビゲーションは対象外**。ページ遷移・フォーム送信はサーバー側書き換えに委ねる。
-- **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でもプロキシ origin の認証 cookie を届かせられる。届いたプロキシ origin の cookie はスコープ化されていないため、上流転送のスコープ抽出（`scopedCookieHeader`）で除外される（[機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)）。任意ターゲットへの完全な credentials 制御は対象外（[機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)）。
+- **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、プロキシ origin に保存されたターゲットのスコープ Cookie が `/api/proxy` まで届く。これにより `credentials: "include"` 相当の Cookie ベース・クロスオリジン XHR が、上流転送のスコープ抽出（`scopedCookieHeader`）で現ターゲット分だけに限定されたうえで成立する（#28。[機能仕様 §認証情報の転送 §セキュリティ上の制約](../spec/features/proxy.md#セキュリティ上の制約-1)）。プロキシ自身のインフラ認証 cookie（Cloudflare Access の `CF_Authorization` 等）は非スコープのため上流転送から除外される。元リクエストの `credentials` モードは区別せず一律 `same-origin` で振り向ける（既知の制約は同機能仕様を参照）。
 - **パス相対 URL は best-effort**。閲覧ページ URL（`/browse`）基準で解決されるため、ターゲット上のパス文脈を完全には復元できない。ルート絶対・絶対 URL は正しく振り向く。
 
 ---

@@ -200,6 +200,23 @@ describe("forwardableRequestHeaders", () => {
     const headers = new Headers({ cookie: "CF_Authorization=jwt" });
     expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({});
   });
+
+  // #28: credentials: "include" 相当のクロスオリジン XHR。SW が同一オリジンの
+  // /api/proxy へ credentials: "same-origin" で振り向けるとプロキシ origin の
+  // Cookie jar（他サイト分＋インフラ cookie 混在）が丸ごと届くが、現ターゲット
+  // origin にスコープされた Cookie だけを上流へ転送する。
+  test("クロスオリジン XHR: 混在 Cookie jar から現ターゲット分だけ転送する（#28）", () => {
+    const headers = new Headers({
+      cookie: [
+        "CF_Authorization=jwt",
+        scoped(ORIGIN_A, "sid", "aaa"),
+        scoped(ORIGIN_B, "sid", "bbb"),
+      ].join("; "),
+    });
+    expect(forwardableRequestHeaders(headers, ORIGIN_B)).toEqual({
+      cookie: "sid=bbb",
+    });
+  });
 });
 
 describe("relayRequestHeaders", () => {
