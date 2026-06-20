@@ -65,6 +65,17 @@ Next.js サーバー
 | `<link href>`   | `/api/proxy?url=<encoded>` | 透過中継                                                 |
 | `<script src>`  | `/api/proxy?url=<encoded>` | 透過中継                                                 |
 
+### meta refresh の書き換え
+
+`<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` の `url` を `<a href>` と同様に `/browse?url=<encoded>` へ書き換える。これを行わないと、`url=/...`（ルート相対）の meta refresh が、閲覧ページ（`…/browse?url=…`）ではなく**プロキシ自身のオリジン直下**へ解決され、プロキシから離脱してしまう（例: `<meta http-equiv="refresh" content="3;url=/login">` のような遅延付き自動遷移）。
+
+- **判定**: `http-equiv` の値は大文字小文字を無視して `refresh` と一致するものを対象とする。
+- **解析**: `content` を `<遅延>;url=<TARGET>` として解釈し、`url=` の前後空白・大文字小文字・クォート（`'` / `"`）を許容する。遅延値はそのまま保持する。
+- **書き換え対象**: `url=` が示すターゲットを `baseUrl` 基準で絶対 URL に解決し、http/https に解決される場合のみ `/browse?url=<encoded>` へ書き換える（`<a href>` と同じ `browseUrl()` の挙動に準拠。http(s) 以外はそのまま）。
+- **対象外**: `url` を持たない純粋な遅延 refresh（例 `content="5"`、自ページ再読み込み）は書き換えず素通しする。
+
+> **制限**: パーサ（`node-html-parser`）は `<noscript>` の内側を生テキストとして扱うため、**`<noscript>` 内の meta refresh は書き換えられない**。JS 有効ブラウザは `<noscript>` 内容を無視するため実害はないが、この書き換えは**プロキシオリジンへの離脱防止が目的**であり、Google 検索の「enable JavaScript」インタースティシャル（meta refresh が noscript 内・実駆動は JS の自己再ナビゲーション）による無限ループは**本書き換えの対象外**である（別途検討の既知制限）。
+
 ### GET フォーム送信の横取り
 
 `<form action>` を `/browse?url=<encoded>` に書き換えても、**GET フォームの送信ではブラウザが action URL のクエリ文字列（`?url=...`）を破棄し、フォーム項目で置き換える**ため `url` が消失する。結果 `GET /browse?<form 項目>`（`url` 無し）となり、[ブラウズ Route Handler](../../arch/proxy.md#route-handler-srcappbrowseroutets) の `url` 未指定分岐が `BASE_PATH + "/"`（ホーム）へリダイレクトしてしまう（POST はボディで送るため影響を受けない）。
