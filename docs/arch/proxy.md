@@ -184,6 +184,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 `<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` は `content` 内の `url=` を正規表現で抜き出し、`<a href>` と同じ `browseUrl()` で書き換える（遅延値は保持）。ルート相対 `url` がプロキシオリジン直下へ解決されて離脱するのを防ぐ。`<noscript>` 内の meta refresh はパーサが生テキスト扱いするため対象外（[機能仕様 §meta refresh の書き換え](../spec/features/proxy.md#meta-refresh-の書き換え)の制限）。
 
+`src` を書き換える `<script>` からは `integrity` / `crossorigin` 属性を除去する。書換後は `/api/proxy` 経由の中継レスポンスとなり SRI ハッシュが一致せずブロックされるため（[機能仕様 §SRI 属性の除去](../spec/features/proxy.md#サブリソース整合性sri属性の除去)）。あわせて inline の `<meta http-equiv="Content-Security-Policy">`（enforce のみ。`...-Report-Only` は残す）を除去し、注入スクリプト・書換 src が CSP でブロックされるのを防ぐ（[機能仕様 §inline CSP（meta）の除去](../spec/features/proxy.md#inline-cspmetaの除去)）。
+
 ### CSS 書き換え
 
 正規表現で `url(...)` と `@import` を `/api/proxy?url=<encoded>` へ置換。
