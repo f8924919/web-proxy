@@ -8,7 +8,7 @@ yahoo.co.jp トップの検索ボックスから検索すると、プロキシ�
 
 ## 原因（調査済み）
 
-yahoo.co.jp トップの検索フォームは React 製の標準的な GET フォーム（`<form action="https://search.yahoo.co.jp/search" method="get">`）。GET フォーム横取りスクリプト（[src/lib/proxy/rewrite.ts](../../src/lib/proxy/rewrite.ts) の `GET_FORM_INTERCEPT_HTML` イベント委任）は capture で submit を捕捉し `location.href` をプロキシ URL にセットするが、**`stopImmediatePropagation()` を呼んでいない**。そのため伝播が止まらず、続けて発火する React の bubble フェーズ自前 submit ハンドラが実 URL へ後勝ち遷移し、プロキシを離脱する。
+yahoo.co.jp トップの検索フォームは React 製の標準的な GET フォーム（`<form action="https://search.yahoo.co.jp/search" method="get">`）。GET フォーム横取りスクリプト（[src/lib/proxy/rewrite.ts](../../../src/lib/proxy/rewrite.ts) の `GET_FORM_INTERCEPT_HTML` イベント委任）は capture で submit を捕捉し `location.href` をプロキシ URL にセットするが、**`stopImmediatePropagation()` を呼んでいない**。そのため伝播が止まらず、続けて発火する React の bubble フェーズ自前 submit ハンドラが実 URL へ後勝ち遷移し、プロキシを離脱する。
 
 クリック横取り（同 `CLICK_NAV_INTERCEPT_HTML`）は同種の SPA 横取りを `stopImmediatePropagation()` で既に阻止しており、GET フォーム横取り側だけ対策が漏れている非対称が原因。
 
@@ -20,5 +20,5 @@ yahoo.co.jp トップの検索フォームは React 製の標準的な GET フ�
 
 ## 関連 docs
 
-- spec: [docs/spec/features/proxy.md](../spec/features/proxy.md) §GET フォーム送信の横取り
-- arch: [docs/arch/proxy.md](../arch/proxy.md) §GET フォーム送信横取りスクリプト注入
+- spec: [docs/spec/features/proxy.md](../../spec/features/proxy.md) §GET フォーム送信の横取り
+- arch: [docs/arch/proxy.md](../../arch/proxy.md) §GET フォーム送信横取りスクリプト注入
