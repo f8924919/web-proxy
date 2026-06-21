@@ -442,7 +442,7 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 - **egress IP（最小実装）**: 自前ブラウザの上流プロキシを env `PROXY_BROWSER_PROXY_SERVER`（任意で `..._PROXY_USERNAME` / `..._PROXY_PASSWORD`）で指定でき、residential / クリーン IP プロキシを通せる。外部 CDP サービス（[§ブラウザ実行基盤](#ブラウザ実行基盤バックエンドの差し替え71)）に IP プールごと委ねる選択肢と両立する。未設定なら従来どおりサーバー IP で直アクセス（既定挙動不変）。
 - **stealth（最小実装・組み込み軽量）**: 自前 `chromium.launch()` に `--disable-blink-features=AutomationControlled` を付与し、全 context へ `navigator.webdriver` を隠す init script を注入する。依存追加なしの軽量対策で、`navigator.webdriver` / `AutomationControlled` 由来の単純なヘッドレス判定を緩和する。**網羅的な stealth（playwright-extra/stealth 相当）は導入しない**（egress IP が支配的で費用対効果が低いため）。外部 CDP サービス利用時は当該サービスの stealth 機能に委ねる。
 - **限界・法的留意**: 本対策でも Google 検索等の本格的アンチボットの突破は保証しない。最終的な可否は egress IP の質に依存する。対象サイトの利用規約・residential プロキシの規約/法令順守はデプロイ運用者の責任とする（[setup.md §9.4](../../setup.md#94-アンチボット対策egress-ip--stealth73)）。
-- **実測（未実施・キー入手後）**: Google 検索（enablejs ループ・[#52]）を代表ケースに、ブラウザティア＋クリーン IP / stealth でどこまで通るかの実測は、外部サービスの有料アカウント/キー入手後に行う（手順は [setup.md §9.4](../../setup.md#94-アンチボット対策egress-ip--stealth73)）。
+- **実測（確認済み・2026-06-21）**: クリーン IP（residential。ローカル PC の ISP 回線・上流プロキシなし）+ ブラウザティア（`browserFetch`）で **Google 検索が成功**した（enablejs ループ・`/sorry/` reCAPTCHA に落ちない）。データセンター IP では弾かれていた（[#52]）ことと合わせ、**可否は egress IP の質に支配される**という結論が実証された。本番（データセンター IP）で同等の結果を得るには `PROXY_BROWSER_PROXY_SERVER` の residential プロキシ、または residential IP を持つ外部 CDP サービスが必要（手順は [setup.md §9.4](../../setup.md#94-アンチボット対策egress-ip--stealth73)）。
 
 [#52]: https://github.com/f8924919/web-proxy/issues/52
 
