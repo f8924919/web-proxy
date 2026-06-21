@@ -161,39 +161,72 @@ const GET_FORM_INTERCEPT_HTML =
   `})()</script>`;
 
 // クリックによるナビゲーションの振り向け先を決定する純粋関数。
-// JS が動的描画した <a href>（生の http(s) 絶対 URL）はサーバー側 rewriteHtml の
-// 書き換え対象外で、クリックすると実サイトへ離脱する。これを補い、http(s) 絶対 URL を
-// 閲覧ページのパス（BASE_PATH 込みの …/browse）を再利用して /browse?url=<再エンコード> へ振り向ける。
-// 横取り対象外（http(s) 絶対 URL でない＝自前リンク・# ・javascript: ・相対）なら null を返す。
+// サーバー側 rewriteHtml の <a href> 書き換えは初期 HTML のみが対象で、(1) JS が動的描画した
+// リンク（生の絶対/相対 URL）、(2) SPA ルーターが onClick で横取りする <a> クリックは、いずれも
+// 実サイトへ離脱する。これを補い、クリック先を proxy 中継（…/browse?url=）へ振り向ける。
+// 返り値は遷移先パス（BASE_PATH 込みの …/browse を再利用）、横取りしない場合は null。
+//   - 外部オリジンの絶対 URL（プロトコル相対含む）→ …/browse?url=<encode(絶対URL)>
+//   - 同一オリジンの …/browse リンク（書き換え済み）→ その path+search をそのまま返す
+//     （SPA ルーターに奪われる前にフルナビゲーションさせる）
+//   - 同一オリジンのその他パス（/articles/… 等）→ 現在ページの url= を base に解決し直して振り向け
+//   - # 同一ページアンカー・非 http スキーム・url= 欠落時の相対は null
 // 注入スクリプトはこの関数を toString() で埋め込むため、外部参照を持たず URL のみで完結させる。
 // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
 export function buildClickNavDestination(
   href: string,
   pageUrl: string
 ): string | null {
-  if (!/^https?:\/\//i.test(href)) return null;
+  if (!href || href.charAt(0) === "#") return null;
   let page: URL;
+  let dest: URL;
   try {
     page = new URL(pageUrl);
+    // ブラウザが実際に遷移する先（href を閲覧ページ基準で解決）。
+    dest = new URL(href, pageUrl);
   } catch {
     return null;
   }
-  return page.pathname + "?url=" + encodeURIComponent(href);
+  // http(s) 以外（javascript:/mailto:/tel:/data: 等）は素通し。
+  if (dest.protocol !== "http:" && dest.protocol !== "https:") return null;
+
+  if (dest.origin === page.origin) {
+    // 既に書き換え済みの browse リンク（同一 …/browse パス）はそのままフルナビゲーション。
+    if (dest.pathname === page.pathname) {
+      return dest.pathname + dest.search + dest.hash;
+    }
+    // それ以外の同一オリジンパス（例 /articles/…）は、ブラウザ既定だと proxy オリジン直下へ
+    // 解決され離脱する。現ターゲット（url=）を base に解決し直して proxy 中継へ振り向ける。
+    const target = page.searchParams.get("url");
+    if (!target) return null;
+    let real: URL;
+    try {
+      real = new URL(href, target);
+    } catch {
+      return null;
+    }
+    if (real.protocol !== "http:" && real.protocol !== "https:") return null;
+    return page.pathname + "?url=" + encodeURIComponent(real.href);
+  }
+  // 外部オリジンの絶対 URL（プロトコル相対含む）。
+  return page.pathname + "?url=" + encodeURIComponent(dest.href);
 }
 
 // <a> クリックによるナビゲーションを横取りする注入スクリプト。
 // 純粋ロジック（buildClickNavDestination）を toString() で埋め込み、document への
-// click イベント委任（capture）で動的描画リンクも含めて捕捉する。修飾キー付き・
-// 中クリック・target="_blank" は素通しし、ブラウザ標準の新規タブ挙動を尊重する。
+// click イベント委任（capture）で動的描画リンクも含めて捕捉する。capture は SPA（React 等）の
+// onClick（バブル）より先に発火し、dest を得たら stopImmediatePropagation で SPA ルーターの
+// クリック横取りを阻止して確実に proxy 経由フルナビゲーションにする。自前 UI（アドレスバー）・
+// 修飾キー付き・中クリック・target="_blank" は素通しし、ブラウザ標準の挙動を尊重する。
 const CLICK_NAV_INTERCEPT_HTML =
   `<script>(function(){` +
   `var build=${buildClickNavDestination.toString()};` +
   `document.addEventListener('click',function(e){` +
   `if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;` +
   `var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;` +
+  `if(a.closest('#proxy-addressbar'))return;` +
   `var t=a.getAttribute('target');if(t&&t.toLowerCase()==='_blank')return;` +
   `var dest=build(a.getAttribute('href')||'',location.href);` +
-  `if(dest){e.preventDefault();location.href=dest;}` +
+  `if(dest){e.preventDefault();e.stopImmediatePropagation();location.href=dest;}` +
   `},true);` +
   `})()</script>`;
 
