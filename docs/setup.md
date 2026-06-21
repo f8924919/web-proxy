@@ -82,6 +82,22 @@ NEXT_PUBLIC_BASE_PATH=/proxy/3000
 
 詳細は [docs/arch/proxy.md §リバースプロキシ下でのパスプレフィックス](arch/proxy.md) を参照。
 
+### ブラウザバック中継（browser-backed fetch・任意）
+
+特定サイトの `/browse` GET をヘッドレスブラウザ（インプロセス Playwright）で中継し、JS 解決後の DOM を返す機能のサーバー専用 env（いずれも `NEXT_PUBLIC_` なし）。**未設定なら常に通常の中継（`proxyFetch`）で、既定挙動は変わりません**。仕様は [docs/spec/features/proxy.md §ブラウザバック中継](spec/features/proxy.md#ブラウザバック中継browser-backed-fetch)。
+
+| 環境変数                        | 既定値        | 用途                                                                                                                                        |
+| ------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PROXY_BROWSER_MODE`            | `off`※        | `off`（常に通常中継）/ `allowlist`（host 一致時のみブラウザ）/ `on`（常にブラウザ）。※未設定で `PROXY_BROWSER_HOSTS` が非空なら `allowlist` |
+| `PROXY_BROWSER_HOSTS`           | （空）        | カンマ区切りのホスト接尾辞リスト。`example.com` は `example.com` と `*.example.com` に一致                                                  |
+| `PROXY_BROWSER_WAIT_UNTIL`      | `load`        | `page.goto` の待機戦略。`load` / `domcontentloaded` / `networkidle` / `commit`                                                              |
+| `PROXY_BROWSER_TIMEOUT_MS`      | `15000`       | `page.goto` のタイムアウト（ミリ秒）                                                                                                        |
+| `PROXY_BROWSER_SETTLE_MS`       | `1500`        | 読み込み後に DOM 取得まで待つ追加ミリ秒（JS の落ち着き待ち）                                                                                |
+| `PROXY_BROWSER_MAX_CONCURRENCY` | `2`           | 同時に起動するブラウザ context の上限                                                                                                       |
+| `PROXY_USER_AGENT`              | （Chrome UA） | ブラウザ・通常中継の双方でターゲットへ送る既定 User-Agent を上書き                                                                          |
+
+> **前提（Chromium バイナリ）**: 本機能はブラウザ起動に Chromium 本体を要するため、`npx playwright install chromium`（必要に応じ `--with-deps`、[§8.1](#81-セットアップ初回のみ) と同じ）を事前に実行しておくこと。Playwright は現状 devDependency のため、本番でブラウザ中継を使う場合は依存の昇格と RAM・起動コストの考慮が要る（本番実行基盤の決定は [#71](https://github.com/f8924919/web-proxy/issues/71)）。
+
 ---
 
 ## 6. IDE 設定（推奨）

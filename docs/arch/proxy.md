@@ -19,6 +19,7 @@ src/
 ├── lib/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
+│       ├── browserFetch.ts   # ヘッドレスブラウザ中継（ブラウザバック中継・ティア判定・Cookie ウォーミング）
 │       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・クリックナビ横取り・document.domain シム <script> 注入含む）
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
@@ -48,9 +49,13 @@ public/
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
 3b. navigationLoopGuard.check(ip, url) → ループ検出なら静的案内ページ(200) を返して打ち切り
    （host+path 単位の短時間連続遷移を検出。[機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策)）
-4. { response, finalUrl } = proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
+4. ティア判定 shouldUseBrowser(url, browserTierConfigFromEnv()) で中継先を選ぶ
+   - 既定（中継ティア）: { response, finalUrl } = proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
+   - ブラウザティア（allowlist 一致）: browserFetch(url, …)。失敗（SSRF 以外）は proxyFetch へフォールバック
+     （[機能仕様 §ブラウザバック中継](../spec/features/proxy.md#ブラウザバック中継browser-backed-fetch)）
    → SSRF ブロックなら 403 / 到達不能なら 502
    - 受信リクエストの Cookie / Authorization を転送（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）
+   - POST・/api/proxy は対象外で常に中継ティア
 5. rewriteHtml(html, finalUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
    （baseUrl はリダイレクト追従後の最終 URL。#42。[機能仕様 §リダイレクト追従](../spec/features/proxy.md#リダイレクト追従)）
 6. headers.sanitize(responseHeaders) でヘッダーを除去
@@ -163,6 +168,42 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | `SsrfBlockedError`      | SSRF ブロック（403 を返す）              |
 | `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）    |
 | `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す） |
+
+---
+
+## `src/lib/proxy/browserFetch.ts`
+
+> 関連仕様: [プロキシ機能仕様 §ブラウザバック中継](../spec/features/proxy.md#ブラウザバック中継browser-backed-fetch)
+
+**役割**: 特定サイトの `/browse` GET について、初回ナビゲーションをヘッドレスブラウザ（インプロセス Playwright）で実行し、JS 解決後の DOM を `proxyFetch` と同じ `{ response, finalUrl }` 契約で返す。あわせてブラウザが取得した Cookie をスコープ化のため `Set-Cookie` 化して返す（セッションウォーミング）。
+
+### ティア判定（純粋関数）
+
+| 純粋関数                        | 役割                                                                                                                                                 |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `parseBrowserHosts(raw)`        | `PROXY_BROWSER_HOSTS`（カンマ区切り）を正規化したホスト接尾辞配列にする                                                                              |
+| `browserTierConfigFromEnv(env)` | `PROXY_BROWSER_MODE` / `PROXY_BROWSER_HOSTS` から `{ mode, hosts }` を組み立てる。MODE 未設定・不正値時は HOSTS が非空なら `allowlist`、空なら `off` |
+| `shouldUseBrowser(url, config)` | URL とコンフィグからブラウザティアを使うか判定。`off`→常に false、`on`→常に true、`allowlist`→ホスト接尾辞一致時のみ true。URL 不正は false          |
+
+- ホスト一致は接尾辞方式: `example.com` は `example.com` と `*.example.com` に一致する（`host === suffix || host.endsWith("." + suffix)`）。
+- env 未設定時は `off` 相当で**常に中継ティア**（既定挙動の回帰なし）。
+
+### 待機・Cookie 変換（純粋関数）
+
+| 純粋関数                        | 役割                                                                                                                                                                                                          |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolveBrowserWaitConfig(env)` | `PROXY_BROWSER_WAIT_UNTIL` / `PROXY_BROWSER_TIMEOUT_MS` / `PROXY_BROWSER_SETTLE_MS` を検証して `{ waitUntil, timeoutMs, settleMs }` を返す（不正値は既定へフォールバック。`debug-browser.mjs` と同方針、#39） |
+| `cookieToSetCookie(cookie)`     | Playwright の cookie オブジェクトを `Set-Cookie` 文字列へ変換する。`Domain` は付けず（`sanitizeSetCookie` がスコープ化）、`Path` / `Secure` / `HttpOnly` / `SameSite` / 永続 cookie の `Expires` を反映する   |
+
+### `browserFetch(url, options?)`（ランタイム配線・I/O）
+
+- **Playwright は遅延ロード**（`await import("playwright")`）。ティアが使われない限り読み込まない（バンドル肥大・常時ロードを避ける）。
+- **SSRF**: 初回ナビゲーション URL に `assertSsrfAllowed`（`fetch.ts` から公開）を適用し、ブラウザの**全サブリクエスト**にも `context.route` 傍受で解決後 IP のブロックリスト照合を適用する（ブロックは中断）。
+- **コンテキスト**: 既定 UA（`PROXY_USER_AGENT` で上書き可、`fetch.ts` の `DEFAULT_USER_AGENT`）と `options.headers`（`Cookie` / `Authorization` 等）を `extraHTTPHeaders` として適用し、リクエストごとに新規 context を作って分離する。
+- **取得**: `page.goto`（`resolveBrowserWaitConfig` の待機）→ settle 待ち → `page.content()`（本文）/ `page.url()`（finalUrl）。失敗時もベストエフォートで収集して返す。
+- **Cookie ウォーミング**: `context.cookies()` を `cookieToSetCookie` で `Set-Cookie` 化し、`text/html` の `Response` ヘッダーへ載せる。以降は `relayBrowse` の `sanitizeHeaders` が既存どおりスコープ化する。
+- **ライフサイクル**: ブラウザはプロセス内で再利用し、context はリクエストごとに作って確実に close する。同時実行数を上限（`PROXY_BROWSER_MAX_CONCURRENCY`、既定 2）で絞る。
+- **テスト**: 純粋関数（上記）のみ単体テスト対象。ブラウザ I/O は[テスト方針](../testing/policy.md)によりテスト対象外。
 
 ---
 
