@@ -15,8 +15,15 @@
 
 - [ ] egress IP の選択肢比較・コスト/規約/法的留意を docs にまとめる → setup.md §9.4 / spec
 - [ ] stealth 対策の評価と適用範囲の決定 → 組み込み軽量を採用（spec/arch）
-- [ ] Google 検索を代表ケースに実測 → **キー入手後に実施**（手順 setup.md §9.4 に記載・本 PR では未実施）
+- [x] Google 検索を代表ケースに実測 → **確認済み**（下記）
 - [ ] 結論（やる/やらない・どこまで）+ 法的留意を docs に残す → spec §アンチボット対策 / setup.md §9.4
+
+## 実測結果（2026-06-21・確認済み）
+
+- **構成**: ローカル PC の ISP 回線（residential IP・`PROXY_BROWSER_PROXY_SERVER` 未使用）+ ブラウザティア（`browserFetch`）。
+- **結果**: Google 検索が**成功**（`/sorry/` reCAPTCHA・enablejs ループに落ちない）。
+- **含意**: データセンター IP では弾かれていた（#52）のに対しクリーン IP で通った＝**可否は egress IP の質に支配される**という #52 の真因仮説を実証。stealth（軽量）も適用下で問題なし。
+- **本番での再現**: データセンター IP のデプロイで同等の結果を得るには residential プロキシ（`PROXY_BROWSER_PROXY_SERVER`）または residential IP 内蔵の外部 CDP サービスが必要（setup.md §9.4）。本実測は「クリーン IP なら通る」ことの確認で、データセンター + residential プロキシ経路の実測は未（必要時に follow-up）。
 
 ## 実装メモ
 
