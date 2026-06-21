@@ -25,14 +25,17 @@ function injectInterceptor() {
   });
 }
 
-// 注入スクリプトのリスナは capture で先に走る。その「後」に走る capture リスナを足し、
-// その時点の defaultPrevented を見れば、注入スクリプトが横取り（preventDefault）したか判定できる。
+// 注入スクリプトは横取り時に capture フェーズで stopImmediatePropagation() を呼び（#93）、
+// バブルフェーズの自前ハンドラ（SPA ルーター／アドレスバー onsubmit 相当）へ submit を渡さない。
+// そこでバブルに probe を足し、submit がそこへ「到達しなかった」=横取りされた、と判定する。
+// （横取り時は location.href へ proxy URL を代入するが、jsdom はナビゲーション未実装のため
+//  到達観察の方が安定する。アドレスバー自前 onsubmit の遷移と混同しない利点もある。）
 function interceptedByInjectedScript(form: HTMLFormElement): boolean {
-  let intercepted = false;
-  const probe = (e: Event) => {
-    intercepted = e.defaultPrevented;
+  let reachedBubble = false;
+  const probe = () => {
+    reachedBubble = true;
   };
-  document.addEventListener("submit", probe, true);
+  document.addEventListener("submit", probe, false);
   try {
     form.dispatchEvent(
       new Event("submit", { bubbles: true, cancelable: true })
@@ -40,8 +43,8 @@ function interceptedByInjectedScript(form: HTMLFormElement): boolean {
   } catch {
     // jsdom はナビゲーション未実装で例外を投げ得るが、判定には影響しない
   }
-  document.removeEventListener("submit", probe, true);
-  return intercepted;
+  document.removeEventListener("submit", probe, false);
+  return !reachedBubble;
 }
 
 describe("GET フォーム横取りスクリプト（注入）", () => {
@@ -79,6 +82,32 @@ describe("GET フォーム横取りスクリプト（注入）", () => {
     );
     document.body.appendChild(form);
     expect(interceptedByInjectedScript(form)).toBe(false);
+  });
+
+  test("capture で submit を奪い SPA の自前 submit ハンドラ（バブル）へ渡さない（#93）", () => {
+    // SPA（React 等）は GET 検索フォームの submit をバブルの自前ハンドラで横取りし、
+    // location で実サイト（例 search.yahoo.co.jp）へ直接遷移させる。注入スクリプトは
+    // capture で先に発火し stopImmediatePropagation で阻止するため、バブルのリスナ
+    //（= SPA の自前 submit ハンドラ相当）には届かず、proxy 経由フルナビゲーションする。
+    const form = document.createElement("form");
+    form.setAttribute("method", "get");
+    form.setAttribute(
+      "action",
+      "/proxy/3000/browse?url=" +
+        encodeURIComponent("https://search.yahoo.co.jp/search")
+    );
+    document.body.appendChild(form);
+    let spaHandlerRan = false;
+    const spaHandler = () => {
+      spaHandlerRan = true;
+    };
+    document.addEventListener("submit", spaHandler, false);
+    try {
+      expect(interceptedByInjectedScript(form)).toBe(true);
+      expect(spaHandlerRan).toBe(false);
+    } finally {
+      document.removeEventListener("submit", spaHandler, false);
+    }
   });
 });
 
