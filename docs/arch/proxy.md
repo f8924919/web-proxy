@@ -297,23 +297,28 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 > 関連仕様: [プロキシ機能仕様 §クライアント側ナビゲーションの横取り](../spec/features/proxy.md#クライアント側ナビゲーションの横取り)
 
-`rewriteHtml` は `<body>` 直後（GET フォーム横取りに続けて）に、`<a>` クリックによるナビゲーションを横取りする `<script>` を注入する。サーバー側 `<a href>` 書き換えは初期 HTML を一度書き換えるだけで、JS が動的描画したリンク（生の http(s) 絶対 URL）は対象外となり、クリックすると実サイトへ離脱するため、それを補う。
+`rewriteHtml` は `<body>` 直後（GET フォーム横取りに続けて）に、`<a>` クリックによるナビゲーションを横取りする `<script>` を注入する。サーバー側 `<a href>` 書き換えは初期 HTML を一度書き換えるだけで、(1) JS が動的描画したリンク（生の絶対/相対 URL）は対象外、(2) SPA（React 等）が `<a>` クリックを onClick ルーターで奪い `history.pushState` で遷移する、のいずれでも実サイトへ離脱するため、それを補う（#82）。`location`/`history` API はブラウザ仕様で改変不能（[機能仕様 §クライアント側ナビゲーションの横取り](../spec/features/proxy.md#クライアント側ナビゲーションの横取り)）なので、フックではなく**クリックの主導権を奪う**方式を採る。
 
 振り向け先 URL の決定は純粋関数 **`buildClickNavDestination(href, pageUrl)`** に分離し、`GET_FORM_INTERCEPT_HTML` と同様 `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
 
 ```
-document に click を capture で委任（動的リンクにも効く）:
+document に click を capture で委任（動的リンクにも効き、SPA の onClick より先に発火）:
 0. 修飾キー(Ctrl/Meta/Shift/Alt)・補助ボタン(中クリック)・defaultPrevented は素通し
 1. event.target から closest('a[href]') で最寄りの <a href> を探す（無ければ素通し）
-2. target="_blank" は素通し（新規タブはブラウザ標準挙動を尊重＝離脱は既知の制限）
+2. closest('#proxy-addressbar') 内（自前 UI）・target="_blank" は素通し
+   （新規タブはブラウザ標準挙動を尊重＝離脱は既知の制限）
 3. buildClickNavDestination(href, location.href):
-   - href が http(s) 絶対 URL でなければ null（自前リンク・#・javascript:・相対は対象外）
-   - location.pathname（BASE_PATH 込みの …/browse）を再利用し
-     <path>?url=<encodeURIComponent(href)> を返す
-4. dest があれば preventDefault し location.href = dest で遷移
+   - href を location.href 基準で解決し、http(s) 以外・# アンカーは null
+   - 外部オリジンの絶対 URL（プロトコル相対含む）→ <path>?url=<encode(絶対URL)>
+   - 同一オリジンの …/browse リンク（書き換え済み）→ その path+search をそのまま返す
+   - 同一オリジンのその他パス（/articles/… 等）→ 現在ページの url= を base に
+     解決し直して <path>?url=<encode(再解決した絶対URL)>（url= 欠落時は null）
+   - <path> は location.pathname（BASE_PATH 込みの …/browse）を再利用
+4. dest があれば preventDefault + stopImmediatePropagation（SPA ルーターの横取り阻止）し
+   location.href = dest で遷移
 ```
 
-`BASE_PATH` は `window.location.pathname` をそのまま再利用することで保持される（GET フォーム横取りと同方式）。`location`/`history` API 経由の JS 駆動遷移は対象外（`<a>` クリックのみ）。
+`BASE_PATH` は `window.location.pathname` をそのまま再利用することで保持される（GET フォーム横取りと同方式）。リンククリックを伴わない `location`/`history` API 駆動の JS 遷移は依然対象外（ブラウザ仕様上フック不能。完全対応は RBI #72）。本方式は同一サイト内の SPA クライアントルーティングもフルナビゲーション化するトレードオフを持つ（spec 参照）。
 
 ### `document.domain` ドメインガード無効化シム注入
 

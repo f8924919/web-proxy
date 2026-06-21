@@ -19,7 +19,7 @@
 | [27-cors-hardening.md](27-cors-hardening.md)                               | CORS ハードニング（非 GET の origin/referer 除外・許可オリジンの同一オリジン照合）Issue #27 / PR #63                | 2026-06-20 |
 | [28-credentials-cross-origin-xhr.md](28-credentials-cross-origin-xhr.md)   | credentials ベースのクロスオリジン XHR 対応（#29/#25 で成立済みを確認し docs クローズアウト）Issue #28 / PR #65     | 2026-06-20 |
 | [browser-backed-fetch.md](browser-backed-fetch.md)                         | ヘッドレス・ブラウザバック中継（browser-backed fetch）PoC（allowlist 昇格・Cookie ウォーミング）Issue #69 / PR #76  | 2026-06-21 |
-| [70-heuristic-auto-tier-promotion.md](70-heuristic-auto-tier-promotion.md) | 崩れ/チャレンジ検出によるブラウザティア自動昇格（noscript/チャレンジ語句/403・503・再昇格抑止）Issue #70 / PR #80    | 2026-06-21 |
+| [70-heuristic-auto-tier-promotion.md](70-heuristic-auto-tier-promotion.md) | 崩れ/チャレンジ検出によるブラウザティア自動昇格（noscript/チャレンジ語句/403・503・再昇格抑止）Issue #70 / PR #80   | 2026-06-21 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
