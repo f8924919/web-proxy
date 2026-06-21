@@ -1,0 +1,37 @@
+# web-proxy のコンテナ実行（自前 Chromium 同梱イメージ）。
+# 起動: docker compose up --build -d  /  停止: docker compose down
+# 環境変数の詳細は docs/setup.md §5 / §9 を参照。
+services:
+  web-proxy:
+    build: .
+    image: web-proxy
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+    environment:
+      # --- ブラウザバック中継（任意・未設定なら常に通常中継 proxyFetch）---
+      # off / allowlist / on。allowlist 時は HOSTS と併用
+      PROXY_BROWSER_MODE: "off"
+      # PROXY_BROWSER_HOSTS: "example.com,news.yahoo.co.jp"
+      # 崩れ/チャレンジ検出による自動ブラウザ昇格（#70）。true/1/on で有効（既定 OFF）
+      # PROXY_BROWSER_AUTO_PROMOTE: "false"
+      # 待機戦略・タイムアウト（#39）
+      # PROXY_BROWSER_WAIT_UNTIL: "load"
+      # PROXY_BROWSER_TIMEOUT_MS: "15000"
+      # PROXY_BROWSER_SETTLE_MS: "1500"
+      # 同時実行 context 上限（RAM に合わせる）
+      # PROXY_BROWSER_MAX_CONCURRENCY: "2"
+      # --- 本番ブラウザ実行基盤（#71）---
+      # 外部ブラウザサービスへ CDP 接続（設定すると自前 launch の代わりに使う）
+      # PROXY_BROWSER_CDP_URL: "wss://...?token=<SECRET>"
+      # --- アンチボット: egress IP / stealth（#73）---
+      # 自前ブラウザの上流プロキシ（residential / クリーン IP）
+      # PROXY_BROWSER_PROXY_SERVER: "http://host:port"
+      # PROXY_BROWSER_PROXY_USERNAME: "<user>"
+      # PROXY_BROWSER_PROXY_PASSWORD: "<secret>"
+      # --- 共通（任意）---
+      # ターゲットへ送る既定 User-Agent の上書き
+      # PROXY_USER_AGENT: "<custom UA>"
+    # シークレット（CDP URL のトークン・プロキシのパスワード等）は compose の
+    # environment に直書きせず、.env ファイルや orchestrator のシークレット機構で渡す。
+    # 例: env_file: [.env]
