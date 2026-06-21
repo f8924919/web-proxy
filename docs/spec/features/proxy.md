@@ -117,8 +117,10 @@ Next.js サーバー
 - **クエリの載せ替え**: 復元したターゲットの**クエリ全体**をフォーム項目（`FormData`）で置き換える。これは GET フォーム送信時のブラウザ本来の挙動（action のクエリを破棄してフォーム項目に差し替え）をプロキシ経由で再現するもの。
 - **BASE_PATH の保持**: 遷移先は `action`（または `window.location`）の**パス部をそのまま再利用**するため、リバースプロキシのパスプレフィックス（`BASE_PATH`、例 `/proxy/3000`）込みの `…/browse` パスが保持される。
 - **動的フォーム対応**: `document` への `submit` イベント委任（キャプチャ）で捕捉するため、JS が実行時に追加したフォームにも効く。
-- **自前 UI の除外**: プロキシ自身のアドレスバー（`#proxy-addressbar` 内のフォーム）は独自の `onsubmit` で遷移を行うため、横取り対象から除外する（横取りすると入力 URL が無視され得る）。
+- **`form.submit()`（プログラム送信）の捕捉（#78）**: `HTMLFormElement.prototype.submit()` は `submit` イベントを**発火しない**ため、上記のイベント委任では捕捉できない（例: Google 検索は `form.submit()` で送信する）。これを補うため、`HTMLFormElement.prototype.submit` を**オーバーライド**し、同じ振り向けロジック（`buildGetFormDestination`）を適用する。`form.submit()` 呼び出し時点では action に `?url=<target>` が残っているため正しい URL を復元できる。GET でない／復元不可（`buildGetFormDestination` が `null`）／自前アドレスバーのフォーム、および例外時は**元の `submit` をそのまま呼ぶ**（挙動を変えない）。`requestSubmit()` は `submit` イベントを発火するため、イベント委任側で従来どおり捕捉する（オーバーライド不要）。
+- **自前 UI の除外**: プロキシ自身のアドレスバー（`#proxy-addressbar` 内のフォーム）は独自の `onsubmit` で遷移を行うため、横取り対象から除外する（横取りすると入力 URL が無視され得る）。イベント委任・`submit()` オーバーライドの双方で除外する。
 - **対象は GET のみ**: POST / その他メソッドは介入しない。GET フォーム以外の遷移は SW（下記）やサーバー側書き換えが担当する。
+- **スコープ外**: フォームを介さない純粋な JS ナビゲーション（`location.assign` / `history.pushState` で完成済み URL へ直接遷移する経路）は引き続き対象外。
 
 ### クライアント側ナビゲーションの横取り
 

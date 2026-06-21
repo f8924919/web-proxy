@@ -128,9 +128,14 @@ export function buildGetFormDestination(
 
 // GET フォーム送信を横取りする注入スクリプト。
 // 純粋ロジック（buildGetFormDestination）を toString() で埋め込み、ブラウザでは
-// document への submit イベント委任（capture）で動的フォームも含めて捕捉する。
+// 2 経路で捕捉する:
+//  (A) document への submit イベント委任（capture）。動的フォーム・ネイティブ submit・
+//      requestSubmit（submit イベントを発火する）を含めて捕捉する。
+//  (B) HTMLFormElement.prototype.submit のオーバーライド。form.submit()（プログラム送信）は
+//      submit イベントを発火しないため (A) で捕捉できない（例: Google 検索）。同じ
+//      buildGetFormDestination を適用して振り向ける（#78）。
 // 自前のアドレスバー（#proxy-addressbar 内のフォーム）は独自の onsubmit を持つため
-// 横取り対象から除外する（横取りすると入力 URL が無視され得る）。
+// 双方で横取り対象から除外する（横取りすると入力 URL が無視され得る）。
 const GET_FORM_INTERCEPT_HTML =
   `<script>(function(){` +
   `var build=${buildGetFormDestination.toString()};` +
@@ -141,6 +146,18 @@ const GET_FORM_INTERCEPT_HTML =
   `var dest=build(f.getAttribute('method')||'get',f.getAttribute('action')||'',location.href,Array.from(fd.entries()));` +
   `if(dest){e.preventDefault();location.href=dest;}` +
   `},true);` +
+  // (B) form.submit()（プログラム送信）。submit イベントを出さないので prototype を上書きする。
+  `var _s=HTMLFormElement.prototype.submit;` +
+  `HTMLFormElement.prototype.submit=function(){` +
+  `try{` +
+  `if(!(this.closest&&this.closest('#proxy-addressbar'))){` +
+  `var fd;try{fd=new FormData(this)}catch(_){fd=null}` +
+  `var dest=fd?build(this.getAttribute('method')||'get',this.getAttribute('action')||'',location.href,Array.from(fd.entries())):null;` +
+  `if(dest){location.href=dest;return;}` +
+  `}` +
+  `}catch(_){}` +
+  `return _s.apply(this,arguments);` +
+  `};` +
   `})()</script>`;
 
 // クリックによるナビゲーションの振り向け先を決定する純粋関数。
