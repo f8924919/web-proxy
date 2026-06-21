@@ -33,7 +33,7 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）が SPA
 
 - `src/lib/proxy/browserFetch.ts`（新規）: ブラウザ起動・ライフサイクル・`page.goto`/待機/`page.content()`/`page.url()`、cookie 回収、SSRF 傍受。
 - 純粋関数（単体テスト対象）: `shouldUseBrowser(url, config)`、cookie→Set-Cookie 変換、待機設定の構築。
-- 実ブラウザ I/O はテスト対象外（[testing policy](../testing/policy.md)）。
+- 実ブラウザ I/O はテスト対象外（[testing policy](../../testing/policy.md)）。
 
 ## 未決・要検討（実装中に詰める）
 
@@ -55,4 +55,8 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）が SPA
 - [x] テスト先行（純粋関数・35 ケース）
 - [x] 実装 → green（型 / lint / 256 テスト・フォーマット）
 - [x] 検証ゲート（verify 手動 green / docs-check 修正済 / evaluator 10/10 PASS）
-- [ ] PR 作成・マージ（ユーザー承認後）
+- [x] PR 作成・マージ（PR #76、2026-06-21 マージ）
+
+## 実機検証の結論
+
+ブラウザティアの発火・DOM レンダリング・Cookie ウォーミング（スコープ化）は正常動作を確認。ただし **Google 検索は egress IP ブロック（`/sorry/` reCAPTCHA）で通らない**（素のヘッドレス Chromium でも同様＝IP レピュテーションが支配的）。根治はクリーン IP / residential プロキシ（#73）でコード範囲外。本 PoC の価値は SPA・JS 必須サイトの表示改善。フォロー: #70 自動昇格 / #71 本番実行基盤 / #72 RBI 調査 / #73 アンチボット。
