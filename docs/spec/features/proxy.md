@@ -429,10 +429,22 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 | 外部ブラウザサービス  | `PROXY_BROWSER_CDP_URL` を CDP/WS に設定 | `chromium.connectOverCDP()` で外部へ接続。資源・stealth・**クリーン egress IP**（[#73](https://github.com/f8924919/web-proxy/issues/73)）を外部へ逃がす |
 
 - **採用方針**: 既定は自前 Chromium 同梱（コンテナ）。**egress IP（#73）やアンチボットが要件のときのみ**、クリーン IP を持つ外部 CDP サービスへ env で切り替える。Playwright は本番でブラウザ中継を使うため devDependency から **dependency へ昇格**する。
-- **egress IP（#73）の扱い**: 自前 Chromium 同梱は egress IP がサーバー IP のままで [#73](https://github.com/f8924919/web-proxy/issues/73) を解決しない。外部 CDP サービス（residential/クリーン IP を持つもの）へ切り替えた場合に限り #73 にも効く。
+- **egress IP（#73）の扱い**: 自前 Chromium 同梱は egress IP がサーバー IP のまま。クリーン IP を通すには (1) 外部 CDP サービス（residential/クリーン IP を持つもの）へ切り替える、または (2) 自前ブラウザを上流プロキシ経由にする（[§アンチボット対策](#アンチボット対策egress-ip--stealth73)）。
 - ブラウザ実行は中継より大幅に遅く高コストなため、**同時実行数の上限**を設ける。レート制限（[§レート制限](#レート制限)）とは別軸。
 - **表示後の動的操作**（無限スクロールの追加読込・動的 XHR・クリック遷移）は依然として既存の横取り任せ（本機能は初回レンダリングのスナップショット）。根本解決は RBI（[#72](https://github.com/f8924919/web-proxy/issues/72)）。
-- ヘッドレス自体の検出回避・egress IP レピュテーションは本機能の対象外（[#73](https://github.com/f8924919/web-proxy/issues/73)）。ブラウザ化＝アンチボット突破ではない。
+
+### アンチボット対策（egress IP / stealth・#73）
+
+> 対応 Issue: [#73](https://github.com/f8924919/web-proxy/issues/73)。比較・運用・法的留意は [setup.md §9.4](../../setup.md#94-アンチボット対策egress-ip--stealth73)。
+
+ヘッドレス化＝アンチボット突破ではない。実用上の阻害要因は 2 つで、**egress IP レピュテーションが支配的**（[#52] の調査結論。データセンター IP は Google 等の no-JS / bot 判定で弾かれる）、次いでヘッドレス検出（`navigator.webdriver` 等）。本機能は最小対策を提供するが、**突破を保証しない**。
+
+- **egress IP（最小実装）**: 自前ブラウザの上流プロキシを env `PROXY_BROWSER_PROXY_SERVER`（任意で `..._PROXY_USERNAME` / `..._PROXY_PASSWORD`）で指定でき、residential / クリーン IP プロキシを通せる。外部 CDP サービス（[§ブラウザ実行基盤](#ブラウザ実行基盤バックエンドの差し替え71)）に IP プールごと委ねる選択肢と両立する。未設定なら従来どおりサーバー IP で直アクセス（既定挙動不変）。
+- **stealth（最小実装・組み込み軽量）**: 自前 `chromium.launch()` に `--disable-blink-features=AutomationControlled` を付与し、全 context へ `navigator.webdriver` を隠す init script を注入する。依存追加なしの軽量対策で、`navigator.webdriver` / `AutomationControlled` 由来の単純なヘッドレス判定を緩和する。**網羅的な stealth（playwright-extra/stealth 相当）は導入しない**（egress IP が支配的で費用対効果が低いため）。外部 CDP サービス利用時は当該サービスの stealth 機能に委ねる。
+- **限界・法的留意**: 本対策でも Google 検索等の本格的アンチボットの突破は保証しない。最終的な可否は egress IP の質に依存する。対象サイトの利用規約・residential プロキシの規約/法令順守はデプロイ運用者の責任とする（[setup.md §9.4](../../setup.md#94-アンチボット対策egress-ip--stealth73)）。
+- **実測（未実施・キー入手後）**: Google 検索（enablejs ループ・[#52]）を代表ケースに、ブラウザティア＋クリーン IP / stealth でどこまで通るかの実測は、外部サービスの有料アカウント/キー入手後に行う（手順は [setup.md §9.4](../../setup.md#94-アンチボット対策egress-ip--stealth73)）。
+
+[#52]: https://github.com/f8924919/web-proxy/issues/52
 
 ---
 

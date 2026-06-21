@@ -86,6 +86,40 @@ export function browserBackendFromEnv(
   return { mode: "launch" };
 }
 
+// 自前ブラウザの上流プロキシ設定（residential / クリーン IP を通す・#73）。
+export interface BrowserProxyConfig {
+  server: string;
+  username?: string;
+  password?: string;
+}
+
+// 環境変数から上流プロキシ設定を組み立てる。PROXY_BROWSER_PROXY_SERVER が空なら
+// undefined（プロキシ無し＝サーバー IP で直アクセス・既定挙動）。username/password は
+// 非空のときのみ含める。
+// 仕様: docs/spec/features/proxy.md §アンチボット対策（egress IP / stealth・#73）
+export function browserProxyFromEnv(
+  env: Record<string, string | undefined> = process.env
+): BrowserProxyConfig | undefined {
+  const server = env.PROXY_BROWSER_PROXY_SERVER?.trim();
+  if (!server) return undefined;
+  const config: BrowserProxyConfig = { server };
+  const username = env.PROXY_BROWSER_PROXY_USERNAME?.trim();
+  if (username) config.username = username;
+  const password = env.PROXY_BROWSER_PROXY_PASSWORD;
+  if (password) config.password = password;
+  return config;
+}
+
+// ヘッドレス検出回避の最小対策（#73）。突破は保証しない。網羅的 stealth は外部サービスに委ねる。
+// 自前 chromium.launch() に渡す Chrome フラグ（CDP 接続時は外部サービス側に委譲）。
+export const STEALTH_LAUNCH_ARGS = [
+  "--disable-blink-features=AutomationControlled",
+];
+
+// 全 context へ注入し、ページのスクリプト実行前に navigator.webdriver を隠す init script。
+export const STEALTH_INIT_SCRIPT =
+  "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});";
+
 export type BrowserWaitUntil =
   | "load"
   | "domcontentloaded"
@@ -168,10 +202,16 @@ async function getBrowser(): Promise<Browser> {
     // バックエンド（#71）: PROXY_BROWSER_CDP_URL があれば外部サービスへ connectOverCDP、
     // 無ければ自前 Chromium をインプロセス起動する。呼び出し側は不変。
     const backend = browserBackendFromEnv();
+    // 自前 launch のみ stealth フラグと上流プロキシ（クリーン IP）を適用する（#73）。
+    // CDP 接続は外部サービス側の stealth / IP プールに委ねる。
+    const proxy = browserProxyFromEnv();
     launching = import("playwright").then(({ chromium }) =>
       backend.mode === "cdp"
         ? chromium.connectOverCDP(backend.endpoint)
-        : chromium.launch()
+        : chromium.launch({
+            args: STEALTH_LAUNCH_ARGS,
+            ...(proxy ? { proxy } : {}),
+          })
     );
   }
   const browser = await launching;
@@ -260,6 +300,8 @@ export async function browserFetch(
       // 受信リクエストの Cookie / Authorization 等を初回ナビゲーションへ引き継ぐ。
       extraHTTPHeaders: options?.headers ?? {},
     });
+    // ヘッドレス検出回避の最小対策（#73）。launch / CDP の両バックエンドに適用する。
+    await context.addInitScript(STEALTH_INIT_SCRIPT);
     await installSsrfGuard(context);
 
     const page = await context.newPage();
