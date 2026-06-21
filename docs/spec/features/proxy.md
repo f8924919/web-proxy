@@ -42,12 +42,14 @@ Next.js サーバー
 | `POST`   | `/browse?url=<encoded>`    | フォーム POST 送信の中継（リクエストボディと `Content-Type` をターゲットへ転送。詳細は [§POST 中継](#post-中継)） |
 | `GET`    | `/api/proxy?url=<encoded>` | 静的アセットの透過中継（CSS・画像・JS をそのまま返す）                                                            |
 
-### `url` 未指定時のホームリダイレクト
+### `url` 未指定時の案内ページ（GET）
 
-`GET /browse` に `url` が無い場合（GET フォーム横取りの取りこぼし・`/browse` への直接遷移など）は、ホーム（`${BASE_PATH}/`）へ **307 リダイレクト**する。
+`GET /browse` に `url` が無い場合（GET フォーム横取りの取りこぼし・`location`/`history` 駆動の JS ナビゲーションでの `url` 喪失・`/browse` への直接遷移など）は、**アドレスバー付きの案内ページ（HTTP 200）をその場で返す**（自動遷移を含まない）。ユーザーはアドレスバーに URL を入力して続行できる。
 
-- **相対 `Location` を使う**: リダイレクトの `Location` は `${BASE_PATH}/` の**相対パス**（スキーム・ホストを含まない）とし、絶対 URL を生成しない。`Response.redirect(new URL(..., req.url))` のように `req.url`（サーバー内部のオリジン）から絶対 URL を組むと、リバースプロキシ / ポート転送（例: code-server）越しで**内部オリジン（`localhost`）が `Location` に漏れ**、ブラウザが公開オリジンを離れて `localhost` へ遷移してしまう。相対 `Location` はブラウザが公開オリジン基準で解決するため、この漏えいを防げる。
-- `POST /browse` の `url` 欠落・不正は、ホームリダイレクトではなく **400** を返す（[§POST 中継](#post-中継)）。
+- **リダイレクトしない理由（#74）**: 以前はホーム（`${BASE_PATH}/`）へ 307 リダイレクトしていたが、リバースプロキシ（code-server のポート転送 `/proxy/3000`）配下では戻り先が **404** になっていた（Next は basePath 未使用でアプリのホーム実体は `/`。`/proxy/3000/` が末尾スラッシュ正規化で `/proxy/3000` に落ち 404）。リダイレクトを廃し、`/browse`（リバースプロキシが正しくプレフィックスを剥がす経路）で 200 ページを直接返すことでこの 404 を解消する。内部オリジン漏えい防止（旧 #55 の相対 `Location` 要件）は、そもそもリダイレクトを行わないため不要になる。
+- **案内ページの導線**: 既存のアドレスバー（`#proxy-addressbar`）を再利用する。フォーム submit は `${BASE_PATH}/browse?url=<入力>` へ遷移する（正しく解決される経路）。meta refresh / location 自動遷移は含めない。
+- **引き金（スコープ外）**: `url` 喪失の主因の一つは、Google 等の `location.assign` / `history` API による JS 駆動ナビゲーション（[§クライアント側ナビゲーションの横取り](#クライアント側ナビゲーションの横取り)の対象外）。本節はその場合に 404 ではなく案内ページを見せる対症であり、横取りの拡張は別課題。
+- `POST /browse` の `url` 欠落・不正は、案内ページではなく **400** を返す（[§POST 中継](#post-中継)）。
 
 ---
 
@@ -102,7 +104,7 @@ Next.js サーバー
 
 ### GET フォーム送信の横取り
 
-`<form action>` を `/browse?url=<encoded>` に書き換えても、**GET フォームの送信ではブラウザが action URL のクエリ文字列（`?url=...`）を破棄し、フォーム項目で置き換える**ため `url` が消失する。結果 `GET /browse?<form 項目>`（`url` 無し）となり、[ブラウズ Route Handler](../../arch/proxy.md#route-handler-srcappbrowseroutets) の `url` 未指定分岐が `BASE_PATH + "/"`（ホーム）へリダイレクトしてしまう（POST はボディで送るため影響を受けない）。
+`<form action>` を `/browse?url=<encoded>` に書き換えても、**GET フォームの送信ではブラウザが action URL のクエリ文字列（`?url=...`）を破棄し、フォーム項目で置き換える**ため `url` が消失する。結果 `GET /browse?<form 項目>`（`url` 無し）となり、[ブラウズ Route Handler](../../arch/proxy.md#route-handler-srcappbrowseroutets) の `url` 未指定分岐が[案内ページ（HTTP 200）](#url-未指定時の案内ページget)を返してしまい、フォームの送信先（検索結果など）へ遷移できない（POST はボディで送るため影響を受けない）。
 
 これを補うため、`rewriteHtml` は閲覧ページの `<body>` 直後（アドレスバー・SW 登録に続けて）に **GET フォーム送信を横取りするスクリプト**を注入する。挙動は以下のとおり。
 
@@ -172,7 +174,7 @@ Next.js サーバー
 | `Content-Type`   | リクエストの `Content-Type` を転送する（`application/x-www-form-urlencoded` / `multipart/form-data` の境界情報を維持するため）           |
 | レスポンス       | `Content-Type` が `text/html` なら GET と同様に `rewriteHtml` で書き換える。非 HTML はそのまま中継                                       |
 
-SSRF チェック・レート制限（`/browse` は `pageRateLimiter`）・ステータスコードの中継・レスポンスヘッダーのサニタイズは GET と共通の処理を用いる。`url` パラメータが欠落・不正な POST は **400** を返す（GET のホームリダイレクトとは異なる）。
+SSRF チェック・レート制限（`/browse` は `pageRateLimiter`）・ステータスコードの中継・レスポンスヘッダーのサニタイズは GET と共通の処理を用いる。`url` パラメータが欠落・不正な POST は **400** を返す（GET の案内ページ（200）とは異なる）。
 
 POST 時もリクエストの `Cookie` / `Authorization` を転送する（[§認証情報の転送](#認証情報の転送cookie--authorization)）。
 
