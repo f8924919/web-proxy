@@ -349,7 +349,7 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 | 中継ティア（既定） | `proxyFetch`（サーバー `fetch`） | 全サイトの既定。高速・低コスト                 |
 | ブラウザティア     | `browserFetch`（Playwright）     | allowlist 指定サイトのみ。JS 解決後 DOM を返す |
 
-- **昇格トリガは明示 allowlist / env のみ**（PoC）。崩れ/チャレンジのヒューリスティック自動検出は[#70](https://github.com/f8924919/web-proxy/issues/70)。
+- **昇格トリガ**: 明示 allowlist / env（既定）に加え、崩れ/チャレンジのヒューリスティック自動検出（[§ヒューリスティック自動ティア昇格](#ヒューリスティック自動ティア昇格崩れチャレンジ検出)、[#70](https://github.com/f8924919/web-proxy/issues/70)）。allowlist が優先で、自動検出は補助。
 - **env 設定**:
   - `PROXY_BROWSER_MODE`: `off`（常に中継ティア）/ `allowlist`（host 一致時のみブラウザ）/ `on`（常にブラウザ）。サーバー専用（`NEXT_PUBLIC_` なし）。**未設定・不正値のときは、`PROXY_BROWSER_HOSTS` が非空なら `allowlist`、空なら `off`** にフォールバックする。
   - `PROXY_BROWSER_HOSTS`: カンマ区切りのホスト接尾辞リスト。`example.com` は `example.com` と `*.example.com` に一致する。
@@ -380,6 +380,35 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 ### 失敗時のフォールバック
 
 ブラウザの起動失敗・タイムアウト・例外時は、SSRF ブロックを除き**中継ティア（`proxyFetch`）へフォールバック**する（ブラウザ依存で全損にしない）。SSRF ブロックは 403 を返す。
+
+### ヒューリスティック自動ティア昇格（崩れ/チャレンジ検出）
+
+> 関連アーキテクチャ: [arch/proxy.md §promotion.ts](../../arch/proxy.md#srclibproxypromotionts)。対応 Issue: [#70](https://github.com/f8924919/web-proxy/issues/70)。
+
+明示 allowlist は手動運用のため、未知サイトの崩れには追従できない。これを補うため、**中継ティア（`proxyFetch`）の初回応答が「崩れている / チャレンジが挟まっている」と判定された場合、自動でブラウザティアへ昇格して再取得**する。allowlist 昇格を**補助**する位置づけで、allowlist が優先（既にブラウザティアの場合は二重取得しない）。
+
+- **有効化**: 専用 env `PROXY_BROWSER_AUTO_PROMOTE`（`true` / `1` / `on` で有効、**既定は無効**）。無効時は明示 allowlist のみが従来どおり動く。本機能はブラウザティア（Playwright）が利用可能な環境での運用を前提とする。
+- **対象**: `/browse` **GET の `text/html` 応答のみ**。POST はボディ再送不可のため対象外、`/api/proxy`（アセット中継）・非 HTML 応答・allowlist で既に昇格済みのリクエストも対象外。
+- **昇格判定（純粋関数 `shouldPromoteToBrowser(html, status, contentType)`）**: 初回（中継ティア）応答の HTML / ステータス / Content-Type を入力に取り、`text/html` 応答について次の**いずれか**で昇格と判定する。
+  - **チャレンジ / bot 判定マーカー**: `enable javascript` / `enablejs` / `checking your browser` / `recaptcha` / Cloudflare チャレンジ等の語句を本文に含む。
+  - **`<noscript>` 主体**: `<noscript>` を含み、かつ noscript 外の可視テキストが極小（JS 無効向け案内が本文の主要部）。
+  - **bot ブロック相当ステータス**: `403` / `503`。
+  - 空 body 単独は誤検知が多いため判定材料にしない（上記マーカー / noscript / ステータスのみを使う）。
+- **二重取得コストの抑止（無限ループ防止）**: 同一 URL を短時間ウィンドウ内で一度昇格したら**再昇格しない**。これにより `proxyFetch` → 崩れ検出 → `browserFetch` の二重取得を、URL あたり高々 1 回 / ウィンドウに制限する。
+  - **抑止キー**: `ホスト + パス`（**クエリ無視**。[§ナビゲーションループの検出](#ナビゲーションループの検出enablejs-対策)と同方式。`sei` 等の毎回変化するクエリで抑止が外れないようにする）。
+  - インメモリ・スライディングウィンドウ（[レート制限](#レート制限)と同方式、プロセス再起動でリセット）。
+- **誤検知時の影響最小化（best-effort）**: 昇格後の `browserFetch` が失敗・例外の場合は、初回の中継ティア応答を**そのまま返す**（昇格は best-effort で全損にしない）。SSRF は初回ナビゲーション URL で既に検査済み。
+
+| 項目           | 既定値                                                                           |
+| -------------- | -------------------------------------------------------------------------------- |
+| 有効化 env     | `PROXY_BROWSER_AUTO_PROMOTE`（既定 無効）                                        |
+| 対象           | `/browse` GET の `text/html` 応答のみ（POST・非 HTML・allowlist 既昇格は対象外） |
+| 昇格判定       | チャレンジ語句 / `<noscript>` 主体 / `403`・`503` のいずれか                     |
+| 再昇格抑止キー | ホスト + パス（クエリ無視）                                                      |
+| 抑止ウィンドウ | 60 秒                                                                            |
+| 昇格失敗時     | 初回の中継ティア応答へフォールバック（best-effort）                              |
+
+> **限界**: 本機能はブラウザティアで解決できる「崩れ / JS チャレンジ」を自動で拾うものであり、egress IP に由来する no-JS 判定や本格的なアンチボット突破を保証するものではない（[#73](https://github.com/f8924919/web-proxy/issues/73)）。検出は best-effort で、誤検知時も初回応答へフォールバックして体験を悪化させない設計とする。
 
 ### リソース・運用上の制約（PoC）
 
