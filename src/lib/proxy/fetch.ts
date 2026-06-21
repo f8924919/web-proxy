@@ -199,8 +199,9 @@ export function nextRedirectMethod(
 }
 
 // URL を DNS 解決し、SSRF ブロック対象なら SsrfBlockedError を throw する。
-// 初回・リダイレクト追従先の双方から呼ぶ（#26）。
-async function assertSsrfAllowed(url: string): Promise<void> {
+// 初回・リダイレクト追従先の双方から呼ぶ（#26）。browserFetch のサブリクエスト
+// 傍受からも再利用するため公開する（#69）。
+export async function assertSsrfAllowed(url: string): Promise<void> {
   const parsed = new URL(url);
   // IPv4 に固定して解決する（IPv6 の SSRF 判定は v2 以降）
   const { address } = await dns.lookup(parsed.hostname, { family: 4 });

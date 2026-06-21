@@ -328,6 +328,65 @@ URL 書き換え方式のため、すべての中継先は**単一のプロキ�
 
 ---
 
+## ブラウザバック中継（browser-backed fetch）
+
+> 関連アーキテクチャ: [arch/proxy.md §browserFetch](../../arch/proxy.md#srclibproxybrowserfetchts)。対応 Issue: [#69](https://github.com/f8924919/web-proxy/issues/69)。
+
+URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、JS が初期 DOM を構築する SPA や JS 実行を前提とするページで構造的に表示が崩れる/取りこぼす。これを補うため、**特定サイトの `/browse` GET だけ**、初回ナビゲーションをサーバー側のヘッドレスブラウザ（インプロセス Playwright）で実行し、**JS 解決後の DOM** を既存 `rewriteHtml` パイプラインへ流す中継経路を設ける。これを **ブラウザバック中継（browser-backed fetch）** と呼ぶ。
+
+> **既存の方式A / 方式B との区別**: [setup.md §8](../../setup.md) の「方式A / 方式B」は**デバッグ用にブラウザが proxy を外から開く**手段であり、本機能（サーバーがブラウザでターゲットを内から取得する中継経路）とは直交した別物。用語衝突を避けるため本機能は「方式C」とは呼ばない。
+
+### ティア（中継方式）の選択
+
+`/browse` GET は、ターゲットごとに 2 つの中継ティアを使い分ける。判定は純粋関数 `shouldUseBrowser(url, config)` が行う。
+
+| ティア             | 実体                             | 用途                                           |
+| ------------------ | -------------------------------- | ---------------------------------------------- |
+| 中継ティア（既定） | `proxyFetch`（サーバー `fetch`） | 全サイトの既定。高速・低コスト                 |
+| ブラウザティア     | `browserFetch`（Playwright）     | allowlist 指定サイトのみ。JS 解決後 DOM を返す |
+
+- **昇格トリガは明示 allowlist / env のみ**（PoC）。崩れ/チャレンジのヒューリスティック自動検出は[#70](https://github.com/f8924919/web-proxy/issues/70)。
+- **env 設定**:
+  - `PROXY_BROWSER_MODE`: `off`（常に中継ティア）/ `allowlist`（host 一致時のみブラウザ）/ `on`（常にブラウザ）。サーバー専用（`NEXT_PUBLIC_` なし）。**未設定・不正値のときは、`PROXY_BROWSER_HOSTS` が非空なら `allowlist`、空なら `off`** にフォールバックする。
+  - `PROXY_BROWSER_HOSTS`: カンマ区切りのホスト接尾辞リスト。`example.com` は `example.com` と `*.example.com` に一致する。
+  - いずれも未設定なら**常に中継ティア**（既定挙動の回帰なし）。
+- **対象は `/browse` GET のみ**。POST・`/api/proxy`（アセット中継）は対象外で常に中継ティア。
+
+### `browserFetch` の振る舞い
+
+- `proxyFetch` と同じ `{ response, finalUrl }` 契約を満たす。`page.content()` の settled DOM を本文（`text/html`）に、`page.url()` を `finalUrl` に用いる。以降は中継ティアと同じ `rewriteHtml` / `sanitizeHeaders` が適用される。
+- **待機戦略**: `page.goto` の `waitUntil` / `timeout` と、追加の idle 待ち（settle）を env で調整可能（`debug-browser.mjs` と同じ検証・ベストエフォート方針、[#39](https://github.com/f8924919/web-proxy/issues/39)）。タイムアウト・読み込み失敗でも収集済み DOM をベストエフォートで返す。
+- **既定 User-Agent / 認証情報**: 中継ティアと同じ既定 UA（`PROXY_USER_AGENT` で上書き可）をブラウザコンテキストに適用し、受信リクエストの `Cookie` / `Authorization`（現ターゲット origin にスコープされた分）を初回ナビゲーションへ引き継ぐ。
+
+### Cookie セッションウォーミング
+
+ブラウザがナビゲーション中に取得した Cookie（チャレンジ通過後のセッション等）を、**スコープ化して返す**ことで以降の中継へ引き継ぐ。
+
+- ブラウザの cookie jar（`context.cookies()`）を `Set-Cookie` 相当へ変換する（`Domain` は付けない）。
+- 変換した `Set-Cookie` は既存の[サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)（`sanitizeSetCookie`）でスコープ化されてブラウザへ返る。
+- 以降、ブラウザが送り返す `Cookie` のうち現ターゲット origin 分を `scopedCookieHeader` が抽出して上流（`/api/proxy` 等）へ転送する。これにより**ブラウザで温めたセッションを軽量な中継ティアへ引き継ぐ**。
+
+### SSRF（不弱化）
+
+ブラウザは任意の JS を実行し任意のサブリクエストを発行するため、中継ティアと**同等の SSRF 保証**を維持する。
+
+- 初回ナビゲーション URL に[SSRF チェック](#ssrf-対策)を適用する（ブロック時 403）。
+- ブラウザの**全サブリクエスト**にも解決後 IP のブロックリスト照合を適用し、ブロック対象は中断する（`context.route` 傍受）。
+
+### 失敗時のフォールバック
+
+ブラウザの起動失敗・タイムアウト・例外時は、SSRF ブロックを除き**中継ティア（`proxyFetch`）へフォールバック**する（ブラウザ依存で全損にしない）。SSRF ブロックは 403 を返す。
+
+### リソース・運用上の制約（PoC）
+
+- **インプロセス Playwright（ローカル）前提**。本番のブラウザ実行場所（外部サービス化 / Chromium 同梱・資源管理）は[#71](https://github.com/f8924919/web-proxy/issues/71)で別途決定する。
+- Playwright は現状 devDependency で、ブラウザ起動には `npx playwright install chromium`（Chromium バイナリ）が必要。本番運用では依存の昇格と RAM・起動コストの考慮が要る（[setup.md](../../setup.md) 参照）。
+- ブラウザ実行は中継より大幅に遅く高コストなため、**同時実行数の上限**を設ける。レート制限（[§レート制限](#レート制限)）とは別軸。
+- **表示後の動的操作**（無限スクロールの追加読込・動的 XHR・クリック遷移）は依然として既存の横取り任せ（本機能は初回レンダリングのスナップショット）。根本解決は RBI（[#72](https://github.com/f8924919/web-proxy/issues/72)）。
+- ヘッドレス自体の検出回避・egress IP レピュテーションは本機能の対象外（[#73](https://github.com/f8924919/web-proxy/issues/73)）。ブラウザ化＝アンチボット突破ではない。
+
+---
+
 ## レスポンスヘッダー処理
 
 以下のヘッダーを除去してからブラウザへ返す。
