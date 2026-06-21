@@ -356,7 +356,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 `rewriteHtml` が閲覧ページの `<body>` 直後（アドレスバーに続けて）に登録用 `<script>` を注入する。登録 URL は `${BASE_PATH}/sw.js`、スコープは `${BASE_PATH}/`。
 
-- SW スクリプトは `self.registration.scope` から自身の `BASE_PATH` を導出する（リバースプロキシのパスプレフィックス対応。`next.config.ts` は `basePath` 未使用のため、ブラウザから見えるスコープ＝プレフィックス込みのパスになる）。
+- SW スクリプトは `self.registration.scope` から自身の `BASE_PATH` を導出する（リバースプロキシのパスプレフィックス対応。`next.config.mjs` は `basePath` 未使用のため、ブラウザから見えるスコープ＝プレフィックス込みのパスになる）。
 
 ### `fetch` ハンドラの処理
 
@@ -521,9 +521,11 @@ code-server のポート転送（`/proxy/3000/`）など、リバースプロキ
 NEXT_PUBLIC_BASE_PATH=/proxy/3000
 ```
 
-### `next.config.ts` — `assetPrefix`
+### `next.config.mjs` — `assetPrefix`
 
-```ts
+本番（`next start`）で TypeScript を要求しないよう `.mjs`（型は JSDoc）とする（#87。`.ts` 設定は起動時トランスパイルで `typescript` を必要とし、prune 済み本番イメージで起動失敗するため）。
+
+```js
 assetPrefix: process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 ```
 
