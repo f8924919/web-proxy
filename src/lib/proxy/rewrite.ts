@@ -57,6 +57,22 @@ const ADDRESS_BAR_HTML = (currentUrl: string) =>
   <a href="${BASE_PATH}/" style="color:#aaa;font-size:13px;text-decoration:none">ホーム</a>
 </div>`.trim();
 
+// url 未指定の GET /browse 用の案内ページ HTML（HTTP 200・自動遷移なし）。
+// 以前はホーム（${BASE_PATH}/）へ 307 リダイレクトしていたが、リバースプロキシ
+// （code-server のポート転送 /proxy/3000）配下では戻り先が末尾スラッシュ正規化で
+// 404 になっていた。リダイレクトせず、アドレスバー（フォームは ${BASE_PATH}/browse?url=
+// へ遷移＝正しく解決される経路）を含む 200 ページをその場で返して 404 を解消する。
+// アドレスバー HTML は ADDRESS_BAR_HTML を再利用し重複させない。
+// 仕様: docs/spec/features/proxy.md §url 未指定時の案内ページ（GET）（#74）
+export function noUrlBrowseHtml(): string {
+  return `<!DOCTYPE html><html lang="ja"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>URL を入力</title></head><body style="margin:0;background:#f5f5f5">
+${ADDRESS_BAR_HTML("")}
+<div style="padding:2rem;font-family:sans-serif;color:#333">
+<p>閲覧する URL が指定されていません。上のアドレスバーに URL を入力して「移動」を押してください。</p>
+</div>
+</body></html>`;
+}
+
 // GET フォーム送信の振り向け先を決定する純粋関数。
 // GET フォーム送信ではブラウザが action のクエリ文字列（?url=<target>）を破棄し
 // フォーム項目で置き換えるため url が消失する。これを補い、ターゲットのクエリを
