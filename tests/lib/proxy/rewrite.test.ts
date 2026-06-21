@@ -187,6 +187,17 @@ describe("rewriteHtml", () => {
     expect(scriptIdx).toBeGreaterThan(bodyIdx);
   });
 
+  test("クリック横取りは capture・stopImmediatePropagation・#proxy-addressbar 除外を含む（#82）", () => {
+    const html = `<html><body><p>hello</p></body></html>`;
+    const result = rewriteHtml(html, BASE);
+    // capture フェーズ委任（SPA の onClick より先に発火）
+    expect(result).toContain("addEventListener('click'");
+    // SPA ルーターの onClick 横取りを阻止
+    expect(result).toContain("stopImmediatePropagation");
+    // 自前 UI（アドレスバー）内は除外
+    expect(result).toContain("proxy-addressbar");
+  });
+
   describe("document.domain ドメインガード無効化シム", () => {
     // 仕様: docs/spec/features/proxy.md §document.domain ドメインガードの無効化
     const YAHOO = "https://news.yahoo.co.jp/categories/science";
@@ -315,9 +326,10 @@ describe("buildGetFormDestination", () => {
 
 describe("buildClickNavDestination", () => {
   // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
-  const PAGE = `https://proxy.test/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/")}`;
+  const TARGET = "https://www.yahoo.co.jp/";
+  const PAGE = `https://proxy.test/browse?url=${encodeURIComponent(TARGET)}`;
 
-  test("http(s) 絶対 URL: 閲覧ページのパスを再利用して /browse へ", () => {
+  test("外部オリジンの http(s) 絶対 URL: 閲覧ページのパスを再利用して /browse へ", () => {
     const href = "https://news.yahoo.co.jp/articles/abc";
     expect(buildClickNavDestination(href, PAGE)).toBe(
       `/browse?url=${encodeURIComponent(href)}`
@@ -333,32 +345,59 @@ describe("buildClickNavDestination", () => {
 
   test("BASE_PATH（リバースプロキシのパスプレフィックス）を遷移先で保持する", () => {
     const href = "https://news.yahoo.co.jp/articles/abc";
-    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/")}`;
+    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent(TARGET)}`;
     expect(buildClickNavDestination(href, page)).toBe(
       `/proxy/3000/browse?url=${encodeURIComponent(href)}`
     );
   });
 
-  test("ルート相対 URL は対象外（null）", () => {
-    expect(buildClickNavDestination("/articles/abc", PAGE)).toBeNull();
+  test("ルート相対 URL は現ターゲット origin で解決して /browse へ（#82）", () => {
+    expect(buildClickNavDestination("/articles/abc", PAGE)).toBe(
+      `/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/articles/abc")}`
+    );
   });
 
-  test("相対 URL は対象外（null）", () => {
-    expect(buildClickNavDestination("articles/abc", PAGE)).toBeNull();
+  test("相対 URL は現ターゲットを base に解決して /browse へ（#82）", () => {
+    const page = `https://proxy.test/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/news/")}`;
+    expect(buildClickNavDestination("article/x", page)).toBe(
+      `/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/news/article/x")}`
+    );
   });
 
-  test("プロトコル相対 URL は対象外（null）", () => {
-    expect(buildClickNavDestination("//news.yahoo.co.jp/x", PAGE)).toBeNull();
+  test("プロトコル相対 URL は外部絶対として /browse へ（#82）", () => {
+    expect(buildClickNavDestination("//news.yahoo.co.jp/x", PAGE)).toBe(
+      `/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/x")}`
+    );
   });
 
-  test("# アンカー・javascript: は対象外（null）", () => {
-    expect(buildClickNavDestination("#section", PAGE)).toBeNull();
-    expect(buildClickNavDestination("javascript:void(0)", PAGE)).toBeNull();
-  });
-
-  test("既に書き換え済みの自前リンク（/browse?url=…）は対象外（null）", () => {
+  test("既に書き換え済みの proxy browse リンクはそのままフルナビゲーションさせる（#82）", () => {
     const self = `/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/articles/abc")}`;
-    expect(buildClickNavDestination(self, PAGE)).toBeNull();
+    expect(buildClickNavDestination(self, PAGE)).toBe(self);
+  });
+
+  test("BASE_PATH 付きの書き換え済み browse リンクもそのまま返す（#82）", () => {
+    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent(TARGET)}`;
+    const self = `/proxy/3000/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/x")}`;
+    expect(buildClickNavDestination(self, page)).toBe(self);
+  });
+
+  test("# 同一ページアンカーは対象外（null）", () => {
+    expect(buildClickNavDestination("#section", PAGE)).toBeNull();
+  });
+
+  test.each([
+    ["javascript:void(0)"],
+    ["mailto:a@b.com"],
+    ["tel:0123"],
+    ["data:text/plain,hi"],
+  ])("非 http スキーム %s は対象外（null）", (href) => {
+    expect(buildClickNavDestination(href, PAGE)).toBeNull();
+  });
+
+  test("閲覧ページに url= が無い場合の相対リンクは対象外（null）", () => {
+    expect(
+      buildClickNavDestination("/articles/abc", "https://proxy.test/browse")
+    ).toBeNull();
   });
 
   test("pageUrl が不正なら null", () => {
