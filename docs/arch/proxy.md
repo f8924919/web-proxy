@@ -25,6 +25,7 @@ src/
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
 │       ├── loopGuard.ts      # ナビゲーションループ検出（enablejs 自己再ナビ対策）
+│       ├── promotion.ts      # ヒューリスティック自動ティア昇格（崩れ/チャレンジ検出・再昇格抑止）
 │       └── response.ts       # nullBodyStatus 判定・相対リダイレクト生成ユーティリティ
 └── ...
 
@@ -56,6 +57,10 @@ public/
    → SSRF ブロックなら 403 / 到達不能なら 502
    - 受信リクエストの Cookie / Authorization を転送（[機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)）
    - POST・/api/proxy は対象外で常に中継ティア
+4b. 自動ティア昇格（GET の text/html・allowlist 未昇格のみ）: autoPromoteEnabledFromEnv() が有効で
+   shouldPromoteToBrowser(html, status, contentType) が崩れ/チャレンジを検出し、かつ promotionGuard が
+   同一 host+path を再昇格抑止しない場合、browserFetch で再取得して結果を差し替える
+   （失敗時は初回の中継応答へフォールバック。[機能仕様 §ヒューリスティック自動ティア昇格](../spec/features/proxy.md#ヒューリスティック自動ティア昇格崩れチャレンジ検出)）
 5. rewriteHtml(html, finalUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
    （baseUrl はリダイレクト追従後の最終 URL。#42。[機能仕様 §リダイレクト追従](../spec/features/proxy.md#リダイレクト追従)）
 6. headers.sanitize(responseHeaders) でヘッダーを除去
@@ -204,6 +209,31 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 - **Cookie ウォーミング**: `context.cookies()` を `cookieToSetCookie` で `Set-Cookie` 化し、`text/html` の `Response` ヘッダーへ載せる。以降は `relayBrowse` の `sanitizeHeaders` が既存どおりスコープ化する。
 - **ライフサイクル**: ブラウザはプロセス内で再利用し、context はリクエストごとに作って確実に close する。同時実行数を上限（`PROXY_BROWSER_MAX_CONCURRENCY`、既定 2）で絞る。
 - **テスト**: 純粋関数（上記）のみ単体テスト対象。ブラウザ I/O は[テスト方針](../testing/policy.md)によりテスト対象外。
+
+---
+
+## `src/lib/proxy/promotion.ts`
+
+> 関連仕様: [プロキシ機能仕様 §ヒューリスティック自動ティア昇格](../spec/features/proxy.md#ヒューリスティック自動ティア昇格崩れチャレンジ検出)。対応 Issue: [#70](https://github.com/f8924919/web-proxy/issues/70)。
+
+**役割**: 中継ティア（`proxyFetch`）の初回応答から「崩れ / チャレンジ」を検出し、ブラウザティアへ自動昇格すべきかを判定する。明示 allowlist（`shouldUseBrowser`）を**補助**するヒューリスティックで、`browserFetch.ts` のティア判定とは独立したモジュールに切り出す。
+
+### 昇格判定・有効化（純粋関数）
+
+| 純粋関数                                            | 役割                                                                                                                                                                |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autoPromoteEnabledFromEnv(env)`                    | `PROXY_BROWSER_AUTO_PROMOTE`（`true` / `1` / `on` で有効、既定無効）を解釈する                                                                                      |
+| `shouldPromoteToBrowser(html, status, contentType)` | `text/html` 応答について、チャレンジ語句 / `<noscript>` 主体 / `403`・`503` のいずれかを検出したら `true`。非 HTML は常に `false`（空 body 単独は判定材料にしない） |
+
+- **チャレンジ語句**: `enable javascript` / `enablejs` / `checking your browser` / `recaptcha` / Cloudflare チャレンジ等の語句を本文（小文字化）に含むか判定する。
+- **`<noscript>` 主体**: `<noscript>` を含み、かつ `<script>` / `<style>` / `<noscript>` を除いた可視テキストが極小であるかで判定する。
+
+### 再昇格抑止（`PromotionGuard`・インメモリ状態）
+
+- 同一 URL（`ホスト + パス` 単位・**クエリ無視**）を短時間ウィンドウ内で一度昇格したら再昇格しないことで、`proxyFetch` → `browserFetch` の二重取得を URL あたり高々 1 回 / ウィンドウに制限する。
+- `loopGuard.ts` / `rateLimit.ts` と同じ `Map<key, timestamps[]>` のスライディングウィンドウ方式（既定ウィンドウ 60 秒、プロセス再起動でリセット）。
+- 共有インスタンス `promotionGuard` を `route.ts` が利用する。`tryPromote(target)` は再昇格可なら記録して `true`、抑止中なら `false` を返す。
+- **テスト**: 純粋関数（`autoPromoteEnabledFromEnv` / `shouldPromoteToBrowser`）と `PromotionGuard` のウィンドウ挙動を単体テスト対象とする（[テスト方針](../testing/policy.md)）。`browserFetch` 本体（I/O）はテスト対象外。
 
 ---
 
