@@ -275,6 +275,19 @@ describe("buildGetFormDestination", () => {
     );
   });
 
+  test("Google 検索相当: BASE_PATH 付き action＋複数項目を /browse?url= に復元する（#78）", () => {
+    // form.submit() オーバーライド経路でも本関数を共用する。action には ?url=<target> が残る。
+    const action = `/proxy/3000/browse?url=${encodeURIComponent("https://www.google.com/search")}`;
+    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent("https://www.google.com")}`;
+    const dest = buildGetFormDestination("get", action, page, [
+      ["q", "playwright test"],
+      ["hl", "ja"],
+    ]);
+    expect(dest).toBe(
+      `/proxy/3000/browse?url=${encodeURIComponent("https://www.google.com/search?q=playwright+test&hl=ja")}`
+    );
+  });
+
   test("POST フォームは横取りしない（null を返す）", () => {
     const action = `/browse?url=${encodeURIComponent("https://example.com/search")}`;
     expect(
