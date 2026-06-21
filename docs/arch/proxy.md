@@ -311,7 +311,8 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 1. method が GET 以外 → 何もしない（POST 等は action のクエリが保たれるため素通し）
 2. 送信フォームの action から url パラメータを取り出してターゲットとする
    （action に url が無い場合は window.location の url パラメータをフォールバック）
-3. preventDefault し、ターゲットのクエリ全体を FormData（フォーム項目）で置き換える
+3. preventDefault + stopImmediatePropagation（SPA の自前 submit ハンドラ阻止。#93）し、
+   ターゲットのクエリ全体を FormData（フォーム項目）で置き換える
 4. action（または window.location）のパス部（BASE_PATH 込みの …/browse）を再利用し、
    <path>?url=<encodeURIComponent(ターゲット)> へ window.location.href で遷移する
 

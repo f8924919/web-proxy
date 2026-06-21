@@ -130,7 +130,10 @@ export function buildGetFormDestination(
 // 純粋ロジック（buildGetFormDestination）を toString() で埋め込み、ブラウザでは
 // 2 経路で捕捉する:
 //  (A) document への submit イベント委任（capture）。動的フォーム・ネイティブ submit・
-//      requestSubmit（submit イベントを発火する）を含めて捕捉する。
+//      requestSubmit（submit イベントを発火する）を含めて捕捉する。横取り時は
+//      preventDefault に加え stopImmediatePropagation を呼び、SPA（React 等）が
+//      バブルの自前 submit ハンドラで実サイトへ後勝ち遷移するのを阻止する（#93。
+//      クリック横取りと同方式。例: www.yahoo.co.jp トップ検索）。
 //  (B) HTMLFormElement.prototype.submit のオーバーライド。form.submit()（プログラム送信）は
 //      submit イベントを発火しないため (A) で捕捉できない（例: Google 検索）。同じ
 //      buildGetFormDestination を適用して振り向ける（#78）。
@@ -144,7 +147,7 @@ const GET_FORM_INTERCEPT_HTML =
   `if(f.closest&&f.closest('#proxy-addressbar'))return;` +
   `var fd;try{fd=new FormData(f,e.submitter)}catch(_){fd=new FormData(f)}` +
   `var dest=build(f.getAttribute('method')||'get',f.getAttribute('action')||'',location.href,Array.from(fd.entries()));` +
-  `if(dest){e.preventDefault();location.href=dest;}` +
+  `if(dest){e.preventDefault();e.stopImmediatePropagation();location.href=dest;}` +
   `},true);` +
   // (B) form.submit()（プログラム送信）。submit イベントを出さないので prototype を上書きする。
   `var _s=HTMLFormElement.prototype.submit;` +
