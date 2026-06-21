@@ -1,11 +1,12 @@
 /** @jest-environment node */
-// 仕様: docs/spec/features/proxy.md §HTML 書き換え / §CSS URL 書き換え
+// 仕様: docs/spec/features/proxy.md §HTML 書き換え / §CSS URL 書き換え / §url 未指定時の案内ページ
 
 import {
   rewriteHtml,
   rewriteCss,
   buildGetFormDestination,
   buildClickNavDestination,
+  noUrlBrowseHtml,
 } from "@/lib/proxy/rewrite";
 
 const BASE = "https://example.com";
@@ -384,6 +385,23 @@ describe("rewriteCss", () => {
     const result = rewriteCss(css, BASE);
     expect(result).toContain(
       `/api/proxy?url=${encodeURIComponent("https://cdn.example.com/bg.png")}`
+    );
+  });
+});
+
+describe("noUrlBrowseHtml", () => {
+  test("アドレスバーを含む 200 用の HTML を返す", () => {
+    const html = noUrlBrowseHtml();
+    expect(html).toContain('id="proxy-addressbar"');
+  });
+
+  test("アドレスバーのフォームが /browse?url= への導線を持つ", () => {
+    expect(noUrlBrowseHtml()).toContain("/browse?url=");
+  });
+
+  test("自動遷移（meta refresh）を含まない", () => {
+    expect(noUrlBrowseHtml().toLowerCase()).not.toContain(
+      'http-equiv="refresh"'
     );
   });
 });
