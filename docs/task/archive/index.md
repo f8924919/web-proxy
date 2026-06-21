@@ -22,6 +22,7 @@
 | [70-heuristic-auto-tier-promotion.md](70-heuristic-auto-tier-promotion.md) | 崩れ/チャレンジ検出によるブラウザティア自動昇格（noscript/チャレンジ語句/403・503・再昇格抑止）Issue #70 / PR #80      | 2026-06-21 |
 | [82-spa-click-nav-intercept.md](82-spa-click-nav-intercept.md)             | SPA クリックの proxy 離脱対策（クリック横取り強化・ルート相対解決・stopImmediatePropagation）Issue #82 / PR #83        | 2026-06-21 |
 | [71-production-browser-backend.md](71-production-browser-backend.md)       | 本番ブラウザ実行基盤を env で差し替え可能化（自前 Chromium / 外部 CDP・Dockerfile・playwright 昇格）Issue #71 / PR #85 | 2026-06-21 |
+| [87-docker-next-config-mjs.md](87-docker-next-config-mjs.md)               | Docker 本番起動の next.config TS 依存を解消（next.config.ts → .mjs 化）Issue #87 / PR #88                             | 2026-06-21 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
