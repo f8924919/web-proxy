@@ -94,9 +94,10 @@ NEXT_PUBLIC_BASE_PATH=/proxy/3000
 | `PROXY_BROWSER_TIMEOUT_MS`      | `15000`       | `page.goto` のタイムアウト（ミリ秒）                                                                                                        |
 | `PROXY_BROWSER_SETTLE_MS`       | `1500`        | 読み込み後に DOM 取得まで待つ追加ミリ秒（JS の落ち着き待ち）                                                                                |
 | `PROXY_BROWSER_MAX_CONCURRENCY` | `2`           | 同時に起動するブラウザ context の上限                                                                                                       |
+| `PROXY_BROWSER_CDP_URL`         | （空）        | 設定すると `chromium.launch()` の代わりに外部ブラウザサービスへ `connectOverCDP` で接続（#71）。空なら自前 Chromium をインプロセス起動      |
 | `PROXY_USER_AGENT`              | （Chrome UA） | ブラウザ・通常中継の双方でターゲットへ送る既定 User-Agent を上書き                                                                          |
 
-> **前提（Chromium バイナリ）**: 本機能はブラウザ起動に Chromium 本体を要するため、`npx playwright install chromium`（必要に応じ `--with-deps`、[§8.1](#81-セットアップ初回のみ) と同じ）を事前に実行しておくこと。Playwright は現状 devDependency のため、本番でブラウザ中継を使う場合は依存の昇格と RAM・起動コストの考慮が要る（本番実行基盤の決定は [#71](https://github.com/f8924919/web-proxy/issues/71)）。
+> **前提（Chromium バイナリ）**: 自前 Chromium で起動する場合（`PROXY_BROWSER_CDP_URL` 未設定）は Chromium 本体が必要なため、`npx playwright install chromium`（必要に応じ `--with-deps`、[§8.1](#81-セットアップ初回のみ) と同じ）を事前に実行しておくこと。`PROXY_BROWSER_CDP_URL` を設定して外部サービスへ接続する場合は Chromium 本体は不要。本番デプロイ（コンテナ・依存・シークレット）は [§9](#9-本番デプロイブラウザ実行基盤71) を参照。
 
 ---
 
@@ -242,3 +243,52 @@ npm run debug:browser -- '/browse?url=https://example.com'
 DEBUG_BROWSER_WAIT_UNTIL=domcontentloaded DEBUG_BROWSER_TIMEOUT_MS=60000 \
   npm run debug:browser -- https://news.yahoo.co.jp/categories/science
 ```
+
+---
+
+## 9. 本番デプロイ（ブラウザ実行基盤・#71）
+
+ブラウザバック中継（[§5](#ブラウザバック中継browser-backed-fetch任意)）を本番で使う場合のブラウザ実行基盤を定める。`browserFetch` の**インターフェースは不変**で、バックエンドだけを env で差し替える（接合点は `getBrowser()` の 1 関数）。仕様は [spec §ブラウザ実行基盤](spec/features/proxy.md#ブラウザ実行基盤バックエンドの差し替え71)、実装は [arch §ブラウザ実行基盤の差し替え](arch/proxy.md#ブラウザ実行基盤の差し替え純粋関数--getbrowser71)。
+
+### 9.1 採用方針（比較と決定）
+
+| 観点                 | 自前 Chromium 同梱（既定）                 | 外部ブラウザサービス（CDP 接続）                                          |
+| -------------------- | ------------------------------------------ | ------------------------------------------------------------------------- |
+| 選択方法             | `PROXY_BROWSER_CDP_URL` 未設定             | `PROXY_BROWSER_CDP_URL` を CDP/WS エンドポイントに設定                    |
+| コスト               | 無課金（自前資源）                         | 従量/月額課金（小〜中規模なら無料枠〜数十ドル/月）                        |
+| 運用                 | RAM・Chromium 更新・クラッシュ復帰を自前で | 資源・更新は外部任せ。API キー/シークレット管理とネットワーク依存が増える |
+| stealth/アンチボット | 標準ヘッドレス（突破力は低い）             | 指紋偽装・CAPTCHA 解決等を備える製品あり                                  |
+| egress IP（#73）     | **サーバー IP のまま（#73 未解決）**       | residential/クリーン IP を持つ製品なら **#73 にも有効**                   |
+| レイテンシ           | ローカル起動分のみ                         | 外部往復が加わる                                                          |
+
+**決定**: 既定は**自前 Chromium 同梱（コンテナ）**。自己完結・無課金で、コンテナ（VPS/クラウド）デプロイ前提に合致する。**egress IP（[#73](https://github.com/f8924919/web-proxy/issues/73)）やアンチボット突破が要件になったときのみ**、`PROXY_BROWSER_CDP_URL` でクリーン IP を持つ外部 CDP サービスへ切り替える（コード変更不要）。
+
+外部サービスは `connectOverCDP` 互換であれば差し替え可能。代表例（採用時に最新の料金・条件を要確認）:
+
+| サービス                     | 接続               | 向き                                                              |
+| ---------------------------- | ------------------ | ----------------------------------------------------------------- |
+| Browserless                  | 直接 WS/CDP        | 最も素直に `connectOverCDP`。無料枠あり・資源offloadに手軽        |
+| Browserbase                  | Sessions API → CDP | CAPTCHA 解決込み。セッション生成の一手間あり                      |
+| Cloudflare Browser Rendering | CDP                | Workers 利用時に低レート                                          |
+| Bright Data Scraping Browser | CDP                | **residential IP・指紋偽装・CAPTCHA**。#73 重視ならこれ。帯域課金 |
+
+### 9.2 コンテナデプロイ（自前 Chromium）
+
+Playwright は本番でブラウザ中継を使うため **devDependency → dependency へ昇格**済み。コンテナは Chromium と OS 依存を同梱する Playwright 公式イメージ（タグは `package.json` の `playwright` と一致させる）を用いる。リポジトリの `Dockerfile` を使う。
+
+```bash
+docker build -t web-proxy .
+docker run -p 3000:3000 \
+  -e PROXY_BROWSER_MODE=allowlist \
+  -e PROXY_BROWSER_HOSTS=example.com \
+  web-proxy
+```
+
+- **本番想定値**: `PROXY_BROWSER_MAX_CONCURRENCY` は RAM に合わせて設定する（Chromium は 1 context あたり数百 MB 目安。既定 2 は小規模向け）。`PROXY_BROWSER_TIMEOUT_MS`（既定 15000）/ `PROXY_BROWSER_SETTLE_MS`（既定 1500）はターゲット特性に合わせ調整。context はリクエスト単位で確実に close し、ブラウザはプロセス内で再利用・切断時は自動再接続する（リーク防止）。
+- 外部サービスを使う場合は Chromium 同梱が不要になるため、より軽量な Node イメージ + `PROXY_BROWSER_CDP_URL` でも運用できる（その場合 `npx playwright install` は不要）。
+- **sandbox（自前 Chromium）**: Playwright 公式イメージはそのまま Chromium sandbox 込みで動作する想定。root 実行や権限制約のあるコンテナで起動に失敗する場合は、適切な seccomp/capabilities を付与するか、公式イメージ推奨の実行方法（非 root `pwuser` で実行）に従うこと。
+
+### 9.3 シークレット（外部サービス利用時）
+
+- `PROXY_BROWSER_CDP_URL` には API キー/トークンを**クエリやベーシック認証として URL に含める**形が多い（例: `wss://chrome.browserless.io?token=<KEY>`、Bright Data は `wss://<user>:<pass>@...`）。**シークレットとして注入**し、リポジトリにコミットしない（`.env.local` はコミット対象外、本番はオーケストレータのシークレット機構で渡す）。
+- ログに URL 全体を出さない（トークン漏えい防止）。`browserFetch` はエラー時もエンドポイント全文を出力しない。
