@@ -51,6 +51,8 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）が SPA
 - [x] 設計検討・方式決定（ユーザー確認）
 - [x] Issue 起票（#69 本体 + #70〜#73 フォロー）
 - [x] ブランチ作成（`feature/69-browser-backed-fetch`）
-- [ ] docs 先行（spec / arch / index / setup）
-- [ ] テスト先行（純粋関数）
-- [ ] 実装 → green
+- [x] docs 先行（spec / arch / 各 index / setup）
+- [x] テスト先行（純粋関数・35 ケース）
+- [x] 実装 → green（型 / lint / 256 テスト・フォーマット）
+- [x] 検証ゲート（verify 手動 green / docs-check 修正済 / evaluator 10/10 PASS）
+- [ ] PR 作成・マージ（ユーザー承認後）
