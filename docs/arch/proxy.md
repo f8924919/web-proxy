@@ -42,9 +42,10 @@ public/
 
 ```
 1. searchParams.get('url') を取得
-2. url が null / パース失敗 → 307 リダイレクト to ${BASE_PATH}/
-   （相対 Location。内部オリジン漏えい防止のため req.url から絶対 URL を組まない。
-    [機能仕様 §url 未指定時のホームリダイレクト](../spec/features/proxy.md#url-未指定時のホームリダイレクト)）
+2. url が null → アドレスバー付き案内ページ(200) を返す（リダイレクトしない。#74）
+   パース失敗 → 400
+   （リバースプロキシ配下で 307→ホームが 404 になるのを避けるため 200 ページを直接返す。
+    [機能仕様 §url 未指定時の案内ページ](../spec/features/proxy.md#url-未指定時の案内ページget)）
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
 3b. navigationLoopGuard.check(ip, url) → ループ検出なら静的案内ページ(200) を返して打ち切り
    （host+path 単位の短時間連続遷移を検出。[機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策)）
@@ -69,7 +70,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 ```
 1. searchParams.get('url') を取得
-2. url が null / パース失敗 → 400（GET のホームリダイレクトとは異なる）
+2. url が null / パース失敗 → 400（GET の案内ページとは異なり 400）
 3. pageRateLimiter.check(...)（GET と同じバケット）→ 超過なら 429
 4. proxyFetch(url, { method: 'POST', body: req.body,
                      headers: { ...forwardableRequestHeaders(req.headers), 'content-type': … } })
@@ -239,7 +240,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 > 関連仕様: [プロキシ機能仕様 §GET フォーム送信の横取り](../spec/features/proxy.md#get-フォーム送信の横取り)
 
-`rewriteHtml` は `<body>` 直後（アドレスバー・SW 登録に続けて）に、GET フォーム送信を横取りする `<script>` を注入する。GET フォーム送信ではブラウザが `action` のクエリ文字列（`?url=<target>`）を破棄し、`url` が消失して [ブラウズ Route Handler](#route-handler-srcappbrowseroutets) がホームへリダイレクトしてしまうため、それを補う。
+`rewriteHtml` は `<body>` 直後（アドレスバー・SW 登録に続けて）に、GET フォーム送信を横取りする `<script>` を注入する。GET フォーム送信ではブラウザが `action` のクエリ文字列（`?url=<target>`）を破棄し、`url` が消失して [ブラウズ Route Handler](#route-handler-srcappbrowseroutets) が案内ページ（HTTP 200）を表示してしまうため、それを補う。
 
 ```
 document に submit を capture で委任（動的フォームにも効く）:

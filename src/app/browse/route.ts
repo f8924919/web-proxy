@@ -9,12 +9,12 @@ import {
   shouldUseBrowser,
   browserTierConfigFromEnv,
 } from "@/lib/proxy/browserFetch";
-import { rewriteHtml } from "@/lib/proxy/rewrite";
+import { rewriteHtml, noUrlBrowseHtml } from "@/lib/proxy/rewrite";
 import {
   sanitizeHeaders,
   forwardableRequestHeaders,
 } from "@/lib/proxy/headers";
-import { isNullBodyStatus, relativeRedirect } from "@/lib/proxy/response";
+import { isNullBodyStatus } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
 import { navigationLoopGuard, loopGuidanceHtml } from "@/lib/proxy/loopGuard";
 import { getClientIp } from "@/lib/proxy/clientIp";
@@ -44,10 +44,12 @@ export async function GET(req: NextRequest) {
   const url = req.nextUrl.searchParams.get("url");
 
   if (!url) {
-    // 相対 Location でホームへ。req.url から絶対 URL を組むと、リバースプロキシ /
-    // ポート転送越しで内部オリジン（localhost）が漏れるため使わない。
-    const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-    return relativeRedirect(`${basePath}/`, 307);
+    // url 未指定はリダイレクトせず、アドレスバー付き案内ページ(200) をその場で返す。
+    // 以前のホーム(${BASE_PATH}/)への 307 はリバースプロキシ配下で 404 になっていた（#74）。
+    return new Response(noUrlBrowseHtml(), {
+      status: 200,
+      headers: { "Content-Type": "text/html; charset=utf-8" },
+    });
   }
 
   let parsed: URL;
