@@ -7,6 +7,7 @@ import {
   shouldUseBrowser,
   resolveBrowserWaitConfig,
   cookieToSetCookie,
+  browserBackendFromEnv,
 } from "@/lib/proxy/browserFetch";
 
 describe("parseBrowserHosts", () => {
@@ -154,5 +155,35 @@ describe("cookieToSetCookie", () => {
   test("omits Expires for a session cookie (expires = -1)", () => {
     const out = cookieToSetCookie({ name: "sid", value: "abc", expires: -1 });
     expect(out.toLowerCase()).not.toContain("expires=");
+  });
+});
+
+describe("browserBackendFromEnv", () => {
+  // 仕様: docs/spec/features/proxy.md §ブラウザ実行基盤（バックエンドの差し替え・#71）
+  test("PROXY_BROWSER_CDP_URL 未設定なら自前 Chromium 起動（launch）", () => {
+    expect(browserBackendFromEnv({})).toEqual({ mode: "launch" });
+  });
+
+  test.each(["", "   "])(
+    "空・空白のみの CDP URL は launch にフォールバック（%p）",
+    (raw) => {
+      expect(browserBackendFromEnv({ PROXY_BROWSER_CDP_URL: raw })).toEqual({
+        mode: "launch",
+      });
+    }
+  );
+
+  test("CDP URL があれば cdp バックエンド（endpoint を保持）", () => {
+    const endpoint = "wss://chrome.example.com/?token=secret";
+    expect(browserBackendFromEnv({ PROXY_BROWSER_CDP_URL: endpoint })).toEqual({
+      mode: "cdp",
+      endpoint,
+    });
+  });
+
+  test("CDP URL の前後空白はトリムする", () => {
+    expect(
+      browserBackendFromEnv({ PROXY_BROWSER_CDP_URL: "  wss://h/cdp  " })
+    ).toEqual({ mode: "cdp", endpoint: "wss://h/cdp" });
   });
 });
