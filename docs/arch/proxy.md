@@ -242,8 +242,10 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 `rewriteHtml` は `<body>` 直後（アドレスバー・SW 登録に続けて）に、GET フォーム送信を横取りする `<script>` を注入する。GET フォーム送信ではブラウザが `action` のクエリ文字列（`?url=<target>`）を破棄し、`url` が消失して [ブラウズ Route Handler](#route-handler-srcappbrowseroutets) が案内ページ（HTTP 200）を表示してしまうため、それを補う。
 
+注入スクリプトは 2 経路で捕捉する。いずれも振り向け先の決定は純粋関数 `buildGetFormDestination` を共用する。
+
 ```
-document に submit を capture で委任（動的フォームにも効く）:
+(A) document に submit を capture で委任（動的フォーム・ネイティブ submit・requestSubmit にも効く）:
 0. 自前のアドレスバー（#proxy-addressbar 内のフォーム）は独自 onsubmit を持つため除外
 1. method が GET 以外 → 何もしない（POST 等は action のクエリが保たれるため素通し）
 2. 送信フォームの action から url パラメータを取り出してターゲットとする
@@ -251,9 +253,15 @@ document に submit を capture で委任（動的フォームにも効く）:
 3. preventDefault し、ターゲットのクエリ全体を FormData（フォーム項目）で置き換える
 4. action（または window.location）のパス部（BASE_PATH 込みの …/browse）を再利用し、
    <path>?url=<encodeURIComponent(ターゲット)> へ window.location.href で遷移する
+
+(B) HTMLFormElement.prototype.submit のオーバーライド（#78）:
+- form.submit()（プログラム送信）は submit イベントを発火しないため (A) で捕捉できない
+  （例: Google 検索）。prototype を上書きして同じ buildGetFormDestination を適用する。
+- 自前アドレスバー / GET 以外 / 復元不可（dest が null）/ 例外時は、元の submit を
+  そのまま呼ぶ（挙動を変えない）。dest が得られた場合のみ location.href で遷移する。
 ```
 
-`BASE_PATH` は `action`/`window.location` のパス部をそのまま再利用することで保持される（スクリプト内で個別に組み立てない）。
+`BASE_PATH` は `action`/`window.location` のパス部をそのまま再利用することで保持される（スクリプト内で個別に組み立てない）。`location.assign` / `history` 駆動の純粋な JS ナビゲーション（フォームを介さない）は対象外。
 
 ### クライアント側ナビゲーション横取りスクリプト注入
 
