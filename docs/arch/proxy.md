@@ -214,6 +214,23 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 - **切断時の再接続**: 取得した `Browser` の `disconnected` で共有参照（`sharedBrowser`）を `null` に戻し、次回呼び出しで再接続させる（外部 CDP は idle 切断し得るため。launch も同様にクラッシュ復帰）。`isConnected()` チェックと併用。
 - **同時実行・タイムアウト・リーク防止（本番）**: `PROXY_BROWSER_MAX_CONCURRENCY`（既定 2）の簡易セマフォ、`PROXY_BROWSER_TIMEOUT_MS`（既定 15000）、context はリクエスト単位で `finally` に `close()`（ブラウザは再利用）。本番想定値は [setup.md §9](../setup.md#9-本番デプロイブラウザ実行基盤71) を参照。
 
+### アンチボット対策（egress IP プロキシ / stealth・#73）
+
+> 関連仕様: [プロキシ機能仕様 §アンチボット対策](../spec/features/proxy.md#アンチボット対策egress-ip--stealth73)。
+
+egress IP が支配的なため、最小実装に留める（突破は保証しない）。
+
+| 純粋関数 / 定数            | 役割                                                                                                                                                                                         |
+| -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browserProxyFromEnv(env)` | `PROXY_BROWSER_PROXY_SERVER`（+ 任意 `..._PROXY_USERNAME` / `..._PROXY_PASSWORD`）から Playwright の `{ server, username?, password? }` を組み立てる。未設定なら `undefined`（プロキシ無し） |
+| `STEALTH_LAUNCH_ARGS`      | 自前 `chromium.launch()` に渡す Chrome フラグ（`--disable-blink-features=AutomationControlled`）                                                                                             |
+| `STEALTH_INIT_SCRIPT`      | 全 context に注入する init script（`navigator.webdriver` を隠す）                                                                                                                            |
+
+- **egress IP（プロキシ経路）**: `getBrowser()` の `launch` 分岐で `browserProxyFromEnv()` が非 `undefined` なら `chromium.launch({ proxy, ... })` に渡す（ブラウザ全体に適用）。CDP 分岐は外部サービス側の IP プールに委ねるため適用しない。SSRF ガード（`installSsrfGuard`）は上流プロキシ有無に関わらず維持。
+- **stealth（launch のみ・args）**: `launch` 分岐で `STEALTH_LAUNCH_ARGS` を付与。CDP（外部サービス）はサービス側 stealth に委ねるため args は渡せない（接続のみ）。
+- **stealth（両バックエンド・init script）**: `browserFetch` の `newContext` 直後に `context.addInitScript(STEALTH_INIT_SCRIPT)` を呼ぶ。launch / CDP の両方で各ページのスクリプト実行前に `navigator.webdriver` を隠す。
+- **テスト**: `browserProxyFromEnv`（純粋関数）と stealth 定数の内容を単体テスト対象とする。`launch`/`addInitScript` の I/O 配線は[テスト方針](../testing/policy.md)によりテスト対象外。
+
 ### `browserFetch(url, options?)`（ランタイム配線・I/O）
 
 - **Playwright は遅延ロード**（`await import("playwright")`）。ティアが使われない限り読み込まない（バンドル肥大・常時ロードを避ける）。バックエンドは `getBrowser()` が `browserBackendFromEnv()` に従い launch / CDP を選ぶ（#71）。

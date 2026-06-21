@@ -8,6 +8,9 @@ import {
   resolveBrowserWaitConfig,
   cookieToSetCookie,
   browserBackendFromEnv,
+  browserProxyFromEnv,
+  STEALTH_LAUNCH_ARGS,
+  STEALTH_INIT_SCRIPT,
 } from "@/lib/proxy/browserFetch";
 
 describe("parseBrowserHosts", () => {
@@ -185,5 +188,65 @@ describe("browserBackendFromEnv", () => {
     expect(
       browserBackendFromEnv({ PROXY_BROWSER_CDP_URL: "  wss://h/cdp  " })
     ).toEqual({ mode: "cdp", endpoint: "wss://h/cdp" });
+  });
+});
+
+describe("browserProxyFromEnv", () => {
+  // 仕様: docs/spec/features/proxy.md §アンチボット対策（egress IP / stealth・#73）
+  test.each(["", "   "])(
+    "PROXY_BROWSER_PROXY_SERVER 未設定・空白なら undefined（%p）",
+    (raw) => {
+      expect(
+        browserProxyFromEnv({ PROXY_BROWSER_PROXY_SERVER: raw })
+      ).toBeUndefined();
+    }
+  );
+
+  test("空 env なら undefined", () => {
+    expect(browserProxyFromEnv({})).toBeUndefined();
+  });
+
+  test("server のみ指定", () => {
+    expect(
+      browserProxyFromEnv({ PROXY_BROWSER_PROXY_SERVER: "http://h:8080" })
+    ).toEqual({ server: "http://h:8080" });
+  });
+
+  test("server の前後空白はトリムする", () => {
+    expect(
+      browserProxyFromEnv({ PROXY_BROWSER_PROXY_SERVER: "  socks5://h:1080  " })
+    ).toEqual({ server: "socks5://h:1080" });
+  });
+
+  test("username / password を含める", () => {
+    expect(
+      browserProxyFromEnv({
+        PROXY_BROWSER_PROXY_SERVER: "http://h:8080",
+        PROXY_BROWSER_PROXY_USERNAME: "user",
+        PROXY_BROWSER_PROXY_PASSWORD: "pass",
+      })
+    ).toEqual({ server: "http://h:8080", username: "user", password: "pass" });
+  });
+
+  test("空の username / password は含めない", () => {
+    expect(
+      browserProxyFromEnv({
+        PROXY_BROWSER_PROXY_SERVER: "http://h:8080",
+        PROXY_BROWSER_PROXY_USERNAME: "",
+        PROXY_BROWSER_PROXY_PASSWORD: "",
+      })
+    ).toEqual({ server: "http://h:8080" });
+  });
+});
+
+describe("stealth 定数（#73）", () => {
+  test("launch args は AutomationControlled を無効化する", () => {
+    expect(STEALTH_LAUNCH_ARGS).toContain(
+      "--disable-blink-features=AutomationControlled"
+    );
+  });
+
+  test("init script は navigator.webdriver を隠す", () => {
+    expect(STEALTH_INIT_SCRIPT).toMatch(/webdriver/);
   });
 });
