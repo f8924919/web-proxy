@@ -95,6 +95,9 @@ NEXT_PUBLIC_BASE_PATH=/proxy/3000
 | `PROXY_BROWSER_SETTLE_MS`       | `1500`        | 読み込み後に DOM 取得まで待つ追加ミリ秒（JS の落ち着き待ち）                                                                                |
 | `PROXY_BROWSER_MAX_CONCURRENCY` | `2`           | 同時に起動するブラウザ context の上限                                                                                                       |
 | `PROXY_BROWSER_CDP_URL`         | （空）        | 設定すると `chromium.launch()` の代わりに外部ブラウザサービスへ `connectOverCDP` で接続（#71）。空なら自前 Chromium をインプロセス起動      |
+| `PROXY_BROWSER_PROXY_SERVER`    | （空）        | 自前ブラウザの上流プロキシ（例 `http://host:port` / `socks5://host:port`）。residential / クリーン IP を通す（#73）。空なら直アクセス       |
+| `PROXY_BROWSER_PROXY_USERNAME`  | （空）        | 上流プロキシのユーザー名（任意）                                                                                                            |
+| `PROXY_BROWSER_PROXY_PASSWORD`  | （空）        | 上流プロキシのパスワード（任意・シークレット）                                                                                              |
 | `PROXY_USER_AGENT`              | （Chrome UA） | ブラウザ・通常中継の双方でターゲットへ送る既定 User-Agent を上書き                                                                          |
 
 > **前提（Chromium バイナリ）**: 自前 Chromium で起動する場合（`PROXY_BROWSER_CDP_URL` 未設定）は Chromium 本体が必要なため、`npx playwright install chromium`（必要に応じ `--with-deps`、[§8.1](#81-セットアップ初回のみ) と同じ）を事前に実行しておくこと。`PROXY_BROWSER_CDP_URL` を設定して外部サービスへ接続する場合は Chromium 本体は不要。本番デプロイ（コンテナ・依存・シークレット）は [§9](#9-本番デプロイブラウザ実行基盤71) を参照。
@@ -292,3 +295,32 @@ docker run -p 3000:3000 \
 
 - `PROXY_BROWSER_CDP_URL` には API キー/トークンを**クエリやベーシック認証として URL に含める**形が多い（例: `wss://chrome.browserless.io?token=<KEY>`、Bright Data は `wss://<user>:<pass>@...`）。**シークレットとして注入**し、リポジトリにコミットしない（`.env.local` はコミット対象外、本番はオーケストレータのシークレット機構で渡す）。
 - ログに URL 全体を出さない（トークン漏えい防止）。`browserFetch` はエラー時もエンドポイント全文を出力しない。
+- `PROXY_BROWSER_PROXY_PASSWORD` も同様にシークレットとして注入する。
+
+### 9.4 アンチボット対策（egress IP / stealth・#73）
+
+> 仕様は [spec §アンチボット対策](spec/features/proxy.md#アンチボット対策egress-ip--stealth73)。**ヘッドレス化＝アンチボット突破ではない**。実用阻害の主因は **egress IP レピュテーション**（データセンター IP は Google 等の no-JS / bot 判定で支配的に弾かれる。#52 の調査結論）で、次いでヘッドレス検出。
+
+#### egress IP（クリーン IP の通し方）
+
+| 方式                        | 設定                                                | 向き・コスト                                                            |
+| --------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------- |
+| 自前ブラウザ + 上流プロキシ | `PROXY_BROWSER_PROXY_SERVER`（+ USERNAME/PASSWORD） | 自前 Chromium のまま residential / クリーン IP を通す。プロキシ課金のみ |
+| 外部ブラウザサービス（CDP） | `PROXY_BROWSER_CDP_URL`（§9.1）                     | IP プール・stealth ごと外部へ委譲。Bright Data 等は residential IP 内蔵 |
+
+- residential プロキシ例: Bright Data / Oxylabs / Smartproxy 等（帯域/IP 数課金）。データセンタープロキシは安価だが bot 判定で弾かれやすく、Google 等には residential が要る。
+- どちらも**規約・法令順守はデプロイ運用者の責任**。対象サイトの利用規約、residential プロキシ事業者の利用規約・取得元 IP の正当性を確認すること。
+
+#### stealth（ヘッドレス検出回避・組み込み軽量）
+
+- 自前 `chromium.launch()` に `--disable-blink-features=AutomationControlled` を付与し、全 context へ `navigator.webdriver` を隠す init script を注入する（依存追加なし）。単純なヘッドレス判定を緩和するが、**網羅的な突破は保証しない**。
+- 網羅的 stealth（playwright-extra/stealth 相当）は **導入しない**（egress IP が支配的で費用対効果が低い）。より強い stealth が要る場合は外部ブラウザサービス（実ブラウザ系・指紋偽装込み）に委ねる。
+
+#### Google 検索での実測（未実施・キー入手後）
+
+egress IP の質に依存するため、実測は residential IP を持つ外部サービス/プロキシのアカウント・キー入手後に行う。手順:
+
+1. クリーン IP を設定（`PROXY_BROWSER_PROXY_SERVER`=residential プロキシ、または `PROXY_BROWSER_CDP_URL`=residential IP 内蔵サービス）。
+2. `PROXY_BROWSER_MODE=allowlist` / `PROXY_BROWSER_HOSTS=google.com` でブラウザティアを有効化。
+3. `npm run debug:browser -- 'https://www.google.com/search?q=test'` または proxy 経由で実アクセスし、`/sorry/`（reCAPTCHA）・enablejs ループに落ちずに結果が出るかを確認。
+4. 結果（通る / 通らない・どの IP 種別で）を `docs/task/archive/73-*.md` か後続メモに記録する。
