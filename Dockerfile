@@ -21,7 +21,7 @@ RUN npm run build
 FROM base AS runtime
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
-COPY package.json package-lock.json next.config.ts ./
+COPY package.json package-lock.json next.config.mjs ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/public ./public

@@ -77,7 +77,7 @@ NEXT_PUBLIC_BASE_PATH=/proxy/3000
 
 設定すると以下に反映されます。
 
-- `next.config.ts` の `assetPrefix` — `_next/static/...` への HTML 参照パスにプレフィックスを付与
+- `next.config.mjs` の `assetPrefix` — `_next/static/...` への HTML 参照パスにプレフィックスを付与
 - `src/lib/proxy/rewrite.ts` — `/browse` / `/api/proxy` へのリンク書き換え時にプレフィックスを付与
 
 詳細は [docs/arch/proxy.md §リバースプロキシ下でのパスプレフィックス](arch/proxy.md) を参照。
