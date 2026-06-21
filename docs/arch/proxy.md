@@ -200,9 +200,23 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | `resolveBrowserWaitConfig(env)` | `PROXY_BROWSER_WAIT_UNTIL` / `PROXY_BROWSER_TIMEOUT_MS` / `PROXY_BROWSER_SETTLE_MS` を検証して `{ waitUntil, timeoutMs, settleMs }` を返す（不正値は既定へフォールバック。`debug-browser.mjs` と同方針、#39） |
 | `cookieToSetCookie(cookie)`     | Playwright の cookie オブジェクトを `Set-Cookie` 文字列へ変換する。`Domain` は付けず（`sanitizeSetCookie` がスコープ化）、`Path` / `Secure` / `HttpOnly` / `SameSite` / 永続 cookie の `Expires` を反映する   |
 
+### ブラウザ実行基盤の差し替え（純粋関数 + `getBrowser`・#71）
+
+> 関連仕様: [プロキシ機能仕様 §ブラウザ実行基盤](../spec/features/proxy.md#ブラウザ実行基盤バックエンドの差し替え71)。比較・デプロイは [setup.md §9](../setup.md#9-本番デプロイブラウザ実行基盤71)。
+
+`browserFetch` の**インターフェース契約（`(url, options?) => {response, finalUrl}`）を不変**に保ったまま、ブラウザの実行場所だけを差し替えられるようにする。差し替え接合点は `getBrowser()` の 1 関数のみ。
+
+| 純粋関数                     | 役割                                                                                                              |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `browserBackendFromEnv(env)` | `PROXY_BROWSER_CDP_URL` があれば `{ mode: "cdp", endpoint }`、無ければ `{ mode: "launch" }` を返す（既定 launch） |
+
+- **`getBrowser()` の分岐**: `mode==="cdp"` なら `chromium.connectOverCDP(endpoint)`（外部サービス）、`launch` なら `chromium.launch()`（自前 Chromium 同梱）。いずれも `Browser` 型を返すため呼び出し側は不変。
+- **切断時の再接続**: 取得した `Browser` の `disconnected` で共有参照（`sharedBrowser`）を `null` に戻し、次回呼び出しで再接続させる（外部 CDP は idle 切断し得るため。launch も同様にクラッシュ復帰）。`isConnected()` チェックと併用。
+- **同時実行・タイムアウト・リーク防止（本番）**: `PROXY_BROWSER_MAX_CONCURRENCY`（既定 2）の簡易セマフォ、`PROXY_BROWSER_TIMEOUT_MS`（既定 15000）、context はリクエスト単位で `finally` に `close()`（ブラウザは再利用）。本番想定値は [setup.md §9](../setup.md#9-本番デプロイブラウザ実行基盤71) を参照。
+
 ### `browserFetch(url, options?)`（ランタイム配線・I/O）
 
-- **Playwright は遅延ロード**（`await import("playwright")`）。ティアが使われない限り読み込まない（バンドル肥大・常時ロードを避ける）。
+- **Playwright は遅延ロード**（`await import("playwright")`）。ティアが使われない限り読み込まない（バンドル肥大・常時ロードを避ける）。バックエンドは `getBrowser()` が `browserBackendFromEnv()` に従い launch / CDP を選ぶ（#71）。
 - **SSRF**: 初回ナビゲーション URL に `assertSsrfAllowed`（`fetch.ts` から公開）を適用し、ブラウザの**全サブリクエスト**にも `context.route` 傍受で解決後 IP のブロックリスト照合を適用する（ブロックは中断）。
 - **コンテキスト**: 既定 UA（`PROXY_USER_AGENT` で上書き可、`fetch.ts` の `DEFAULT_USER_AGENT`）と `options.headers`（`Cookie` / `Authorization` 等）を `extraHTTPHeaders` として適用し、リクエストごとに新規 context を作って分離する。
 - **取得**: `page.goto`（`resolveBrowserWaitConfig` の待機）→ settle 待ち → `page.content()`（本文）/ `page.url()`（finalUrl）。失敗時もベストエフォートで収集して返す。

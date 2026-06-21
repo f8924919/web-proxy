@@ -68,6 +68,24 @@ export function shouldUseBrowser(
   );
 }
 
+// ブラウザ実行基盤（バックエンド）。自前 Chromium をインプロセス起動するか、
+// 外部ブラウザサービスへ CDP 接続するかを表す。インターフェース契約は不変で、
+// getBrowser() の起動方法だけがこれで切り替わる（#71）。
+export type BrowserBackend =
+  | { mode: "launch" }
+  | { mode: "cdp"; endpoint: string };
+
+// 環境変数からブラウザ実行基盤を決める。PROXY_BROWSER_CDP_URL が非空なら外部サービスへ
+// connectOverCDP（cdp）、未設定・空白のみなら自前 Chromium 起動（launch・既定）。
+// 仕様: docs/spec/features/proxy.md §ブラウザ実行基盤（バックエンドの差し替え・#71）
+export function browserBackendFromEnv(
+  env: Record<string, string | undefined> = process.env
+): BrowserBackend {
+  const endpoint = env.PROXY_BROWSER_CDP_URL?.trim();
+  if (endpoint) return { mode: "cdp", endpoint };
+  return { mode: "launch" };
+}
+
 export type BrowserWaitUntil =
   | "load"
   | "domcontentloaded"
@@ -147,11 +165,24 @@ async function getBrowser(): Promise<Browser> {
   if (sharedBrowser?.isConnected()) return sharedBrowser;
   if (!launching) {
     // Playwright は遅延ロード（ティアが使われない限り読み込まない）。
-    launching = import("playwright").then(({ chromium }) => chromium.launch());
+    // バックエンド（#71）: PROXY_BROWSER_CDP_URL があれば外部サービスへ connectOverCDP、
+    // 無ければ自前 Chromium をインプロセス起動する。呼び出し側は不変。
+    const backend = browserBackendFromEnv();
+    launching = import("playwright").then(({ chromium }) =>
+      backend.mode === "cdp"
+        ? chromium.connectOverCDP(backend.endpoint)
+        : chromium.launch()
+    );
   }
-  sharedBrowser = await launching;
+  const browser = await launching;
   launching = null;
-  return sharedBrowser;
+  sharedBrowser = browser;
+  // 切断時（外部 CDP の idle 切断・自前のクラッシュ等）は共有参照を捨て、
+  // 次回呼び出しで再接続・再起動させる（stale 参照・リーク防止）。
+  browser.once("disconnected", () => {
+    if (sharedBrowser === browser) sharedBrowser = null;
+  });
+  return browser;
 }
 
 // 同時に起動する context 数を上限で絞る簡易セマフォ。

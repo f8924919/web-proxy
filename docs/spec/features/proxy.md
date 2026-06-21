@@ -419,10 +419,17 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 
 > **限界**: 本機能はブラウザティアで解決できる「崩れ / JS チャレンジ」を自動で拾うものであり、egress IP に由来する no-JS 判定や本格的なアンチボット突破を保証するものではない（[#73](https://github.com/f8924919/web-proxy/issues/73)）。検出は best-effort で、誤検知時も初回応答へフォールバックして体験を悪化させない設計とする。
 
-### リソース・運用上の制約（PoC）
+### ブラウザ実行基盤（バックエンドの差し替え・#71）
 
-- **インプロセス Playwright（ローカル）前提**。本番のブラウザ実行場所（外部サービス化 / Chromium 同梱・資源管理）は[#71](https://github.com/f8924919/web-proxy/issues/71)で別途決定する。
-- Playwright は現状 devDependency で、ブラウザ起動には `npx playwright install chromium`（Chromium バイナリ）が必要。本番運用では依存の昇格と RAM・起動コストの考慮が要る（[setup.md](../../setup.md) 参照）。
+本番のブラウザ実行場所は、`browserFetch` の**インターフェース契約を変えずに**バックエンドだけを env で差し替えられる構成とする（[#71](https://github.com/f8924919/web-proxy/issues/71)。比較・採用方針・デプロイ手順は [setup.md §9](../../setup.md#9-本番デプロイブラウザ実行基盤71)）。
+
+| バックエンド          | 選択方法                                 | 用途                                                                                                                                                    |
+| --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 自前 Chromium（既定） | `PROXY_BROWSER_CDP_URL` 未設定           | コンテナに Chromium を同梱しインプロセス `chromium.launch()`。自己完結・無課金                                                                          |
+| 外部ブラウザサービス  | `PROXY_BROWSER_CDP_URL` を CDP/WS に設定 | `chromium.connectOverCDP()` で外部へ接続。資源・stealth・**クリーン egress IP**（[#73](https://github.com/f8924919/web-proxy/issues/73)）を外部へ逃がす |
+
+- **採用方針**: 既定は自前 Chromium 同梱（コンテナ）。**egress IP（#73）やアンチボットが要件のときのみ**、クリーン IP を持つ外部 CDP サービスへ env で切り替える。Playwright は本番でブラウザ中継を使うため devDependency から **dependency へ昇格**する。
+- **egress IP（#73）の扱い**: 自前 Chromium 同梱は egress IP がサーバー IP のままで [#73](https://github.com/f8924919/web-proxy/issues/73) を解決しない。外部 CDP サービス（residential/クリーン IP を持つもの）へ切り替えた場合に限り #73 にも効く。
 - ブラウザ実行は中継より大幅に遅く高コストなため、**同時実行数の上限**を設ける。レート制限（[§レート制限](#レート制限)）とは別軸。
 - **表示後の動的操作**（無限スクロールの追加読込・動的 XHR・クリック遷移）は依然として既存の横取り任せ（本機能は初回レンダリングのスナップショット）。根本解決は RBI（[#72](https://github.com/f8924919/web-proxy/issues/72)）。
 - ヘッドレス自体の検出回避・egress IP レピュテーションは本機能の対象外（[#73](https://github.com/f8924919/web-proxy/issues/73)）。ブラウザ化＝アンチボット突破ではない。
