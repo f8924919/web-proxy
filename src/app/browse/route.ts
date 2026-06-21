@@ -4,6 +4,11 @@ import {
   SsrfBlockedError,
   FetchTimeoutError,
 } from "@/lib/proxy/fetch";
+import {
+  browserFetch,
+  shouldUseBrowser,
+  browserTierConfigFromEnv,
+} from "@/lib/proxy/browserFetch";
 import { rewriteHtml, noUrlBrowseHtml } from "@/lib/proxy/rewrite";
 import {
   sanitizeHeaders,
@@ -69,9 +74,15 @@ export async function GET(req: NextRequest) {
 
   // 受信リクエストの Cookie / Authorization をターゲットへ転送し、認証セッションを維持する。
   // Cookie は現ターゲット origin にスコープされた分だけを転送する（サイト間アイソレーション）。
-  return relayBrowse(parsed, {
-    headers: forwardableRequestHeaders(req.headers, parsed.origin),
-  });
+  // allowlist 指定サイトはブラウザバック中継（browserFetch）へ昇格する（#69）。
+  const useBrowser = shouldUseBrowser(parsed.href, browserTierConfigFromEnv());
+  return relayBrowse(
+    parsed,
+    {
+      headers: forwardableRequestHeaders(req.headers, parsed.origin),
+    },
+    useBrowser
+  );
 }
 
 // フォーム POST 送信の中継。リクエストの method / body / Content-Type をターゲットへ転送する。
@@ -118,16 +129,40 @@ export async function POST(req: NextRequest) {
   });
 }
 
+// 中継ティアを選んでターゲットを取得する。ブラウザティアは SSRF 以外の失敗時に
+// 中継ティア（proxyFetch）へフォールバックし、ブラウザ依存で全損にしない（#69）。
+async function fetchTarget(
+  url: string,
+  fetchOptions: Parameters<typeof proxyFetch>[1],
+  useBrowser: boolean
+) {
+  if (!useBrowser) return proxyFetch(url, fetchOptions);
+  try {
+    return await browserFetch(url, fetchOptions);
+  } catch (err) {
+    // SSRF ブロックは 403 として扱うため伝播させる。
+    if (err instanceof SsrfBlockedError) throw err;
+    console.error("[proxy/browser-fallback]", err);
+    return proxyFetch(url, fetchOptions);
+  }
+}
+
 // proxyFetch とレスポンス処理（HTML 書き換え・サニタイズ・ステータス中継）を
 // GET / POST で共通化する。SSRF・到達不能のエラー処理もここに集約する。
+// useBrowser が true の GET はブラウザバック中継へ昇格する（POST は常に false）。
 async function relayBrowse(
   parsed: URL,
-  fetchOptions?: Parameters<typeof proxyFetch>[1]
+  fetchOptions?: Parameters<typeof proxyFetch>[1],
+  useBrowser = false
 ): Promise<Response> {
   let res: Response;
   let finalUrl: string;
   try {
-    ({ response: res, finalUrl } = await proxyFetch(parsed.href, fetchOptions));
+    ({ response: res, finalUrl } = await fetchTarget(
+      parsed.href,
+      fetchOptions,
+      useBrowser
+    ));
   } catch (err) {
     if (err instanceof SsrfBlockedError) {
       return htmlResponse("アクセスできない URL です。", 403);
