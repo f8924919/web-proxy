@@ -102,16 +102,33 @@ describe("クリックナビ横取りスクリプト（注入）", () => {
     });
   }
 
-  // 注入スクリプトは capture で先に走る。後続の capture リスナで defaultPrevented を観察する。
+  // 注入スクリプトが横取りすると location.href = dest を呼び出す。jsdom はナビゲーション
+  // 未実装のため console.error("Not implemented: navigation ...") が発火する。
+  // 注入スクリプトは stopImmediatePropagation() を呼ぶため後続 capture リスナでは
+  // defaultPrevented を観察できないので、console.error をスパイして検出する。
   function interceptedClick(
     target: Element,
     init: MouseEventInit = {}
   ): boolean {
-    let intercepted = false;
-    const probe = (e: Event) => {
-      intercepted = e.defaultPrevented;
+    let navigated = false;
+    const origError = console.error.bind(console);
+    console.error = (...args: unknown[]) => {
+      const msg = args[0];
+      // jsdom の navigation エラーは Error-like オブジェクト（instanceof Error が
+      // 異なる VM コンテキストのため false になり得る）として渡される。
+      // .message プロパティか文字列化で検出する。
+      const text =
+        msg != null &&
+        typeof (msg as { message?: unknown }).message === "string"
+          ? (msg as { message: string }).message
+          : typeof msg === "string"
+            ? msg
+            : String(msg);
+      if (text.includes("Not implemented: navigation")) {
+        navigated = true;
+      }
+      origError(...args);
     };
-    document.addEventListener("click", probe, true);
     try {
       target.dispatchEvent(
         new MouseEvent("click", { bubbles: true, cancelable: true, ...init })
@@ -119,8 +136,8 @@ describe("クリックナビ横取りスクリプト（注入）", () => {
     } catch {
       // jsdom はナビゲーション未実装で例外を投げ得るが、判定には影響しない
     }
-    document.removeEventListener("click", probe, true);
-    return intercepted;
+    console.error = origError;
+    return navigated;
   }
 
   function anchor(href: string, target?: string): HTMLAnchorElement {
@@ -163,14 +180,45 @@ describe("クリックナビ横取りスクリプト（注入）", () => {
     expect(interceptedClick(a)).toBe(false);
   });
 
-  test("http(s) 絶対 URL でない自前リンク（ルート相対 /browse?url= 済み・# アンカー）は横取りしない", () => {
+  test("書き換え済みの /browse?url= リンクはフルナビゲーションのために横取りする（#82）", () => {
+    // SPA ルーターに奪われる前にフルナビゲーションさせるため、
+    // 同一パス（browse）へのリンクも interceptedClick が true を返す。
     const wrapped = anchor(
       "/proxy/3000/browse?url=" +
         encodeURIComponent("https://news.yahoo.co.jp/articles/abc")
     );
-    expect(interceptedClick(wrapped)).toBe(false);
+    expect(interceptedClick(wrapped)).toBe(true);
+  });
+
+  test("# アンカーは横取りしない", () => {
     const hash = anchor("#section");
     expect(interceptedClick(hash)).toBe(false);
+  });
+
+  test("自前 UI（#proxy-addressbar 内のホームリンク）は横取りしない（#82）", () => {
+    const home = document.querySelector(
+      "#proxy-addressbar a"
+    ) as HTMLElement | null;
+    expect(home).not.toBeNull();
+    expect(interceptedClick(home as HTMLElement)).toBe(false);
+  });
+
+  test("capture でクリックを奪い SPA ルーター（バブル onClick）へ渡さない（#82）", () => {
+    // SPA（React 等）の onClick はバブルで発火し history.pushState で離脱する。
+    // 注入スクリプトは capture で先に発火し stopImmediatePropagation で阻止するため、
+    // バブルのリスナ（= SPA ルーター相当）には届かず、proxy がフルナビゲーションする。
+    const a = anchor("https://news.yahoo.co.jp/articles/abc");
+    let spaRouterRan = false;
+    const spaRouter = () => {
+      spaRouterRan = true;
+    };
+    document.addEventListener("click", spaRouter, false);
+    try {
+      expect(interceptedClick(a)).toBe(true);
+      expect(spaRouterRan).toBe(false);
+    } finally {
+      document.removeEventListener("click", spaRouter, false);
+    }
   });
 });
 
