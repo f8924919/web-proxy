@@ -9,6 +9,11 @@ import {
   shouldUseBrowser,
   browserTierConfigFromEnv,
 } from "@/lib/proxy/browserFetch";
+import {
+  autoPromoteEnabledFromEnv,
+  shouldPromoteToBrowser,
+  promotionGuard,
+} from "@/lib/proxy/promotion";
 import { rewriteHtml, noUrlBrowseHtml } from "@/lib/proxy/rewrite";
 import {
   sanitizeHeaders,
@@ -75,13 +80,15 @@ export async function GET(req: NextRequest) {
   // 受信リクエストの Cookie / Authorization をターゲットへ転送し、認証セッションを維持する。
   // Cookie は現ターゲット origin にスコープされた分だけを転送する（サイト間アイソレーション）。
   // allowlist 指定サイトはブラウザバック中継（browserFetch）へ昇格する（#69）。
+  // allowlist 非該当でも、中継ティアの結果が崩れ/チャレンジなら自動昇格する（#70。GET のみ許可）。
   const useBrowser = shouldUseBrowser(parsed.href, browserTierConfigFromEnv());
   return relayBrowse(
     parsed,
     {
       headers: forwardableRequestHeaders(req.headers, parsed.origin),
     },
-    useBrowser
+    useBrowser,
+    true
   );
 }
 
@@ -150,10 +157,13 @@ async function fetchTarget(
 // proxyFetch とレスポンス処理（HTML 書き換え・サニタイズ・ステータス中継）を
 // GET / POST で共通化する。SSRF・到達不能のエラー処理もここに集約する。
 // useBrowser が true の GET はブラウザバック中継へ昇格する（POST は常に false）。
+// allowAutoPromote が true（GET のみ）の場合、中継ティアの結果が崩れ/チャレンジなら
+// browserFetch で自動再取得する（#70）。
 async function relayBrowse(
   parsed: URL,
   fetchOptions?: Parameters<typeof proxyFetch>[1],
-  useBrowser = false
+  useBrowser = false,
+  allowAutoPromote = false
 ): Promise<Response> {
   let res: Response;
   let finalUrl: string;
@@ -178,7 +188,7 @@ async function relayBrowse(
   const contentType = res.headers.get("content-type") ?? "";
   // Set-Cookie のスコープ鍵にはリダイレクト追従後の最終 URL の origin を用いる
   // （書き換え基準 baseUrl と揃える。#42）。
-  const outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
+  let outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
 
   try {
     // 204/304 などボディを持てないステータスはボディを null にして中継する
@@ -194,7 +204,30 @@ async function relayBrowse(
       });
     }
 
-    const html = await res.text();
+    let html = await res.text();
+
+    // 自動ティア昇格（#70）: 中継ティアの結果が崩れ/チャレンジなら browserFetch で再取得する。
+    // allowlist で既にブラウザティア（useBrowser）の場合・POST（allowAutoPromote=false）は対象外。
+    // 同一 host+path の再昇格は promotionGuard が抑止し、二重取得コストの無限ループを防ぐ。
+    if (
+      allowAutoPromote &&
+      !useBrowser &&
+      autoPromoteEnabledFromEnv() &&
+      shouldPromoteToBrowser(html, res.status, contentType) &&
+      promotionGuard.tryPromote(parsed)
+    ) {
+      try {
+        const promoted = await browserFetch(parsed.href, fetchOptions);
+        res = promoted.response;
+        finalUrl = promoted.finalUrl;
+        outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
+        html = await res.text();
+      } catch (err) {
+        // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。
+        console.error("[proxy/auto-promote]", err);
+      }
+    }
+
     // baseUrl はリダイレクト追従後の最終 URL を用いる（#42）。
     const rewritten = rewriteHtml(html, finalUrl);
     outHeaders.set("Content-Type", "text/html; charset=utf-8");
