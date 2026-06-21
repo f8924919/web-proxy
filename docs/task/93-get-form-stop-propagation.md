@@ -1,6 +1,6 @@
 # #93 yahoo.co.jp 検索でプロキシが外れる
 
-対応 Issue: [#93](https://github.com/f8924919/web-proxy/issues/93)
+対応 Issue: [#93](https://github.com/f8924919/web-proxy/issues/93) / PR: [#94](https://github.com/f8924919/web-proxy/pull/94)
 
 ## 背景
 
