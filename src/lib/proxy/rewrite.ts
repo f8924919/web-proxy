@@ -1,5 +1,6 @@
 import { parse } from "node-html-parser";
 import { buildProxyPath } from "./proxyPath";
+import { buildBrowsePath } from "./browsePath";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
@@ -16,7 +17,11 @@ function browseUrl(href: string, base: string): string {
   if (!resolved.startsWith("http://") && !resolved.startsWith("https://")) {
     return resolved;
   }
-  return `${BASE_PATH}/browse?url=${encodeURIComponent(resolved)}`;
+  // パス反映ナビ形式（/browse/<scheme>/<host>/<path>）。閲覧ページの location が
+  // ターゲットを反映し、SPA が location を読んで再構築するリンクが proxy 専用
+  // パラメータ（url=）で汚染されないようにする（#115）。
+  // 仕様: docs/spec/features/proxy.md §ページ遷移のパス反映
+  return buildBrowsePath(resolved, BASE_PATH);
 }
 
 // <meta http-equiv="refresh"> の content（"<遅延>;url=<TARGET>"）内の url を
@@ -124,12 +129,81 @@ ${ADDRESS_BAR_HTML("")}
 </body></html>`;
 }
 
+// 注入スクリプトにも埋め込む小さな純関数群（外部参照を持たず URL のみで完結）。
+// クリック横取り・GET フォーム横取りの両方が、パス反映ナビ形式（/browse/<scheme>/<host>/<path>・
+// #115）と後方互換（…/browse?url=）の両方から「現ターゲット」「振り向け先プレフィックス」を
+// 一貫して導出するために共有する。
+
+// 閲覧ページ／action URL から、パス反映ナビのプレフィックス（BASE_PATH 込みの …/browse/）を返す。
+// パス反映: …/browse/ マーカーまで。後方互換: 末尾が /browse なら + "/"。導出不能なら null。
+export function browseNavPrefix(pageUrl: string): string | null {
+  let p: URL;
+  try {
+    p = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  const MARKER = "/browse/";
+  const idx = p.pathname.indexOf(MARKER);
+  if (idx !== -1) return p.pathname.slice(0, idx + MARKER.length);
+  if (/\/browse$/.test(p.pathname)) return p.pathname + "/";
+  return null;
+}
+
+// proxy ナビ URL（パス反映 …/browse/<scheme>/<host>/<path> または後方互換 …/browse?url=）から
+// ターゲット絶対 URL を復元する。復元不能なら null。
+export function extractBrowseTarget(browseUrl: string): string | null {
+  let u: URL;
+  try {
+    u = new URL(browseUrl);
+  } catch {
+    return null;
+  }
+  const MARKER = "/browse/";
+  const idx = u.pathname.indexOf(MARKER);
+  if (idx !== -1) {
+    const rest = u.pathname.slice(idx + MARKER.length);
+    const fs = rest.indexOf("/");
+    if (fs === -1) return null;
+    const scheme = rest.slice(0, fs);
+    if (scheme !== "http" && scheme !== "https") return null;
+    const after = rest.slice(fs + 1);
+    const hs = after.indexOf("/");
+    const host = hs === -1 ? after : after.slice(0, hs);
+    if (!host) return null;
+    const path = hs === -1 ? "" : after.slice(hs);
+    try {
+      return new URL(scheme + "://" + host + path + u.search).href;
+    } catch {
+      return null;
+    }
+  }
+  return u.searchParams.get("url");
+}
+
+// 絶対 URL を、与えたプレフィックス（…/browse/）配下のパス反映ナビ形式に組み立てる。
+// percent-encoding を保持する（WHATWG URL の pathname/search をそのまま連結）。
+export function buildBrowseDest(
+  absoluteUrl: string,
+  prefix: string
+): string | null {
+  let u: URL;
+  try {
+    u = new URL(absoluteUrl);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+  const scheme = u.protocol.replace(/:$/, "");
+  return prefix + scheme + "/" + u.host + u.pathname + u.search + u.hash;
+}
+
 // GET フォーム送信の振り向け先を決定する純粋関数。
-// GET フォーム送信ではブラウザが action のクエリ文字列（?url=<target>）を破棄し
-// フォーム項目で置き換えるため url が消失する。これを補い、ターゲットのクエリを
-// フォーム項目で置き換えた /browse?url=<再エンコード> を組み立てる。
-// 横取り不要（GET 以外・ターゲット復元不可）なら null を返す。
-// 注入スクリプトはこの関数を toString() で埋め込むため、外部参照を持たず
+// パス反映ナビ形式（#115）ではターゲットがパス部に残り GET 送信でも失われないが、SPA の自前
+// submit ハンドラによる後勝ち遷移（#93）を阻止するため横取りは維持する。ターゲットを復元し、
+// そのクエリをフォーム項目で置き換えてパス反映ナビ形式 /browse/<scheme>/<host>/<path>?<再構築>
+// を組み立てる。横取り不要（GET 以外・ターゲット復元不可）なら null を返す。
+// 注入スクリプトはこの関数と上記ヘルパーを toString() で埋め込むため、外部参照を持たず
 // URL / URLSearchParams（ブラウザ・Node 共通のグローバル）のみで完結させる。
 // 仕様: docs/spec/features/proxy.md §GET フォーム送信の横取り
 export function buildGetFormDestination(
@@ -140,26 +214,22 @@ export function buildGetFormDestination(
 ): string | null {
   if ((method || "get").toLowerCase() !== "get") return null;
 
-  // action（書き換え済み …/browse?url=<target>）を閲覧ページ URL で解決して読む。
-  let browseUrl: URL;
+  // action（書き換え済みナビ URL）を閲覧ページ URL で解決して読む。
+  let browseRef: string;
   try {
-    browseUrl = new URL(action || pageUrl, pageUrl);
+    browseRef = new URL(action || pageUrl, pageUrl).href;
   } catch {
     return null;
   }
 
-  let targetStr = browseUrl.searchParams.get("url");
-  if (!targetStr) {
-    // action 属性なし等で url が無い場合は閲覧ページ自身の url をフォールバックに使う。
-    try {
-      const page = new URL(pageUrl);
-      targetStr = page.searchParams.get("url");
-      browseUrl = page;
-    } catch {
-      return null;
-    }
+  let targetStr = extractBrowseTarget(browseRef);
+  let prefix = browseNavPrefix(browseRef);
+  if (!targetStr || !prefix) {
+    // action から復元できなければ閲覧ページ自身から復元する。
+    targetStr = extractBrowseTarget(pageUrl);
+    prefix = browseNavPrefix(pageUrl);
   }
-  if (!targetStr) return null;
+  if (!targetStr || !prefix) return null;
 
   let target: URL;
   try {
@@ -173,8 +243,7 @@ export function buildGetFormDestination(
   for (const [k, v] of entries) params.append(k, v);
   target.search = params.toString();
 
-  // パス部（BASE_PATH 込みの …/browse）を再利用して url を載せ替える。
-  return browseUrl.pathname + "?url=" + encodeURIComponent(target.href);
+  return buildBrowseDest(target.href, prefix);
 }
 
 // GET フォーム送信を横取りする注入スクリプト。
@@ -192,6 +261,9 @@ export function buildGetFormDestination(
 // 双方で横取り対象から除外する（横取りすると入力 URL が無視され得る）。
 const GET_FORM_INTERCEPT_HTML =
   `<script>(function(){` +
+  `var browseNavPrefix=${browseNavPrefix.toString()};` +
+  `var extractBrowseTarget=${extractBrowseTarget.toString()};` +
+  `var buildBrowseDest=${buildBrowseDest.toString()};` +
   `var build=${buildGetFormDestination.toString()};` +
   `document.addEventListener('submit',function(e){` +
   `var f=e.target;if(!f||f.tagName!=='FORM')return;` +
@@ -217,14 +289,17 @@ const GET_FORM_INTERCEPT_HTML =
 // クリックによるナビゲーションの振り向け先を決定する純粋関数。
 // サーバー側 rewriteHtml の <a href> 書き換えは初期 HTML のみが対象で、(1) JS が動的描画した
 // リンク（生の絶対/相対 URL）、(2) SPA ルーターが onClick で横取りする <a> クリックは、いずれも
-// 実サイトへ離脱する。これを補い、クリック先を proxy 中継（…/browse?url=）へ振り向ける。
-// 返り値は遷移先パス（BASE_PATH 込みの …/browse を再利用）、横取りしない場合は null。
-//   - 外部オリジンの絶対 URL（プロトコル相対含む）→ …/browse?url=<encode(絶対URL)>
-//   - 同一オリジンの …/browse リンク（書き換え済み）→ その path+search をそのまま返す
-//     （SPA ルーターに奪われる前にフルナビゲーションさせる）
-//   - 同一オリジンのその他パス（/articles/… 等）→ 現在ページの url= を base に解決し直して振り向け
-//   - # 同一ページアンカー・非 http スキーム・url= 欠落時の相対は null
-// 注入スクリプトはこの関数を toString() で埋め込むため、外部参照を持たず URL のみで完結させる。
+// 実サイトへ離脱する。これを補い、クリック先をパス反映ナビ形式（/browse/<scheme>/<host>/<path>・
+// #115）へ振り向ける。返り値は遷移先パス（BASE_PATH 込みのプレフィックスを再利用）、横取り
+// しない場合は null。
+//   - 外部オリジンの絶対 URL（プロトコル相対含む）→ 当該 URL をパス反映ナビ形式へ
+//   - 既に書き換え済みの proxy ナビリンク（パス反映 …/browse/<scheme>/… or 後方互換 …/browse?url=）
+//     → その path+search+hash をそのまま返す（SPA ルーターに奪われる前にフルナビゲーション）
+//   - その他の同一オリジン（/articles/… ・クエリのみ相対 ?q=… 等）→ 現ターゲットを base に
+//     解決し直してパス反映ナビ形式へ（#114）
+//   - # 同一ページアンカー・非 http スキーム・ターゲット復元不可は null
+// 注入スクリプトはこの関数と browseNavPrefix / extractBrowseTarget / buildBrowseDest を
+// toString() で埋め込むため、外部参照を持たず URL のみで完結させる。
 // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
 export function buildClickNavDestination(
   href: string,
@@ -244,17 +319,24 @@ export function buildClickNavDestination(
   if (dest.protocol !== "http:" && dest.protocol !== "https:") return null;
 
   if (dest.origin === page.origin) {
-    // 既に書き換え済みの browse リンク（同一 …/browse パスかつ url= を持つ）はそのまま
-    // フルナビゲーション。url= の有無を要するのは、ターゲット側 SPA が描画するクエリのみの
-    // 相対リンク（例 DuckDuckGo「Searches related to」の ?q=…）がブラウザ既定で同一 …/browse
-    // パスへ解決され、url= を持たないまま素通しされてプロキシが外れるのを防ぐため（#114）。
-    if (dest.pathname === page.pathname && dest.searchParams.has("url")) {
+    // 既に書き換え済みの proxy ナビリンクはそのままフルナビゲーション。
+    //  - パス反映形式: /browse/ マーカー直後が有効な scheme（http/https）の真の中継リンク。
+    //    extractBrowseTarget が復元できること（non-null）で判定し、ターゲット自身の
+    //    /browse/foo のようなルート相対リンク（復元不能＝400 になる）を誤って素通ししない。
+    //    クエリのみ相対 ?q=… がパス反映ページでネイティブ解決され同形に着地したケースも含む。
+    //  - 後方互換形式: 末尾が /browse かつ url= を持つ（#114。url= 無しの ?q=… は素通しせず
+    //    下の target 基準解決へ流す）。
+    const destIsReflect =
+      dest.pathname.indexOf("/browse/") !== -1 &&
+      extractBrowseTarget(dest.href) !== null;
+    const destIsLegacy =
+      /\/browse$/.test(dest.pathname) && dest.searchParams.has("url");
+    if (destIsReflect || destIsLegacy) {
       return dest.pathname + dest.search + dest.hash;
     }
-    // それ以外の同一オリジン（例 /articles/… のルート相対・相対、および上記のクエリのみ相対
-    // ?q=…）は、ブラウザ既定だと proxy オリジン直下や url= 無しの …/browse へ解決され離脱・
-    // 失効する。現ターゲット（url=）を base に解決し直して proxy 中継へ振り向ける。
-    const target = page.searchParams.get("url");
+    // それ以外（/articles/… のルート相対・相対、クエリのみ相対 ?q=… 等）は、現ターゲットを
+    // base に解決し直してパス反映ナビ形式へ振り向ける。
+    const target = extractBrowseTarget(pageUrl);
     if (!target) return null;
     let real: URL;
     try {
@@ -263,10 +345,14 @@ export function buildClickNavDestination(
       return null;
     }
     if (real.protocol !== "http:" && real.protocol !== "https:") return null;
-    return page.pathname + "?url=" + encodeURIComponent(real.href);
+    const prefix = browseNavPrefix(pageUrl);
+    if (!prefix) return null;
+    return buildBrowseDest(real.href, prefix);
   }
   // 外部オリジンの絶対 URL（プロトコル相対含む）。
-  return page.pathname + "?url=" + encodeURIComponent(dest.href);
+  const prefix = browseNavPrefix(pageUrl);
+  if (!prefix) return null;
+  return buildBrowseDest(dest.href, prefix);
 }
 
 // <a> クリックによるナビゲーションを横取りする注入スクリプト。
@@ -277,6 +363,9 @@ export function buildClickNavDestination(
 // 修飾キー付き・中クリック・target="_blank" は素通しし、ブラウザ標準の挙動を尊重する。
 const CLICK_NAV_INTERCEPT_HTML =
   `<script>(function(){` +
+  `var browseNavPrefix=${browseNavPrefix.toString()};` +
+  `var extractBrowseTarget=${extractBrowseTarget.toString()};` +
+  `var buildBrowseDest=${buildBrowseDest.toString()};` +
   `var build=${buildClickNavDestination.toString()};` +
   `document.addEventListener('click',function(e){` +
   `if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;` +
