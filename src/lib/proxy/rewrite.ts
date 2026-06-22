@@ -90,15 +90,23 @@ export function rewriteSrcset(value: string, base: string): string {
   return candidates.join(", ");
 }
 
+// アドレスバーはビューポート上部へ常に固定する（position: fixed）。
+// position: sticky はターゲットが `html, body { height:100% }` を指定すると包含ブロックが
+// 1 ビューポート分に制限され、スクロールでバーが画面外へ消える（#108。ipleak.net 等）。
+// fixed はコンテンツに重なるため、直後のスペーサー（#proxy-addressbar-spacer）の高さを
+// バーの実レンダリング高へ同期し（初期 + resize / load）、重なりを防ぐ。
+// 仕様: docs/spec/screens/browse.md §コンテンツエリア / docs/arch/proxy.md §アドレスバー注入
 const ADDRESS_BAR_HTML = (currentUrl: string) =>
   `
-<div id="proxy-addressbar" style="position:sticky;top:0;z-index:99999;background:#1e1e2e;padding:6px 12px;display:flex;gap:8px;align-items:center;font-family:sans-serif;box-shadow:0 2px 4px rgba(0,0,0,.4)">
+<div id="proxy-addressbar" style="position:fixed;top:0;left:0;right:0;z-index:99999;background:#1e1e2e;padding:6px 12px;display:flex;gap:8px;align-items:center;font-family:sans-serif;box-shadow:0 2px 4px rgba(0,0,0,.4)">
   <form onsubmit="(function(e){e.preventDefault();var v=e.target.querySelector('input').value;if(!v)return;window.location.href='${BASE_PATH}/browse?url='+encodeURIComponent(v.startsWith('http')?v:'https://'+v)})(event)" style="display:flex;flex:1;gap:8px">
     <input value="${currentUrl.replace(/"/g, "&quot;")}" style="flex:1;padding:4px 10px;border:1px solid #555;border-radius:4px;background:#2a2a3e;color:#fff;font-size:14px" />
     <button type="submit" style="padding:4px 14px;background:#0070f3;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:14px">移動</button>
   </form>
   <a href="${BASE_PATH}/" style="color:#aaa;font-size:13px;text-decoration:none">ホーム</a>
-</div>`.trim();
+</div>
+<div id="proxy-addressbar-spacer" style="height:44px"></div>
+<script>(function(){var b=document.getElementById('proxy-addressbar'),s=document.getElementById('proxy-addressbar-spacer');if(!b||!s)return;function f(){s.style.height=b.offsetHeight+'px';}f();addEventListener('resize',f);addEventListener('load',f);})();</script>`.trim();
 
 // url 未指定の GET /browse 用の案内ページ HTML（HTTP 200・自動遷移なし）。
 // 以前はホーム（${BASE_PATH}/）へ 307 リダイレクトしていたが、リバースプロキシ
