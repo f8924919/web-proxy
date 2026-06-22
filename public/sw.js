@@ -1,7 +1,7 @@
 // web-proxy 実行時リクエスト横取り Service Worker。
-// 閲覧ページ（/browse?url=<target>）内で JS が動的に発行するリクエスト
-// （ナビゲーションを除く全メソッド）を横取りし、同一オリジンの /api/proxy?url=...
-// 経由へ振り向ける（クロスオリジン化を解消し CORS プリフライトを消す）。
+// 閲覧ページ（パス反映 /browse/<scheme>/<host>/<path>・#115。後方互換 /browse?url=<target>）内で
+// JS が動的に発行するリクエスト（ナビゲーションを除く全メソッド）を横取りし、同一オリジンの
+// /api/proxy/<scheme>/<host>/<path> 経由へ振り向ける（クロスオリジン化を解消し CORS プリフライトを消す）。
 // 仕様: docs/spec/features/proxy.md §Service Worker による実行時リクエスト横取り
 //      docs/spec/features/proxy.md §CORS プリフライト対応
 //      docs/arch/proxy.md §Service Worker
@@ -46,10 +46,28 @@
     return false;
   }
 
-  // 要求元ページ URL（/browse?url=<target>）からターゲット URL を取り出す。
+  // 要求元ページ URL からターゲット URL を取り出す。パス反映ナビ形式
+  // （/browse/<scheme>/<host>/<path>・#115）と後方互換 /browse?url=<target> の両方に対応する。
+  // rewrite.ts の extractBrowseTarget と同形（SW は importScripts 不可のため自前で持つ）。
   function extractTarget(pageUrl) {
     try {
-      return new URL(pageUrl).searchParams.get("url");
+      const u = new URL(pageUrl);
+      const MARKER = "/browse/";
+      const idx = u.pathname.indexOf(MARKER);
+      if (idx !== -1) {
+        const rest = u.pathname.slice(idx + MARKER.length);
+        const fs = rest.indexOf("/");
+        if (fs === -1) return null;
+        const scheme = rest.slice(0, fs);
+        if (scheme !== "http" && scheme !== "https") return null;
+        const after = rest.slice(fs + 1);
+        const hs = after.indexOf("/");
+        const host = hs === -1 ? after : after.slice(0, hs);
+        if (!host) return null;
+        const path = hs === -1 ? "" : after.slice(hs);
+        return new URL(scheme + "://" + host + path + u.search).href;
+      }
+      return u.searchParams.get("url");
     } catch {
       return null;
     }

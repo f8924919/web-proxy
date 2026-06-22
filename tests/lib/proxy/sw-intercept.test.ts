@@ -11,6 +11,11 @@ const { deriveBasePath, isProxyOwnPath, extractTarget, rewriteRequestUrl } = sw;
 const SW_ORIGIN = "https://host";
 const PAGE = (target: string, basePath = "") =>
   `${SW_ORIGIN}${basePath}/browse?url=${encodeURIComponent(target)}`;
+// パス反映ナビ形式の閲覧ページ URL（/browse/<scheme>/<host>/<path>・#115）。
+const NAVPAGE = (target: string, basePath = "") => {
+  const u = new URL(target);
+  return `${SW_ORIGIN}${basePath}/browse/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
+};
 // パス反映形式（/api/proxy/<scheme>/<host>/<path>）の独立オラクル（#100）。
 const PROXY = (absolute: string, basePath = "") => {
   const u = new URL(absolute);
@@ -74,6 +79,27 @@ describe("extractTarget", () => {
 
   test("url が無ければ null", () => {
     expect(extractTarget(`${SW_ORIGIN}/browse`)).toBeNull();
+  });
+
+  test("パス反映ナビ形式の閲覧ページから取り出す（#115）", () => {
+    expect(
+      extractTarget(NAVPAGE("https://duckduckgo.com/?ia=web&q=test"))
+    ).toBe("https://duckduckgo.com/?ia=web&q=test");
+  });
+
+  test("BASE_PATH 付きのパス反映ページからも取り出す（#115）", () => {
+    expect(
+      extractTarget(NAVPAGE("https://www.google.com/", "/proxy/3000"))
+    ).toBe("https://www.google.com/");
+  });
+});
+
+describe("rewriteRequestUrl（パス反映ナビの閲覧ページ・#115）", () => {
+  test("同一オリジンのルート絶対パス → パス反映ページの target origin に解決して /api/proxy", () => {
+    const page = NAVPAGE("https://duckduckgo.com/?ia=web&q=test");
+    expect(
+      rewriteRequestUrl(`${SW_ORIGIN}/dist/wpm.js`, page, SW_ORIGIN, "")
+    ).toBe(PROXY("https://duckduckgo.com/dist/wpm.js"));
   });
 });
 
