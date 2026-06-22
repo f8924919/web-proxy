@@ -93,6 +93,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 `</body>` タグ直前ではなく、`<body>` タグ直後にインラインスタイルで貼り付ける小さな HTML フラグメントを注入する。外部 CSS 依存なし。
 
+バーは `position: fixed; top:0`（ビューポート基準で常に上部固定）。`position: sticky` はターゲットが `html, body { height:100% }` を指定すると包含ブロックが 1 ビューポート分に制限され、スクロールでバーが画面外へ消えるため採用しない（#108。ipleak.net 等で発生）。`fixed` でコンテンツに重ならないよう、バー直後にスペーサー `#proxy-addressbar-spacer` を挿入し、その高さをバーの実レンダリング高へ同期する（初期 + `resize` / `load`）。
+
 ---
 
 ## Route Handler: `src/app/api/proxy/route.ts` ＋ `src/app/api/proxy/[...slug]/route.ts`
@@ -307,7 +309,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 ### アドレスバー注入
 
-`rewriteHtml` は URL 書き換えに加え、アドレスバー HTML スニペットを `<body>` 直後に注入する。
+`rewriteHtml` は URL 書き換えに加え、アドレスバー HTML スニペットを `<body>` 直後に注入する。バーは `position: fixed`、直後のスペーサー `#proxy-addressbar-spacer` の高さをバー実高へ同期してコンテンツの重なりを防ぐ（#108。詳細は前段の[アドレスバー注入](#アドレスバー注入)を参照）。
 
 ### GET フォーム送信横取りスクリプト注入
 
