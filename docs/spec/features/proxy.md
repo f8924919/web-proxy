@@ -17,7 +17,8 @@
 ```
 ブラウザ
   │
-  │ GET /browse?url=<encoded>            （1. ページ要求）
+  │ GET /browse/<scheme>/<host>/<path>  （1. ページ要求。パス反映・#115。
+  │   （旧 /browse?url= は 307 でこの形式へ）   外部リンク等の ?url= は受理し 307 リダイレクト）
   ▼
 Next.js サーバー
   │  SSRF チェック → fetch(target_url)  （2. ターゲットへ中継）
@@ -36,11 +37,11 @@ Next.js サーバー
 
 ## API エンドポイント
 
-| メソッド | パス                                | 役割                                                                                                                                                                                                       |
-| -------- | ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `GET`    | `/browse?url=<encoded>`             | アドレスバー付きの閲覧ページ（HTML を Server Component でレンダリング）                                                                                                                                    |
-| `POST`   | `/browse?url=<encoded>`             | フォーム POST 送信の中継（リクエストボディと `Content-Type` をターゲットへ転送。詳細は [§POST 中継](#post-中継)）                                                                                          |
-| `GET`    | `/api/proxy/<scheme>/<host>/<path>` | 静的アセットの透過中継（CSS・画像・JS をそのまま返す）。URL スキームは [§プロキシ URL スキーム（パス反映）](#プロキシ-url-スキームパス反映) を参照。後方互換として旧 `/api/proxy?url=<encoded>` も受理する |
+| メソッド | パス                                | 役割                                                                                                                                                                                                                     |
+| -------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `GET`    | `/browse/<scheme>/<host>/<path>`    | アドレスバー付きの閲覧ページ（パス反映・正本。#115）。URL スキームは [§ページ遷移のパス反映](#ページ遷移のパス反映115) を参照。後方互換として旧 `/browse?url=<encoded>` も受理し**パス反映 URL へ 307 リダイレクト**する |
+| `POST`   | `/browse/<scheme>/<host>/<path>`    | フォーム POST 送信の中継（リクエストボディと `Content-Type` をターゲットへ転送。詳細は [§POST 中継](#post-中継)）。後方互換で `/browse?url=<encoded>` も受理（POST はリダイレクトせず直接中継）                          |
+| `GET`    | `/api/proxy/<scheme>/<host>/<path>` | 静的アセットの透過中継（CSS・画像・JS をそのまま返す）。URL スキームは [§プロキシ URL スキーム（パス反映）](#プロキシ-url-スキームパス反映) を参照。後方互換として旧 `/api/proxy?url=<encoded>` も受理する               |
 
 ### `url` 未指定時の案内ページ（GET）
 
@@ -71,7 +72,22 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 **なぜパス反映か（#100）**: 旧 `/api/proxy?url=<encoded>` クエリ方式では、配信される JS モジュールの `import.meta.url` のディレクトリが常に `…/api/`（クエリより前）に固定され、**チャンク分割 SPA（Nuxt/Vite/webpack 等）がランタイムで発行する相対 import（`import('./chunk.js')`）が `…/api/chunk.js` に解決**されてしまう。これを SW がターゲット origin 直下（`<host>/api/chunk.js`）へ誤振り向けし 404・MIME エラーになる（動的 import 失敗）。パス反映方式ではモジュールの URL ディレクトリがターゲットのディレクトリを反映するため、相対 import はブラウザ上でネイティブに正しく解決され、SW を介さずに（`/api/proxy/…` は自前ルート＝素通し）正しい中継 URL に着地する。
 
 - **後方互換**: ルートは旧 `/api/proxy?url=<encoded>` も引き続き受理する（デプロイ跨ぎで残る既存ページ／旧 SW のリクエスト救済）。新規に生成する書き換え URL・SW 振り向けは常にパス反映形式を用いる。
-- **適用範囲**: 本スキームはアセット中継（`/api/proxy`）に適用する。ページ遷移（`/browse?url=<target>`）は対象外で従来どおりクエリ方式を維持する（相対 import の問題はモジュール解決に固有のため。ナビゲーションの相対解決は別課題）。
+- **適用範囲**: 本スキームはアセット中継（`/api/proxy`）と**ページ遷移（`/browse`）の両方**に適用する（ページ遷移は #115 で path 反映へ移行。当初 #100 ではアセットのみを対象とし「ページ遷移は対象外」としていたが、後述の理由で navigation にも拡張した）。
+
+### ページ遷移のパス反映（#115）
+
+ページ遷移（ブラウズ）も**ターゲットを URL パスへ反映**する形式を正本とする。
+
+```
+${BASE_PATH}/browse/<scheme>/<host>/<targetPath><?targetQuery>
+例) https://duckduckgo.com/?ia=web&q=test
+  → ${BASE_PATH}/browse/https/duckduckgo.com/?ia=web&q=test
+```
+
+**なぜパス反映か（#115）**: 旧 `/browse?url=<encoded>` クエリ方式では、閲覧ページの `location`（`location.search` / `location.pathname`）に **proxy 専用パラメータ `url=<target>` が露出**する。ターゲットの SPA（React 等）が `location.search` を読んでリンクを再構築すると、`url=` を自分のクエリとして取り込み、`/?url=<target>&ia=images` のような壊れたリンクを生成する（例 DuckDuckGo のナビタブ All/Images）。また**ターゲット本来のクエリ（`q=test`）が `url=` のエンコード値の中に埋もれ**、SPA からトップレベル param として見えない。パス反映方式では `location` がターゲットそのものを反映する（`location.search` = `?ia=web&q=test`）ため、SPA は正しいリンク（`/?ia=images&q=test`）を生成し、クエリのみの相対リンク（`?q=…`）はブラウザのネイティブ解決で正しく着地する。これはアセットで `import.meta.url` をターゲットのディレクトリに一致させた #100 と同じ発想を navigation に適用したもの。
+
+- **後方互換 / リダイレクト**: GET `${BASE_PATH}/browse?url=<encoded>`（旧形式・外部リンク・ブックマーク・アドレスバー入力）は受理し、**パス反映 URL へ 307 リダイレクト**する。これにより `?url=` 経由で入っても最終的に閲覧ページの `location` がクリーンになる。POST `/browse?url=` は当面クエリ方式のまま直接中継する（POST 着地ページの `location` を SPA が読むケースは稀なため）。
+- **`%2F` / 非 ASCII**: アセット中継と同じく percent-encoding を保持する（#111）。
 
 ---
 
@@ -86,12 +102,12 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 
 ### 書き換えルール
 
-相対パスはターゲットサイトのオリジンを基準に絶対 URL へ変換する。ナビゲーション系（`<a>` / `<form>`）はエンコードして `/browse?url=<encoded>` へ、アセット系（`<img>` / `<link>` / `<script>` / `srcset`）は上記 §プロキシ URL スキームのパス反映形式 `/api/proxy/<scheme>/<host>/<path>` へ書き換える（#100）。
+相対パスはターゲットサイトのオリジンを基準に絶対 URL へ変換し、いずれも上記 §プロキシ URL スキームのパス反映形式へ書き換える。ナビゲーション系（`<a>` / `<form>`）は `/browse/<scheme>/<host>/<path>`（#115）、アセット系（`<img>` / `<link>` / `<script>` / `srcset`）は `/api/proxy/<scheme>/<host>/<path>`（#100）。
 
 | 対象タグ / 属性                    | 遷移先ルート                                    | 理由                                                       |
 | ---------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
-| `<a href>`                         | `/browse?url=<encoded>`                         | リンク先もブラウズ画面で開く                               |
-| `<form action>`                    | `/browse?url=<encoded>`                         | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）   |
+| `<a href>`                         | `/browse/<scheme>/<host>/<path>`（パス反映）    | リンク先もブラウズ画面で開く（#115）                       |
+| `<form action>`                    | `/browse/<scheme>/<host>/<path>`（パス反映）    | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）   |
 | `<img src>`                        | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継（UI 不要）                                        |
 | `<img srcset>` / `<source srcset>` | 各候補 URL をパス反映形式                       | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照） |
 | `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                   |
@@ -118,11 +134,11 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 
 ### meta refresh の書き換え
 
-`<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` の `url` を `<a href>` と同様に `/browse?url=<encoded>` へ書き換える。これを行わないと、`url=/...`（ルート相対）の meta refresh が、閲覧ページ（`…/browse?url=…`）ではなく**プロキシ自身のオリジン直下**へ解決され、プロキシから離脱してしまう（例: `<meta http-equiv="refresh" content="3;url=/login">` のような遅延付き自動遷移）。
+`<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` の `url` を `<a href>` と同様にパス反映ナビ形式 `/browse/<scheme>/<host>/<path>` へ書き換える。これを行わないと、`url=/...`（ルート相対）の meta refresh が、閲覧ページではなく**プロキシ自身のオリジン直下**へ解決され、プロキシから離脱してしまう（例: `<meta http-equiv="refresh" content="3;url=/login">` のような遅延付き自動遷移）。
 
 - **判定**: `http-equiv` の値は大文字小文字を無視して `refresh` と一致するものを対象とする。
 - **解析**: `content` を `<遅延>;url=<TARGET>` として解釈し、`url=` の前後空白・大文字小文字・クォート（`'` / `"`）を許容する。遅延値はそのまま保持する。
-- **書き換え対象**: `url=` が示すターゲットを `baseUrl` 基準で絶対 URL に解決し、http/https に解決される場合のみ `/browse?url=<encoded>` へ書き換える（`<a href>` と同じ `browseUrl()` の挙動に準拠。http(s) 以外はそのまま）。
+- **書き換え対象**: `url=` が示すターゲットを `baseUrl` 基準で絶対 URL に解決し、http/https に解決される場合のみパス反映ナビ形式へ書き換える（`<a href>` と同じ `browseUrl()` の挙動に準拠。http(s) 以外はそのまま）。
 - **対象外**: `url` を持たない純粋な遅延 refresh（例 `content="5"`、自ページ再読み込み）は書き換えず素通しする。
 
 > **制限**: パーサ（`node-html-parser`）は `<noscript>` の内側を生テキストとして扱うため、**`<noscript>` 内の meta refresh は書き換えられない**。JS 有効ブラウザは `<noscript>` 内容を無視するため実害はないが、この書き換えは**プロキシオリジンへの離脱防止が目的**であり、Google 検索の「enable JavaScript」インタースティシャル（meta refresh が noscript 内・実駆動は JS の自己再ナビゲーション）による無限ループは**本書き換えの対象外**である。この無限ループ自体は別途 [ナビゲーションループの検出](#ナビゲーションループの検出enablejs-対策) で検出し、案内ページへ切り替えて停止させる。
@@ -138,16 +154,16 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 
 ### GET フォーム送信の横取り
 
-`<form action>` を `/browse?url=<encoded>` に書き換えても、**GET フォームの送信ではブラウザが action URL のクエリ文字列（`?url=...`）を破棄し、フォーム項目で置き換える**ため `url` が消失する。結果 `GET /browse?<form 項目>`（`url` 無し）となり、[ブラウズ Route Handler](../../arch/proxy.md#route-handler-srcappbrowseroutets) の `url` 未指定分岐が[案内ページ（HTTP 200）](#url-未指定時の案内ページget)を返してしまい、フォームの送信先（検索結果など）へ遷移できない（POST はボディで送るため影響を受けない）。
+パス反映ナビ形式（#115）では `<form action>` が `/browse/<scheme>/<host>/<path>?<targetクエリ>` となり、GET 送信でブラウザが破棄するのは**クエリ部のみ**でターゲット（host/path）は**パス部に残る**ため、原理的には `GET /browse/<scheme>/<host>/<path>?<form 項目>` として正しいターゲットに届く（旧 `?url=` 方式では `url=` がクエリにあり消失していた問題が、パス反映により構造的に解消される）。ただし **SPA（React 等）が自前の submit ハンドラで実サイトへ後勝ち遷移する**問題（#93）は残るため、横取りスクリプトは引き続き注入する。
 
 これを補うため、`rewriteHtml` は閲覧ページの `<body>` 直後（アドレスバー・SW 登録に続けて）に **GET フォーム送信を横取りするスクリプト**を注入する。挙動は以下のとおり。
 
-| 条件                | 処理                                                                                                                                                                                      |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| GET フォームの送信  | `submit` を `preventDefault` + **`stopImmediatePropagation`**（SPA の自前 submit ハンドラを阻止）し、ターゲットのクエリにフォーム項目をセットして `/browse?url=<再エンコード>` へ遷移する |
-| POST フォームの送信 | 横取りせず素通し（action のクエリが破棄されないため従来通り機能する）                                                                                                                     |
+| 条件                | 処理                                                                                                                                                                                                                   |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| GET フォームの送信  | `submit` を `preventDefault` + **`stopImmediatePropagation`**（SPA の自前 submit ハンドラを阻止）し、ターゲットのクエリにフォーム項目をセットしてパス反映ナビ形式 `/browse/<scheme>/<host>/<path>?<再構築>` へ遷移する |
+| POST フォームの送信 | 横取りせず素通し                                                                                                                                                                                                       |
 
-- **ターゲットの復元**: 送信フォームの `action`（書き換え済み `…/browse?url=<target>`）から `url` パラメータを取り出してターゲットとする。`action` に `url` が無い（=`action` 属性なしのフォーム等）場合は、閲覧ページ自身の URL（`window.location`）の `url` パラメータをフォールバックに使う。
+- **ターゲットの復元**: 送信フォームの `action`（書き換え済み `…/browse/<scheme>/<host>/<path>`）のパス反映マーカー以降からターゲットを復元する。`action` に含まれない（=`action` 属性なしのフォーム等）場合は、閲覧ページ自身の URL（`window.location`）から復元する。後方互換として、リダイレクト前の `…/browse?url=<target>` 形式の `action` / 閲覧ページでは `url=` パラメータから復元する。
 - **クエリの載せ替え**: 復元したターゲットの**クエリ全体**をフォーム項目（`FormData`）で置き換える。これは GET フォーム送信時のブラウザ本来の挙動（action のクエリを破棄してフォーム項目に差し替え）をプロキシ経由で再現するもの。
 - **BASE_PATH の保持**: 遷移先は `action`（または `window.location`）の**パス部をそのまま再利用**するため、リバースプロキシのパスプレフィックス（`BASE_PATH`、例 `/proxy/3000`）込みの `…/browse` パスが保持される。
 - **動的フォーム対応**: `document` への `submit` イベント委任（キャプチャ）で捕捉するため、JS が実行時に追加したフォームにも効く。
@@ -165,17 +181,19 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 
 これを補うため、`rewriteHtml` は閲覧ページの `<body>` 直後（GET フォーム横取りに続けて）に **クリックによるナビゲーションを横取りするスクリプト**を注入する。`document` への `click` イベント委任（**キャプチャ**）で捕捉するため、JS が実行時に追加したリンクにも効き、かつ SPA ルーターの onClick（バブル）より**先に**発火する。
 
-| 条件                                                               | 処理                                                                                                                                       |
-| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `<a>`（祖先含む）への通常クリックで遷移先が proxy 中継対象（下記） | `preventDefault` + **`stopImmediatePropagation`**（SPA ルーターの横取りを阻止）し、`${BASE_PATH}/browse?url=<…>` へ `location.href` で遷移 |
-| 上記以外（下記スコープ外）                                         | 横取りせず素通し                                                                                                                           |
+| 条件                                                               | 処理                                                                                                                                                              |
+| ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<a>`（祖先含む）への通常クリックで遷移先が proxy 中継対象（下記） | `preventDefault` + **`stopImmediatePropagation`**（SPA ルーターの横取りを阻止）し、`${BASE_PATH}/browse/<scheme>/<host>/<path>` へ `location.href` で遷移（#115） |
+| 上記以外（下記スコープ外）                                         | 横取りせず素通し                                                                                                                                                  |
 
 振り向け先は純粋関数 `buildClickNavDestination(href, pageUrl)` が決める。クリックされた `<a>` の `href` を現在の閲覧ページ URL を基準に解決し、次のとおり中継先を組み立てる（`null` なら素通し）。
 
-- **外部オリジンの絶対 URL**（`http(s)://…`・プロトコル相対 `//host/…` を含む）: `${BASE_PATH}/browse?url=<encodeURIComponent(絶対URL)>` へ振り向ける。
-- **ルート相対 / 相対 URL**（`/articles/…`, `foo/bar`, クエリのみの相対 `?q=…`）: ブラウザ既定では proxy オリジン直下（クエリのみの相対は閲覧ページの `…/browse` パス）へ解決され、プロキシから離脱したり `url=` を失ったりするため、**現在の閲覧ページの `url=` パラメータ（＝現ターゲット）を基準に解決し直し**、その絶対 URL を `…/browse?url=` へ振り向ける。
-- **既に書き換え済みの proxy browse リンク**（同一オリジン・同一 `…/browse` パス**かつ `url=` パラメータを持つ**）: その URL へ**フルナビゲーション**させる（`location.href` で遷移）。これにより SPA ルーターがクリックを奪って `history` 遷移する前に、確実に proxy 経由で読み込み直す。**判定に `url=` の有無を要する**のは、ターゲット側 SPA が描画するクエリのみの相対リンク（例 DuckDuckGo「Searches related to」の `?q=…`）がブラウザ既定で同一 `…/browse` パスへ解決され、`url=` を持たないまま素通しされて**プロキシが外れる**のを防ぐため（[#114](https://github.com/f8924919/web-proxy/issues/114)）。この場合は上のルート相対 / 相対 URL のルールに従い、現ターゲットを base に解決し直す。
-- **BASE_PATH の保持**: 遷移先は現在の閲覧ページ URL（`window.location.pathname`＝`${BASE_PATH}/browse`）の**パス部をそのまま再利用**し `?url=` を載せ替える（GET フォーム横取りと同方式）。
+振り向け先は §プロキシ URL スキームのパス反映ナビ形式 `${BASE_PATH}/browse/<scheme>/<host>/<path>` で組み立てる（#115）。閲覧ページの現ターゲットは、パス反映 URL（`location.pathname` の `/browse/` マーカー以降）から復元する。後方互換として、リダイレクト前の `…/browse?url=<target>` 形式の閲覧ページでは `url=` パラメータからも復元する。
+
+- **外部オリジンの絶対 URL**（`http(s)://…`・プロトコル相対 `//host/…` を含む）: その絶対 URL をパス反映ナビ形式へ振り向ける。
+- **ルート相対 / 相対 URL**（`/articles/…`, `foo/bar`, クエリのみの相対 `?q=…`）: **現ターゲットを基準に解決し直し**、その絶対 URL をパス反映ナビ形式へ振り向ける。パス反映の閲覧ページではクエリのみの相対（`?q=…`）はブラウザのネイティブ解決で既に正しい `…/browse/<scheme>/<host>/<path>?q=…` に着地するが、横取りでも同一の結果へ正規化する。
+- **既に書き換え済みの proxy browse リンク**（同一オリジンで、パス反映ナビ形式＝`/browse/<scheme>/<host>/…`、または後方互換の `…/browse` パス**かつ `url=` パラメータを持つ**）: その URL へ**フルナビゲーション**させる（`location.href` で遷移）。これにより SPA ルーターがクリックを奪って `history` 遷移する前に、確実に proxy 経由で読み込み直す。後方互換形式で `url=` の有無を要するのは、ターゲット側 SPA のクエリのみ相対リンク（DuckDuckGo「Searches related to」の `?q=…`）が `…/browse` パスへ解決され `url=` を持たないまま素通しされてプロキシが外れるのを防ぐため（[#114](https://github.com/f8924919/web-proxy/issues/114)）。
+- **BASE_PATH の保持**: 振り向け先のパス反映プレフィックス（`${BASE_PATH}/browse/`）は現在の閲覧ページ URL（`window.location`）から再利用する（GET フォーム横取りと同方式）。
 - **`<a>` の探索**: クリック対象から祖先方向へ `closest('a[href]')` で最寄りの `<a href>` を探す（リンク内の子要素クリックにも効く）。
 
 - **スコープ外（横取りしない）**:
@@ -209,7 +227,7 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 
 ### 経路
 
-`<form action>` は `rewriteHtml` によりメソッドを問わず `…/browse?url=<target>` へ書き換えられる（[HTML 書き換え](#html-書き換え)）。POST フォームは GET フォームと異なり**ブラウザが action のクエリ（`?url=…`）を破棄しない**ため、追加の横取りスクリプトなしに `POST …/browse?url=<target>` として POST ハンドラへ届く（GET フォーム横取りスクリプトは非 GET を素通しする）。`action` 属性を持たない POST フォームは閲覧ページ自身（`/browse?url=<target>`）へ送信されるため、同じく正しいターゲットへ中継される。
+`<form action>` は `rewriteHtml` によりメソッドを問わずパス反映ナビ形式 `…/browse/<scheme>/<host>/<path>` へ書き換えられる（[HTML 書き換え](#html-書き換え)・#115）。POST フォームはターゲットが action の**パス部**に載るため、追加の横取りスクリプトなしに `POST …/browse/<scheme>/<host>/<path>` としてパス反映ルートの POST ハンドラへ届く（GET フォーム横取りスクリプトは非 GET を素通しする）。`action` 属性を持たない POST フォームは閲覧ページ自身（パス反映 URL）へ送信されるため、同じく正しいターゲットへ中継される。
 
 ### 転送内容
 
@@ -270,7 +288,7 @@ JS 依存サイト（Google 等）では、画像・スクリプト・XHR など
 | ページ遷移ナビゲーション（`request.mode === "navigate"`）                                                          | 横取りせず素通し（サーバー側書き換え・[クライアント側ナビゲーション横取り](#クライアント側ナビゲーションの横取り)・フォーム送信に委ねる） |
 
 - **対象メソッド**: ナビゲーションを除き **GET / POST / PUT / PATCH / DELETE** を横取りする（[§CORS プリフライト対応](#cors-プリフライト対応) のため非 GET も同一オリジンの `/api/proxy` へ振り向ける）。非 GET の振り向けではメソッド・ボディ・リクエストヘッダーを保持する。
-- **ターゲット origin の特定**: SW は `fetch` イベントの `clientId` から要求元ページ（`/browse?url=<target>`）の URL を取得し、`url` パラメータをターゲットとして用いる。
+- **ターゲット origin の特定**: SW は `fetch` イベントの `clientId` から要求元ページの URL を取得し、`extractTarget` でターゲットを復元する（パス反映 `/browse/<scheme>/<host>/<path>`・後方互換 `/browse?url=<target>` の両対応。#115）。
 - **`/_next/image` の扱い（#102）**: `/_next/*` は原則プロキシ自身の資産（`/_next/static` のチャンク等）として素通しするが、`/_next/image` だけは例外とする。プロキシ対象が Next.js 製サイトの場合、クライアントの hydration が `<Image>` の `srcset` を実行時に再生成し、`/_next/image?url=<外部>` を**プロキシ origin 直下**へ要求する。これを素通しするとプロキシ自身の画像最適化エンドポイントに当たり、外部ドメインが `images.remotePatterns` 未許可で **400** になる（サーバー描画分の `srcset` 書き換えは #98 で対応済みだが、クライアント再生成分はこの SW 経路でしか救えない）。そこで `/_next/image` は自前ルートから除外し、**ターゲット origin の `/_next/image`**（=ターゲット自身の最適化エンドポイント）へ解決して `/api/proxy` 経由で中継する。ターゲットを特定できないページ（ホーム等、`url` パラメータ無し）では従来どおり素通しし、プロキシ自身の `/_next/image` 利用には影響しない。
 - **ランタイム相対 module import（#100）**: チャンク分割 SPA がランタイムで発行する相対 import（`import('./chunk.js')`）は、エントリ JS がパス反映形式（`/api/proxy/<scheme>/<host>/<path>`）で配信されるため、ブラウザがモジュールのディレクトリを基準にネイティブに正しく解決する。解決結果も `/api/proxy/<scheme>/<host>/<path>`（自前ルート）となり、SW は素通ししてルートが中継する。これによりクエリ方式時代の「`…/api/chunk.js` への誤解決 → 404・MIME エラー」が解消する（[§プロキシ URL スキーム](#プロキシ-url-スキームパス反映)）。
 - **残存制約（クロスオリジン module からのルート絶対参照）**: クロスオリジンのチャンクが発行する**ルート絶対**参照（`/y.js`）は、ブラウザがプロキシ origin 直下に解決し、SW は referrer 不在のため**ページ target の origin**に振り向ける（モジュール自身の origin ではない）。同一 origin のチャンク内参照・絶対 URL は正しく振り向く。

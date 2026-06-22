@@ -7,6 +7,9 @@ import {
   rewriteSrcset,
   buildGetFormDestination,
   buildClickNavDestination,
+  browseNavPrefix,
+  extractBrowseTarget,
+  buildBrowseDest,
   noUrlBrowseHtml,
 } from "@/lib/proxy/rewrite";
 
@@ -19,66 +22,65 @@ const asset = (urlOrPath: string): string => {
   return `/api/proxy/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
 };
 
+// パス反映ナビ形式（/browse/<scheme>/<host>/<path>）の独立オラクル（#115）。
+// 実装 buildBrowsePath とは別に組み立て、書き換え結果を検証する。
+const nav = (urlOrPath: string): string => {
+  const u = new URL(urlOrPath, BASE);
+  return `/browse/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
+};
+
 describe("rewriteHtml", () => {
-  describe("<a href> → /browse", () => {
-    test("絶対 URL をそのまま /browse に書き換える", () => {
+  describe("<a href> → /browse（パス反映・#115）", () => {
+    test("絶対 URL をパス反映ナビ形式に書き換える", () => {
       const html = `<a href="https://example.com/about">link</a>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `href="/browse?url=${encodeURIComponent("https://example.com/about")}"`
-      );
+      expect(result).toContain(`href="${nav("https://example.com/about")}"`);
     });
 
-    test("相対パスをベース URL で解決して /browse に書き換える", () => {
+    test("相対パスをベース URL で解決してパス反映ナビ形式に書き換える", () => {
       const html = `<a href="/contact">link</a>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `href="/browse?url=${encodeURIComponent("https://example.com/contact")}"`
-      );
+      expect(result).toContain(`href="${nav("/contact")}"`);
     });
   });
 
-  describe("<form action> → /browse", () => {
-    test("フォームの action を /browse に書き換える", () => {
+  describe("<form action> → /browse（パス反映・#115）", () => {
+    test("フォームの action をパス反映ナビ形式に書き換える", () => {
       const html = `<form action="/search"></form>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `action="/browse?url=${encodeURIComponent("https://example.com/search")}"`
-      );
+      expect(result).toContain(`action="${nav("/search")}"`);
     });
   });
 
-  describe("<meta http-equiv=refresh> → /browse", () => {
+  describe("<meta http-equiv=refresh> → /browse（パス反映・#115）", () => {
     // 仕様: docs/spec/features/proxy.md §meta refresh の書き換え
-    test("ルート相対 url を baseUrl 基準で解決し /browse に書き換える（遅延は保持）", () => {
+    test("ルート相対 url を baseUrl 基準で解決しパス反映ナビ形式に書き換える（遅延は保持）", () => {
       const html = `<meta http-equiv="refresh" content="0;url=/httpservice/retry/enablejs?sei=x">`;
       const result = rewriteHtml(html, BASE);
       expect(result).toContain(
-        `content="0;url=/browse?url=${encodeURIComponent("https://example.com/httpservice/retry/enablejs?sei=x")}"`
+        `content="0;url=${nav("https://example.com/httpservice/retry/enablejs?sei=x")}"`
       );
     });
 
-    test("絶対 url をそのまま /browse に書き換える（遅延を保持）", () => {
+    test("絶対 url をそのままパス反映ナビ形式に書き換える（遅延を保持）", () => {
       const html = `<meta http-equiv="refresh" content="5; url=https://other.example/next">`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `/browse?url=${encodeURIComponent("https://other.example/next")}`
+      expect(result).toContain(nav("https://other.example/next"));
+      expect(result).toMatch(
+        /content="5;\s*url=\/browse\/https\/other\.example/
       );
-      expect(result).toMatch(/content="5;\s*url=\/browse\?url=/);
     });
 
     test("http-equiv の大文字小文字を無視して書き換える", () => {
       const html = `<meta http-equiv="REFRESH" content="0;URL=/foo">`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(encodeURIComponent("https://example.com/foo"));
+      expect(result).toContain(nav("/foo"));
     });
 
     test("シングルクォート付き url も書き換える", () => {
       const html = `<meta http-equiv="refresh" content="0; url='/bar'">`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `/browse?url=${encodeURIComponent("https://example.com/bar")}`
-      );
+      expect(result).toContain(nav("/bar"));
     });
 
     test("url を持たない純粋な遅延 refresh は書き換えない", () => {
@@ -199,9 +201,7 @@ describe("rewriteHtml", () => {
     test("CSP 以外の meta（refresh）は影響を受けない", () => {
       const html = `<meta http-equiv="refresh" content="0;url=/foo">`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `/browse?url=${encodeURIComponent("https://example.com/foo")}`
-      );
+      expect(result).toContain(nav("/foo"));
     });
   });
 
@@ -318,66 +318,67 @@ describe("rewriteHtml", () => {
 });
 
 describe("buildGetFormDestination", () => {
-  // 仕様: docs/spec/features/proxy.md §GET フォーム送信の横取り
-  const PAGE = `https://proxy.test/browse?url=${encodeURIComponent("https://example.com")}`;
+  // 仕様: docs/spec/features/proxy.md §GET フォーム送信の横取り（パス反映・#115）
+  // パス反映の閲覧ページ／action から target を復元し、フォーム項目でクエリを置き換えて
+  // パス反映ナビ形式 /browse/<scheme>/<host>/<path>?<再構築> を返す。
+  const PAGE = `https://proxy.test${nav("https://example.com")}`;
 
-  test("GET フォーム: ターゲットのクエリをフォーム項目で置き換えて /browse へ遷移", () => {
-    const action = `/browse?url=${encodeURIComponent("https://example.com/search")}`;
+  test("GET フォーム: ターゲットのクエリをフォーム項目で置き換えてパス反映ナビへ遷移", () => {
+    const action = nav("https://example.com/search");
     const dest = buildGetFormDestination("get", action, PAGE, [
       ["q", "hello world"],
     ]);
-    expect(dest).toBe(
-      `/browse?url=${encodeURIComponent("https://example.com/search?q=hello+world")}`
-    );
+    expect(dest).toBe(nav("https://example.com/search?q=hello+world"));
   });
 
   test("method 未指定は GET 扱いで横取りする", () => {
-    const action = `/browse?url=${encodeURIComponent("https://example.com/search")}`;
+    const action = nav("https://example.com/search");
     const dest = buildGetFormDestination("", action, PAGE, [["q", "x"]]);
-    expect(dest).toBe(
-      `/browse?url=${encodeURIComponent("https://example.com/search?q=x")}`
-    );
+    expect(dest).toBe(nav("https://example.com/search?q=x"));
   });
 
   test("BASE_PATH（リバースプロキシのパスプレフィックス）を遷移先で保持する", () => {
-    const action = `/proxy/3000/browse?url=${encodeURIComponent("https://example.com/search")}`;
-    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent("https://example.com")}`;
+    const action = `/proxy/3000${nav("https://example.com/search")}`;
+    const page = `https://proxy.test/proxy/3000${nav("https://example.com")}`;
     const dest = buildGetFormDestination("get", action, page, [["q", "x"]]);
-    expect(dest).toBe(
-      `/proxy/3000/browse?url=${encodeURIComponent("https://example.com/search?q=x")}`
-    );
+    expect(dest).toBe(`/proxy/3000${nav("https://example.com/search?q=x")}`);
   });
 
-  test("Google 検索相当: BASE_PATH 付き action＋複数項目を /browse?url= に復元する（#78）", () => {
-    // form.submit() オーバーライド経路でも本関数を共用する。action には ?url=<target> が残る。
-    const action = `/proxy/3000/browse?url=${encodeURIComponent("https://www.google.com/search")}`;
-    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent("https://www.google.com")}`;
+  test("Google 検索相当: BASE_PATH 付き action＋複数項目をパス反映ナビに復元する（#78）", () => {
+    // form.submit() オーバーライド経路でも本関数を共用する。
+    const action = `/proxy/3000${nav("https://www.google.com/search")}`;
+    const page = `https://proxy.test/proxy/3000${nav("https://www.google.com")}`;
     const dest = buildGetFormDestination("get", action, page, [
       ["q", "playwright test"],
       ["hl", "ja"],
     ]);
     expect(dest).toBe(
-      `/proxy/3000/browse?url=${encodeURIComponent("https://www.google.com/search?q=playwright+test&hl=ja")}`
+      `/proxy/3000${nav("https://www.google.com/search?q=playwright+test&hl=ja")}`
     );
   });
 
-  test("POST フォームは横取りしない（null を返す）", () => {
+  test("後方互換: action / 閲覧ページが旧 ?url= 形式でもパス反映ナビへ復元する", () => {
     const action = `/browse?url=${encodeURIComponent("https://example.com/search")}`;
+    const page = `https://proxy.test/browse?url=${encodeURIComponent("https://example.com")}`;
+    const dest = buildGetFormDestination("get", action, page, [["q", "x"]]);
+    expect(dest).toBe(nav("https://example.com/search?q=x"));
+  });
+
+  test("POST フォームは横取りしない（null を返す）", () => {
+    const action = nav("https://example.com/search");
     expect(
       buildGetFormDestination("post", action, PAGE, [["q", "x"]])
     ).toBeNull();
   });
 
-  test("action 属性なし: 閲覧ページの url パラメータをターゲットにフォールバックする", () => {
-    const page = `https://proxy.test/browse?url=${encodeURIComponent("https://example.com/page")}`;
+  test("action 属性なし: 閲覧ページから target をフォールバック復元する", () => {
+    const page = `https://proxy.test${nav("https://example.com/page")}`;
     const dest = buildGetFormDestination("get", "", page, [["q", "x"]]);
-    expect(dest).toBe(
-      `/browse?url=${encodeURIComponent("https://example.com/page?q=x")}`
-    );
+    expect(dest).toBe(nav("https://example.com/page?q=x"));
   });
 
   test("ターゲットを復元できない場合は null を返す", () => {
-    // url パラメータが無く、ページ側にも無い
+    // パス反映マーカーも url= も無い
     expect(
       buildGetFormDestination("get", "/browse", "https://proxy.test/", [
         ["q", "x"],
@@ -386,83 +387,124 @@ describe("buildGetFormDestination", () => {
   });
 });
 
-describe("buildClickNavDestination", () => {
-  // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
-  const TARGET = "https://www.yahoo.co.jp/";
-  const PAGE = `https://proxy.test/browse?url=${encodeURIComponent(TARGET)}`;
+describe("ナビ横取りヘルパー（browseNavPrefix / extractBrowseTarget / buildBrowseDest・#115）", () => {
+  test("browseNavPrefix: パス反映ページは …/browse/ まで・後方互換は + /", () => {
+    expect(
+      browseNavPrefix("https://p.test/proxy/3000/browse/https/x.com/y")
+    ).toBe("/proxy/3000/browse/");
+    expect(
+      browseNavPrefix("https://p.test/browse?url=https%3A%2F%2Fx.com")
+    ).toBe("/browse/");
+    expect(browseNavPrefix("https://p.test/other")).toBeNull();
+  });
 
-  test("外部オリジンの http(s) 絶対 URL: 閲覧ページのパスを再利用して /browse へ", () => {
-    const href = "https://news.yahoo.co.jp/articles/abc";
-    expect(buildClickNavDestination(href, PAGE)).toBe(
-      `/browse?url=${encodeURIComponent(href)}`
+  test("extractBrowseTarget: パス反映 / 後方互換 ?url= の両方から復元", () => {
+    expect(
+      extractBrowseTarget("https://p.test/proxy/3000/browse/https/x.com/y?z=1")
+    ).toBe("https://x.com/y?z=1");
+    expect(
+      extractBrowseTarget(
+        `https://p.test/browse?url=${encodeURIComponent("https://x.com/y")}`
+      )
+    ).toBe("https://x.com/y");
+    expect(extractBrowseTarget("https://p.test/browse/https")).toBeNull();
+  });
+
+  test("buildBrowseDest: 絶対 URL をプレフィックス配下のパス反映形式へ", () => {
+    expect(buildBrowseDest("https://x.com/y?z=1", "/proxy/3000/browse/")).toBe(
+      "/proxy/3000/browse/https/x.com/y?z=1"
     );
+    expect(buildBrowseDest("mailto:a@b.com", "/browse/")).toBeNull();
+  });
+});
+
+describe("buildClickNavDestination", () => {
+  // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り（パス反映・#115）
+  const TARGET = "https://www.yahoo.co.jp/";
+  // 正本はパス反映の閲覧ページ。後方互換（?url=）からの復元も別途検証する。
+  const PAGE = `https://proxy.test${nav(TARGET)}`;
+
+  test("外部オリジンの http(s) 絶対 URL: パス反映ナビ形式へ振り向ける", () => {
+    const href = "https://news.yahoo.co.jp/articles/abc";
+    expect(buildClickNavDestination(href, PAGE)).toBe(nav(href));
   });
 
   test("http の絶対 URL も対象", () => {
     const href = "http://example.com/p";
-    expect(buildClickNavDestination(href, PAGE)).toBe(
-      `/browse?url=${encodeURIComponent(href)}`
-    );
+    expect(buildClickNavDestination(href, PAGE)).toBe(nav(href));
   });
 
   test("BASE_PATH（リバースプロキシのパスプレフィックス）を遷移先で保持する", () => {
     const href = "https://news.yahoo.co.jp/articles/abc";
-    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent(TARGET)}`;
+    const page = `https://proxy.test/proxy/3000${nav(TARGET)}`;
     expect(buildClickNavDestination(href, page)).toBe(
-      `/proxy/3000/browse?url=${encodeURIComponent(href)}`
+      `/proxy/3000${nav(href)}`
     );
   });
 
-  test("ルート相対 URL は現ターゲット origin で解決して /browse へ（#82）", () => {
+  test("ルート相対 URL は現ターゲット origin で解決してパス反映ナビへ（#82）", () => {
     expect(buildClickNavDestination("/articles/abc", PAGE)).toBe(
-      `/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/articles/abc")}`
+      nav("https://www.yahoo.co.jp/articles/abc")
     );
   });
 
-  test("相対 URL は現ターゲットを base に解決して /browse へ（#82）", () => {
-    const page = `https://proxy.test/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/news/")}`;
+  test("相対 URL は現ターゲットを base に解決してパス反映ナビへ（#82）", () => {
+    const page = `https://proxy.test${nav("https://www.yahoo.co.jp/news/")}`;
     expect(buildClickNavDestination("article/x", page)).toBe(
-      `/browse?url=${encodeURIComponent("https://www.yahoo.co.jp/news/article/x")}`
+      nav("https://www.yahoo.co.jp/news/article/x")
     );
   });
 
-  test("プロトコル相対 URL は外部絶対として /browse へ（#82）", () => {
+  test("プロトコル相対 URL は外部絶対としてパス反映ナビへ（#82）", () => {
     expect(buildClickNavDestination("//news.yahoo.co.jp/x", PAGE)).toBe(
-      `/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/x")}`
+      nav("https://news.yahoo.co.jp/x")
     );
   });
 
-  test("既に書き換え済みの proxy browse リンクはそのままフルナビゲーションさせる（#82）", () => {
-    const self = `/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/articles/abc")}`;
+  test("クエリのみの相対リンク（?q=…）はパス反映の閲覧ページでネイティブ解決され同形を返す（#115）", () => {
+    const target = "https://duckduckgo.com/?ia=web&q=test";
+    const page = `https://proxy.test/proxy/3000${nav(target)}`;
+    // ?q=… は閲覧ページ基準で …/browse/https/duckduckgo.com/?q=… にネイティブ解決される。
+    expect(buildClickNavDestination("?q=test my speed", page)).toBe(
+      `/proxy/3000${nav("https://duckduckgo.com/?q=test%20my%20speed")}`
+    );
+  });
+
+  test("ナビタブ相当のルート相対（/?ia=images&q=test）を現ターゲット base でパス反映へ（#115）", () => {
+    const target = "https://duckduckgo.com/?ia=web&q=test";
+    const page = `https://proxy.test/proxy/3000${nav(target)}`;
+    expect(buildClickNavDestination("/?ia=images&q=test", page)).toBe(
+      `/proxy/3000${nav("https://duckduckgo.com/?ia=images&q=test")}`
+    );
+  });
+
+  test("既にパス反映済みの proxy ナビリンクはそのままフルナビゲーション（#115）", () => {
+    const self = nav("https://news.yahoo.co.jp/articles/abc");
     expect(buildClickNavDestination(self, PAGE)).toBe(self);
   });
 
-  test("BASE_PATH 付きの書き換え済み browse リンクもそのまま返す（#82）", () => {
-    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent(TARGET)}`;
-    const self = `/proxy/3000/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/x")}`;
+  test("ターゲット自身の /browse/… ルート相対リンクは素通しせず target 解決する（#115 退行ガード）", () => {
+    // パス反映ページで target サイトが描く href="/browse/foo" は、proxy origin 直下の
+    // /browse/foo に解決され /browse/ マーカーに一致するが、scheme 段が "foo" で復元不能。
+    // 素通しすると 400 になるため、現ターゲットを base に解決してパス反映へ振り向ける。
+    const target = "https://www.yahoo.co.jp/";
+    const page = `https://proxy.test/proxy/3000${nav(target)}`;
+    expect(buildClickNavDestination("/browse/foo", page)).toBe(
+      `/proxy/3000${nav("https://www.yahoo.co.jp/browse/foo")}`
+    );
+  });
+
+  test("後方互換: 旧 ?url= 形式の書き換え済みリンクはそのまま返す（#82/#114）", () => {
+    const page = `https://proxy.test/browse?url=${encodeURIComponent(TARGET)}`;
+    const self = `/browse?url=${encodeURIComponent("https://news.yahoo.co.jp/articles/abc")}`;
     expect(buildClickNavDestination(self, page)).toBe(self);
   });
 
-  // SPA（DuckDuckGo「Searches related to」等）が描画するクエリのみの相対リンク。
-  // ブラウザは閲覧ページ基準で同一 …/browse パスへ解決するが、url= を持たないため
-  // 素通しすると url= が落ちてプロキシが外れる。現ターゲットを base に解決し直す（#114）。
-  test("クエリのみの相対リンク（?q=…）は現ターゲットを base に解決して /browse へ（#114）", () => {
-    const target = "https://duckduckgo.com/?ia=web&q=test";
-    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent(target)}`;
-    const real = new URL("?q=test my speed", target).href;
-    expect(buildClickNavDestination("?q=test my speed", page)).toBe(
-      `/proxy/3000/browse?url=${encodeURIComponent(real)}`
-    );
-  });
-
-  test("クエリのみの相対リンクは url= を保持し /browse?q= には潰さない（#114 退行ガード）", () => {
-    const dest = buildClickNavDestination("?q=wifi", PAGE);
-    // 旧実装は `/browse?q=wifi`（url= 欠落）を返していた。
+  test("後方互換: 旧 ?url= 形式の閲覧ページのクエリ相対 ?q= はパス反映ナビへ復元（#114/#115）", () => {
+    const page = `https://proxy.test/browse?url=${encodeURIComponent(TARGET)}`;
+    const dest = buildClickNavDestination("?q=wifi", page);
     expect(dest).not.toBe("/browse?q=wifi");
-    expect(dest).toContain("?url=");
-    expect(dest).toBe(
-      `/browse?url=${encodeURIComponent(new URL("?q=wifi", TARGET).href)}`
-    );
+    expect(dest).toBe(nav(new URL("?q=wifi", TARGET).href));
   });
 
   test("# 同一ページアンカーは対象外（null）", () => {
