@@ -26,6 +26,7 @@
 | [73-antibot-egress-stealth.md](73-antibot-egress-stealth.md)               | アンチボット最小対策（egress IP プロキシ env + 軽量 stealth）。クリーン IP + ブラウザティアで Google 検索成功を実測 Issue #73 / PR #90                                 | 2026-06-21 |
 | [93-get-form-stop-propagation.md](93-get-form-stop-propagation.md)         | yahoo 検索でプロキシが外れる不具合の修正（GET フォーム横取りに stopImmediatePropagation 追加・SPA 自前 submit ハンドラ阻止）Issue #93 / PR #94                         | 2026-06-21 |
 | [100-spa-runtime-relative-url.md](100-spa-runtime-relative-url.md)         | プロキシ経由 SPA のランタイム相対 module import が 404 になる問題を、アセット中継 URL のパス反映形式化（/api/proxy/<scheme>/<host>/<path>）で解消 Issue #100 / PR #106 | 2026-06-22 |
+| [108-addressbar-fixed-position.md](108-addressbar-fixed-position.md)       | プロキシ UI バーが body{height:100%} のサイト(ipleak.net 等)でスクロール時に消える問題を position:fixed + スペーサー化で解消 Issue #108 / PR #109                       | 2026-06-22 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
