@@ -213,6 +213,34 @@ describe("rewriteHtml", () => {
     expect(barIdx).toBeGreaterThan(bodyIdx);
   });
 
+  // 仕様: docs/spec/screens/browse.md §コンテンツエリア / docs/arch/proxy.md §アドレスバー注入（#108）
+  describe("アドレスバーのビューポート固定（#108）", () => {
+    const html = `<html><body><p>hello</p></body></html>`;
+
+    test("バーは position:fixed で、sticky は使わない（body{height:100%} のサイトで消えるため）", () => {
+      const result = rewriteHtml(html, BASE);
+      const bar = result.slice(result.indexOf('id="proxy-addressbar"'));
+      const barTag = bar.slice(0, bar.indexOf(">"));
+      expect(barTag).toMatch(/position\s*:\s*fixed/);
+      expect(barTag).not.toMatch(/position\s*:\s*sticky/);
+    });
+
+    test("バー直後にスペーサー要素を注入してコンテンツの重なりを防ぐ", () => {
+      const result = rewriteHtml(html, BASE);
+      const barIdx = result.indexOf('id="proxy-addressbar"');
+      const spacerIdx = result.indexOf('id="proxy-addressbar-spacer"');
+      expect(spacerIdx).toBeGreaterThan(barIdx);
+    });
+
+    test("スペーサー高をバーの実レンダリング高へ同期するスクリプトを注入する", () => {
+      const result = rewriteHtml(html, BASE);
+      // バー高（offsetHeight）をスペーサーの height へ反映し、resize にも追従する
+      expect(result).toContain("proxy-addressbar-spacer");
+      expect(result).toMatch(/offsetHeight/);
+      expect(result).toMatch(/addEventListener\(\s*['"]resize['"]/);
+    });
+  });
+
   test("GET フォーム送信横取りスクリプトを <body> 直後に注入する", () => {
     const html = `<html><body><p>hello</p></body></html>`;
     const result = rewriteHtml(html, BASE);
