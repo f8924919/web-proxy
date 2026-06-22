@@ -15,12 +15,16 @@ src/
 │   │   └── route.ts          # ブラウズ Route Handler
 │   └── api/
 │       └── proxy/
-│           └── route.ts      # アセット中継 Route Handler
+│           ├── route.ts            # アセット中継 Route Handler（旧 ?url= 形式・後方互換）
+│           └── [...slug]/
+│               └── route.ts        # アセット中継 Route Handler（パス反映形式 /api/proxy/<scheme>/<host>/<path>。#100）
 ├── lib/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
 │       ├── browserFetch.ts   # ヘッドレスブラウザ中継（ブラウザバック中継・ティア判定・Cookie ウォーミング）
 │       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・クリックナビ横取り・document.domain シム <script> 注入含む）
+│       ├── proxyPath.ts      # プロキシ URL スキーム（パス反映）の組み立て・復元（純粋関数。#100）
+│       ├── relayAsset.ts     # アセット中継の共通処理（両 route が共有。中継・CORS・OPTIONS）
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
@@ -91,15 +95,18 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 ---
 
-## Route Handler: `src/app/api/proxy/route.ts`
+## Route Handler: `src/app/api/proxy/route.ts` ＋ `src/app/api/proxy/[...slug]/route.ts`
 
-**役割**: 静的アセット（CSS・画像・JS）の透過中継に加え、SW が振り向けた非 GET リクエストの中継と CORS プリフライト応答を担う。`GET` / `POST` / `PUT` / `PATCH` / `DELETE` / `OPTIONS` をエクスポートし、`GET`〜`DELETE` は共通の中継ヘルパーへ委譲する（[機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)）。
+**役割**: 静的アセット（CSS・画像・JS）の透過中継に加え、SW が振り向けた非 GET リクエストの中継と CORS プリフライト応答を担う。両 route とも `GET` / `POST` / `PUT` / `PATCH` / `DELETE` / `OPTIONS` をエクスポートし、共通処理 `src/lib/proxy/relayAsset.ts` の `relayAsset(req, targetHref)` / `proxyOptions(req)` へ委譲する。
 
-### 処理フロー（GET〜DELETE 共通）
+- **`[...slug]/route.ts`（パス反映形式・正本。#100）**: `relayAsset.ts` の純粋関数 `targetFromProxyPath(pathname, search)` で `/api/proxy/<scheme>/<host>/<path>` からターゲット絶対 URL を復元する（パス由来の percent-encoding を保つため `req.nextUrl.pathname`（生）から復元し、`req.nextUrl.search` をターゲットのクエリとして付す）。復元不能なら 400。スキーム詳細は [機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)。
+- **`route.ts`（旧 `?url=` 形式・後方互換）**: `searchParams.get('url')` でターゲットを得る。デプロイ跨ぎで残る既存ページ／旧 SW のリクエスト救済用。
+
+### 処理フロー（`relayAsset(req, targetHref)`。GET〜DELETE 共通）
 
 ```
-1. searchParams.get('url') を取得
-2. url が null → 400
+1. targetHref を URL として解析（不正なら 400）
+2. （路 route 側で targetHref を決定: パス反映復元 or ?url=）
 3. assetRateLimiter.check(getClientIp(headers)) → 超過なら 429
 4. ヘッダー方針をメソッドで分岐:
    - GET/HEAD: forwardableRequestHeaders（許可リスト＝Cookie/Authorization、既存挙動）
@@ -276,15 +283,17 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 相対 URL は `baseUrl` を基準に絶対 URL へ変換してからエンコードする。
 
-| 対象                               | 書き換え先                                             |
-| ---------------------------------- | ------------------------------------------------------ |
-| `<a href>`                         | `/browse?url=<encoded>`                                |
-| `<form action>`                    | `/browse?url=<encoded>`                                |
-| `<img src>` / `<source src>`       | `/api/proxy?url=<encoded>`                             |
-| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy?url=<encoded>`（記述子保持） |
-| `<link href>`                      | `/api/proxy?url=<encoded>`                             |
-| `<script src>`                     | `/api/proxy?url=<encoded>`                             |
-| `<meta http-equiv=refresh>`        | `/browse?url=<encoded>`                                |
+| 対象                               | 書き換え先                                                      |
+| ---------------------------------- | --------------------------------------------------------------- |
+| `<a href>`                         | `/browse?url=<encoded>`                                         |
+| `<form action>`                    | `/browse?url=<encoded>`                                         |
+| `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                             |
+| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持） |
+| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`                             |
+| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                             |
+| `<meta http-equiv=refresh>`        | `/browse?url=<encoded>`                                         |
+
+> アセット系（`<img>`/`<link>`/`<script>`/`srcset`/CSS）の書き換え先は `assetUrl()` → `proxyPath.ts` の `buildProxyPath()` でパス反映形式に組み立てる（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)。#100）。ナビゲーション系（`<a>`/`<form>`/meta refresh）は従来どおり `browseUrl()` の `?url=` 形式。
 
 `<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` は `content` 内の `url=` を正規表現で抜き出し、`<a href>` と同じ `browseUrl()` で書き換える（遅延値は保持）。ルート相対 `url` がプロキシオリジン直下へ解決されて離脱するのを防ぐ。`<noscript>` 内の meta refresh はパーサが生テキスト扱いするため対象外（[機能仕様 §meta refresh の書き換え](../spec/features/proxy.md#meta-refresh-の書き換え)の制限）。
 
@@ -294,7 +303,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 ### CSS 書き換え
 
-正規表現で `url(...)` と `@import` を `/api/proxy?url=<encoded>` へ置換。
+正規表現で `url(...)` と `@import` を `assetUrl()`（パス反映形式 `/api/proxy/<scheme>/<host>/<path>`）へ置換。
 
 ### アドレスバー注入
 
@@ -386,10 +395,11 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 2. 同一オリジンの自前ルート（/browse・/api/proxy・/_next/* 等。ただし /_next/image を除く）→ 素通し
 3. clientId から要求元ページ URL（/browse?url=<target>）を取得し、url パラメータをターゲットとする
 4. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
-   - クロスオリジンの絶対 URL → /api/proxy?url=<absolute>
-   - 同一オリジンのルート絶対パス（自前ルート以外）→ ターゲット origin に解決し /api/proxy?url=<resolved>
-   - 同一オリジンの /_next/image → ターゲット origin の /_next/image に解決し /api/proxy?url=<resolved>（#102）
-   - 自前ルート → 素通し（null）
+   （振り向け先はパス反映形式 /api/proxy/<scheme>/<host>/<path>。#100）
+   - クロスオリジンの絶対 URL → /api/proxy/<scheme>/<host>/<path>
+   - 同一オリジンのルート絶対パス（自前ルート以外）→ ターゲット origin に解決し /api/proxy/<scheme>/<host>/<path>
+   - 同一オリジンの /_next/image → ターゲット origin の /_next/image に解決し /api/proxy/<scheme>/<host>/_next/image?...（#102）
+   - 自前ルート（パス反映済みの相対 import /api/proxy/* を含む）→ 素通し（null）
 5. 振り向け先があれば fetch で応答（非 GET はメソッド・ボディ・リクエストヘッダーを保持、
    credentials: "same-origin"）。なければ素通し。振り向け fetch が失敗しても未処理 reject に
    せず Response.error() を返す
@@ -407,7 +417,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 - **ナビゲーションは対象外**。ページ遷移・フォーム送信はサーバー側書き換えに委ねる。
 - **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、プロキシ origin に保存されたターゲットのスコープ Cookie が `/api/proxy` まで届く。これにより `credentials: "include"` 相当の Cookie ベース・クロスオリジン XHR が、上流転送のスコープ抽出（`scopedCookieHeader`）で現ターゲット分だけに限定されたうえで成立する（#28。[機能仕様 §認証情報の転送 §セキュリティ上の制約](../spec/features/proxy.md#セキュリティ上の制約-1)）。プロキシ自身のインフラ認証 cookie（Cloudflare Access の `CF_Authorization` 等）は非スコープのため上流転送から除外される。元リクエストの `credentials` モードは区別せず一律 `same-origin` で振り向ける（既知の制約は同機能仕様を参照）。
-- **パス相対 URL は best-effort**。閲覧ページ URL（`/browse`）基準で解決されるため、ターゲット上のパス文脈を完全には復元できない。ルート絶対・絶対 URL は正しく振り向く。
+- **ランタイム相対 module import はパス反映で解消（#100）**。アセットがパス反映形式（`/api/proxy/<scheme>/<host>/<path>`）で配信されるため、チャンク分割 SPA の相対 import はブラウザがモジュールのディレクトリ基準で正しく解決し、自前ルートとして素通しされルートが中継する（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)）。残る best-effort はクロスオリジン module からのルート絶対参照（referrer 不在のためページ target origin に振り向ける）。
 
 ---
 

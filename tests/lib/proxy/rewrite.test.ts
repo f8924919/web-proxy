@@ -12,6 +12,13 @@ import {
 
 const BASE = "https://example.com";
 
+// パス反映形式（/api/proxy/<scheme>/<host>/<path>）の独立オラクル（#100）。
+// 実装 buildProxyPath とは別に組み立て、書き換え結果を検証する。
+const asset = (urlOrPath: string): string => {
+  const u = new URL(urlOrPath, BASE);
+  return `/api/proxy/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
+};
+
 describe("rewriteHtml", () => {
   describe("<a href> → /browse", () => {
     test("絶対 URL をそのまま /browse に書き換える", () => {
@@ -107,14 +114,13 @@ describe("rewriteHtml", () => {
       ["<script src>", `<script src="/app.js"></script>`, "src", "/app.js"],
     ])("%s を /api/proxy に書き換える", (_label, html, attr, path) => {
       const result = rewriteHtml(html, BASE);
-      const expected = `/api/proxy?url=${encodeURIComponent(`https://example.com${path}`)}`;
+      const expected = asset(path);
       expect(result).toContain(`${attr}="${expected}"`);
     });
   });
 
   describe("srcset の書き換え（#98）", () => {
-    const proxied = (path: string) =>
-      `/api/proxy?url=${encodeURIComponent(`https://example.com${path}`)}`;
+    const proxied = (path: string) => asset(path);
 
     test("<img srcset> の各候補を書き換え記述子を保持する", () => {
       const result = rewriteHtml(`<img srcset="/a.png 1x, /b.png 2x">`, BASE);
@@ -148,9 +154,7 @@ describe("rewriteHtml", () => {
     test("src を書き換える script から integrity / crossorigin を除去する", () => {
       const html = `<script src="/app.js" integrity="sha256-abc" crossorigin="anonymous"></script>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `src="/api/proxy?url=${encodeURIComponent("https://example.com/app.js")}"`
-      );
+      expect(result).toContain(`src="${asset("/app.js")}"`);
       expect(result).not.toContain("integrity");
       expect(result).not.toContain("crossorigin");
     });
@@ -158,9 +162,7 @@ describe("rewriteHtml", () => {
     test("integrity を持たない script は src のみ書き換え従来どおり", () => {
       const html = `<script src="/app.js"></script>`;
       const result = rewriteHtml(html, BASE);
-      expect(result).toContain(
-        `src="/api/proxy?url=${encodeURIComponent("https://example.com/app.js")}"`
-      );
+      expect(result).toContain(`src="${asset("/app.js")}"`);
       expect(result).not.toContain("integrity");
     });
 
@@ -440,8 +442,7 @@ describe("buildClickNavDestination", () => {
 });
 
 describe("rewriteSrcset", () => {
-  const proxied = (path: string) =>
-    `/api/proxy?url=${encodeURIComponent(`https://example.com${path}`)}`;
+  const proxied = (path: string) => asset(path);
 
   test("密度記述子（1x/2x）付きの複数候補を書き換える", () => {
     expect(rewriteSrcset("/a.png 1x, /b.png 2x", BASE)).toBe(
@@ -475,9 +476,7 @@ describe("rewriteSrcset", () => {
 
   test("絶対 URL も書き換える", () => {
     const abs = "https://cdn.example.org/a.png";
-    expect(rewriteSrcset(`${abs} 2x`, BASE)).toBe(
-      `/api/proxy?url=${encodeURIComponent(abs)} 2x`
-    );
+    expect(rewriteSrcset(`${abs} 2x`, BASE)).toBe(`${asset(abs)} 2x`);
   });
 });
 
@@ -485,33 +484,25 @@ describe("rewriteCss", () => {
   test("url() を /api/proxy に書き換える", () => {
     const css = `body { background: url('/bg.png'); }`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(
-      `/api/proxy?url=${encodeURIComponent("https://example.com/bg.png")}`
-    );
+    expect(result).toContain(asset("/bg.png"));
   });
 
   test("url() 内の引用符なし表記も書き換える", () => {
     const css = `body { background: url(/bg.png); }`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(
-      `/api/proxy?url=${encodeURIComponent("https://example.com/bg.png")}`
-    );
+    expect(result).toContain(asset("/bg.png"));
   });
 
   test("@import を /api/proxy に書き換える", () => {
     const css = `@import '/fonts.css';`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(
-      `/api/proxy?url=${encodeURIComponent("https://example.com/fonts.css")}`
-    );
+    expect(result).toContain(asset("/fonts.css"));
   });
 
   test("既に絶対 URL の url() も書き換える", () => {
     const css = `body { background: url('https://cdn.example.com/bg.png'); }`;
     const result = rewriteCss(css, BASE);
-    expect(result).toContain(
-      `/api/proxy?url=${encodeURIComponent("https://cdn.example.com/bg.png")}`
-    );
+    expect(result).toContain(asset("https://cdn.example.com/bg.png"));
   });
 });
 
