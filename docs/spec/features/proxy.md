@@ -173,8 +173,8 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 振り向け先は純粋関数 `buildClickNavDestination(href, pageUrl)` が決める。クリックされた `<a>` の `href` を現在の閲覧ページ URL を基準に解決し、次のとおり中継先を組み立てる（`null` なら素通し）。
 
 - **外部オリジンの絶対 URL**（`http(s)://…`・プロトコル相対 `//host/…` を含む）: `${BASE_PATH}/browse?url=<encodeURIComponent(絶対URL)>` へ振り向ける。
-- **ルート相対 / 相対 URL**（`/articles/…`, `foo/bar`）: ブラウザ既定では proxy オリジン直下へ解決され離脱するため、**現在の閲覧ページの `url=` パラメータ（＝現ターゲット）を基準に解決し直し**、その絶対 URL を `…/browse?url=` へ振り向ける。
-- **既に書き換え済みの proxy browse リンク**（同一オリジン・同一 `…/browse` パス）: その URL へ**フルナビゲーション**させる（`location.href` で遷移）。これにより SPA ルーターがクリックを奪って `history` 遷移する前に、確実に proxy 経由で読み込み直す。
+- **ルート相対 / 相対 URL**（`/articles/…`, `foo/bar`, クエリのみの相対 `?q=…`）: ブラウザ既定では proxy オリジン直下（クエリのみの相対は閲覧ページの `…/browse` パス）へ解決され、プロキシから離脱したり `url=` を失ったりするため、**現在の閲覧ページの `url=` パラメータ（＝現ターゲット）を基準に解決し直し**、その絶対 URL を `…/browse?url=` へ振り向ける。
+- **既に書き換え済みの proxy browse リンク**（同一オリジン・同一 `…/browse` パス**かつ `url=` パラメータを持つ**）: その URL へ**フルナビゲーション**させる（`location.href` で遷移）。これにより SPA ルーターがクリックを奪って `history` 遷移する前に、確実に proxy 経由で読み込み直す。**判定に `url=` の有無を要する**のは、ターゲット側 SPA が描画するクエリのみの相対リンク（例 DuckDuckGo「Searches related to」の `?q=…`）がブラウザ既定で同一 `…/browse` パスへ解決され、`url=` を持たないまま素通しされて**プロキシが外れる**のを防ぐため（[#114](https://github.com/f8924919/web-proxy/issues/114)）。この場合は上のルート相対 / 相対 URL のルールに従い、現ターゲットを base に解決し直す。
 - **BASE_PATH の保持**: 遷移先は現在の閲覧ページ URL（`window.location.pathname`＝`${BASE_PATH}/browse`）の**パス部をそのまま再利用**し `?url=` を載せ替える（GET フォーム横取りと同方式）。
 - **`<a>` の探索**: クリック対象から祖先方向へ `closest('a[href]')` で最寄りの `<a href>` を探す（リンク内の子要素クリックにも効く）。
 

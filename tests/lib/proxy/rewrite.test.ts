@@ -443,6 +443,28 @@ describe("buildClickNavDestination", () => {
     expect(buildClickNavDestination(self, page)).toBe(self);
   });
 
+  // SPA（DuckDuckGo「Searches related to」等）が描画するクエリのみの相対リンク。
+  // ブラウザは閲覧ページ基準で同一 …/browse パスへ解決するが、url= を持たないため
+  // 素通しすると url= が落ちてプロキシが外れる。現ターゲットを base に解決し直す（#114）。
+  test("クエリのみの相対リンク（?q=…）は現ターゲットを base に解決して /browse へ（#114）", () => {
+    const target = "https://duckduckgo.com/?ia=web&q=test";
+    const page = `https://proxy.test/proxy/3000/browse?url=${encodeURIComponent(target)}`;
+    const real = new URL("?q=test my speed", target).href;
+    expect(buildClickNavDestination("?q=test my speed", page)).toBe(
+      `/proxy/3000/browse?url=${encodeURIComponent(real)}`
+    );
+  });
+
+  test("クエリのみの相対リンクは url= を保持し /browse?q= には潰さない（#114 退行ガード）", () => {
+    const dest = buildClickNavDestination("?q=wifi", PAGE);
+    // 旧実装は `/browse?q=wifi`（url= 欠落）を返していた。
+    expect(dest).not.toBe("/browse?q=wifi");
+    expect(dest).toContain("?url=");
+    expect(dest).toBe(
+      `/browse?url=${encodeURIComponent(new URL("?q=wifi", TARGET).href)}`
+    );
+  });
+
   test("# 同一ページアンカーは対象外（null）", () => {
     expect(buildClickNavDestination("#section", PAGE)).toBeNull();
   });
