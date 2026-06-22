@@ -97,3 +97,70 @@ describe("targetFromProxyPath", () => {
     expect(targetFromProxyPath(pathname, search)).toBe(abs);
   });
 });
+
+// %2F（エンコード済みスラッシュ）・非 ASCII を含む特殊パスの percent-encoding 保持（#111）。
+// %2F を生の "/" に潰すとパス構造が変わり別リソースを指すため、デコード／再エンコードを
+// 挟まずそのままの percent-encoding でラウンドトリップすることを固定する。
+// 仕様: docs/spec/features/proxy.md §プロキシ URL スキーム（特殊パスの percent-encoding 保持）
+describe("特殊パス（%2F・非 ASCII）の percent-encoding 保持（#111）", () => {
+  describe("buildProxyPath", () => {
+    test.each([
+      // パス中の %2F は "/" に正規化されず保持される
+      ["https://example.com/a%2Fb/c", "/api/proxy/https/example.com/a%2Fb/c"],
+      // クエリ中の %2F も保持される
+      [
+        "https://example.com/p?q=a%2Fb",
+        "/api/proxy/https/example.com/p?q=a%2Fb",
+      ],
+      // すでにエンコード済みの非 ASCII（日本語）はそのまま
+      [
+        "https://example.com/%E6%97%A5%E6%9C%AC",
+        "/api/proxy/https/example.com/%E6%97%A5%E6%9C%AC",
+      ],
+      // 生の非 ASCII は WHATWG URL が percent-encoding する（生のまま漏らさない）
+      [
+        "https://example.com/日本",
+        "/api/proxy/https/example.com/%E6%97%A5%E6%9C%AC",
+      ],
+    ])("%s → %s", (abs, expected) => {
+      expect(buildProxyPath(abs, "")).toBe(expected);
+    });
+  });
+
+  describe("targetFromProxyPath", () => {
+    test.each([
+      // 生 pathname の %2F は "/" に潰さずそのまま復元する
+      [
+        "/api/proxy/https/example.com/a%2Fb/c",
+        "",
+        "https://example.com/a%2Fb/c",
+      ],
+      // クエリ中の %2F を保持して復元する
+      [
+        "/api/proxy/https/example.com/p",
+        "?q=a%2Fb",
+        "https://example.com/p?q=a%2Fb",
+      ],
+      // 非 ASCII（percent-encoding 済み）を保持して復元する
+      [
+        "/api/proxy/https/example.com/%E6%97%A5%E6%9C%AC",
+        "",
+        "https://example.com/%E6%97%A5%E6%9C%AC",
+      ],
+    ])("%s (search=%s) → %s", (pathname, search, expected) => {
+      expect(targetFromProxyPath(pathname, search)).toBe(expected);
+    });
+  });
+
+  test.each([
+    "https://example.com/a%2Fb/c",
+    "https://example.com/%E6%97%A5%E6%9C%AC?q=a%2Fb",
+    "https://premium.yahoo.co.jp/_main/%E6%97%A5/x.js?v=a%2Fb",
+  ])("round-trip で percent-encoding を保つ: %s", (abs) => {
+    const path = buildProxyPath(abs, "");
+    const qIndex = path.indexOf("?");
+    const pathname = qIndex === -1 ? path : path.slice(0, qIndex);
+    const search = qIndex === -1 ? "" : path.slice(qIndex);
+    expect(targetFromProxyPath(pathname, search)).toBe(abs);
+  });
+});
