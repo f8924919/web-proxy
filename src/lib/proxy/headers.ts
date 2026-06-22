@@ -3,6 +3,11 @@ const BLOCKED_HEADERS = new Set([
   "x-frame-options",
   "content-encoding",
   "transfer-encoding",
+  // 上流が identity 要求を無視して gzip 応答すると、fetch は本文を展開して渡すが上流の
+  // content-length は圧縮時サイズのまま残る。content-encoding を除去しつつこの値を転送すると
+  // 実本文長と宣言長が食い違い ERR_CONTENT_LENGTH_MISMATCH／本文切り詰めを招く（#97）。
+  // 除去してランタイムに再計算（または chunked）させる。詳細は docs/spec/features/proxy.md。
+  "content-length",
   // ブラウザがページ内 /browse?url=... リンクを prefetch してレート枠を消費するのを防ぐ。
   // 前段 CDN が後段で注入する分はコードからは消せない（docs/spec/features/proxy.md 参照）。
   "speculation-rules",
