@@ -1,4 +1,5 @@
 import { parse } from "node-html-parser";
+import { buildProxyPath } from "./proxyPath";
 
 const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
@@ -44,7 +45,10 @@ function assetUrl(href: string, base: string): string {
   if (!resolved.startsWith("http://") && !resolved.startsWith("https://")) {
     return resolved;
   }
-  return `${BASE_PATH}/api/proxy?url=${encodeURIComponent(resolved)}`;
+  // パス反映形式（/api/proxy/<scheme>/<host>/<path>）。ランタイム相対 import が
+  // ブラウザ上で正しく解決されるようにする（#100）。
+  // 仕様: docs/spec/features/proxy.md §プロキシ URL スキーム（パス反映）
+  return buildProxyPath(resolved, BASE_PATH);
 }
 
 // srcset 属性（`url [記述子]` のカンマ区切りリスト）の各候補の URL 部のみを

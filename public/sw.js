@@ -65,8 +65,24 @@
       return null;
     }
 
-    const toProxy = (absolute) =>
-      basePath + "/api/proxy?url=" + encodeURIComponent(absolute);
+    // パス反映形式（/api/proxy/<scheme>/<host>/<path>）へ書き換える（#100）。
+    // ランタイム相対 import がブラウザ上で正しく解決されるようにする。
+    // proxyPath.ts の buildProxyPath と同形（SW は importScripts 不可のため自前で持つ）。
+    // 仕様: docs/spec/features/proxy.md §プロキシ URL スキーム（パス反映）
+    const toProxy = (absolute) => {
+      const u = new URL(absolute);
+      const scheme = u.protocol.replace(/:$/, "");
+      return (
+        basePath +
+        "/api/proxy/" +
+        scheme +
+        "/" +
+        u.host +
+        u.pathname +
+        u.search +
+        u.hash
+      );
+    };
 
     // クロスオリジンの絶対 URL → そのまま中継
     if (req.origin !== swOrigin) {
