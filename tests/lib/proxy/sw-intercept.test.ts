@@ -11,8 +11,11 @@ const { deriveBasePath, isProxyOwnPath, extractTarget, rewriteRequestUrl } = sw;
 const SW_ORIGIN = "https://host";
 const PAGE = (target: string, basePath = "") =>
   `${SW_ORIGIN}${basePath}/browse?url=${encodeURIComponent(target)}`;
-const PROXY = (absolute: string, basePath = "") =>
-  `${basePath}/api/proxy?url=${encodeURIComponent(absolute)}`;
+// パス反映形式（/api/proxy/<scheme>/<host>/<path>）の独立オラクル（#100）。
+const PROXY = (absolute: string, basePath = "") => {
+  const u = new URL(absolute);
+  return `${basePath}/api/proxy/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
+};
 
 describe("deriveBasePath", () => {
   test.each([
@@ -37,6 +40,8 @@ describe("isProxyOwnPath", () => {
     ["/xjs/_/js/k=foo", false],
     ["/browser/app.js", false],
     ["/api/proxyData", false],
+    // パス反映形式の相対 import（#100）は /api/proxy/ プレフィックス＝自前ルート（素通し）
+    ["/api/proxy/https/example.com/_main/nuxt/x.js", true],
   ])("basePath='' %s → %s", (pathname, expected) => {
     expect(isProxyOwnPath(pathname, "")).toBe(expected);
   });
@@ -48,6 +53,7 @@ describe("isProxyOwnPath", () => {
     ["/proxy/3000/_next/static/x.js", true],
     ["/proxy/3000/_next/image", false],
     ["/images/x.png", false],
+    ["/proxy/3000/api/proxy/https/example.com/_main/nuxt/x.js", true],
   ])("basePath='/proxy/3000' %s → %s", (pathname, expected) => {
     expect(isProxyOwnPath(pathname, "/proxy/3000")).toBe(expected);
   });
@@ -136,6 +142,33 @@ describe("rewriteRequestUrl", () => {
           kidsPage(),
           SW_ORIGIN,
           ""
+        )
+      ).toBeNull();
+    });
+  });
+
+  describe("パス反映形式の相対 import は自前ルート＝素通し（#100）", () => {
+    test("同一オリジンの /api/proxy/<scheme>/<host>/... は null（素通し）", () => {
+      // チャンク分割 SPA の相対 import はパス反映形式に着地する。/api/proxy/ は
+      // 自前ルートのため SW は素通しし、ルートが中継する。
+      expect(
+        rewriteRequestUrl(
+          `${SW_ORIGIN}/api/proxy/https/www.google.com/_main/nuxt/x.js`,
+          page,
+          SW_ORIGIN,
+          ""
+        )
+      ).toBeNull();
+    });
+
+    test("BASE_PATH 付きでも /api/proxy/<scheme>/<host>/... は null", () => {
+      const bp = "/proxy/3000";
+      expect(
+        rewriteRequestUrl(
+          `${SW_ORIGIN}${bp}/api/proxy/https/www.google.com/_main/nuxt/x.js`,
+          PAGE("https://www.google.com", bp),
+          SW_ORIGIN,
+          bp
         )
       ).toBeNull();
     });
