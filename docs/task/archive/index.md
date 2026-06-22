@@ -28,6 +28,7 @@
 | [100-spa-runtime-relative-url.md](100-spa-runtime-relative-url.md)         | プロキシ経由 SPA のランタイム相対 module import が 404 になる問題を、アセット中継 URL のパス反映形式化（/api/proxy/<scheme>/<host>/<path>）で解消 Issue #100 / PR #106 | 2026-06-22 |
 | [108-addressbar-fixed-position.md](108-addressbar-fixed-position.md)       | プロキシ UI バーが body{height:100%} のサイト(ipleak.net 等)でスクロール時に消える問題を position:fixed + スペーサー化で解消 Issue #108 / PR #109                      | 2026-06-22 |
 | [111-special-path-encoding.md](111-special-path-encoding.md)               | `%2F`・非 ASCII 特殊パスの percent-encoding 保持を回帰テストで固定し spec を整合（実機検証で挙動は正しいと確認・防御と docs 整合のみ）Issue #111 / PR #112             | 2026-06-22 |
+| [114-spa-query-relative-nav.md](114-spa-query-relative-nav.md)             | SPA のクエリ相対リンク(?q=…)クリックで url= が落ちプロキシが外れる不具合を修正（DDG「Searches related to」。素通し判定に url= 有無を追加）Issue #114 / PR #116         | 2026-06-22 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
