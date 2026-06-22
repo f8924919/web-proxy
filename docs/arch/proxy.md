@@ -356,8 +356,8 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 3. buildClickNavDestination(href, location.href):
    - href を location.href 基準で解決し、http(s) 以外・# アンカーは null
    - 外部オリジンの絶対 URL（プロトコル相対含む）→ <path>?url=<encode(絶対URL)>
-   - 同一オリジンの …/browse リンク（書き換え済み）→ その path+search をそのまま返す
-   - 同一オリジンのその他パス（/articles/… 等）→ 現在ページの url= を base に
+   - 同一オリジンの …/browse リンクかつ url= パラメータを持つ（書き換え済み）→ その path+search をそのまま返す
+   - 同一オリジンのその他パス（/articles/… 等）・同一 /browse パスだが url= 無し（#114）→ 現在ページの url= を base に
      解決し直して <path>?url=<encode(再解決した絶対URL)>（url= 欠落時は null）
    - <path> は location.pathname（BASE_PATH 込みの …/browse）を再利用
 4. dest があれば preventDefault + stopImmediatePropagation（SPA ルーターの横取り阻止）し

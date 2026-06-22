@@ -244,12 +244,16 @@ export function buildClickNavDestination(
   if (dest.protocol !== "http:" && dest.protocol !== "https:") return null;
 
   if (dest.origin === page.origin) {
-    // 既に書き換え済みの browse リンク（同一 …/browse パス）はそのままフルナビゲーション。
-    if (dest.pathname === page.pathname) {
+    // 既に書き換え済みの browse リンク（同一 …/browse パスかつ url= を持つ）はそのまま
+    // フルナビゲーション。url= の有無を要するのは、ターゲット側 SPA が描画するクエリのみの
+    // 相対リンク（例 DuckDuckGo「Searches related to」の ?q=…）がブラウザ既定で同一 …/browse
+    // パスへ解決され、url= を持たないまま素通しされてプロキシが外れるのを防ぐため（#114）。
+    if (dest.pathname === page.pathname && dest.searchParams.has("url")) {
       return dest.pathname + dest.search + dest.hash;
     }
-    // それ以外の同一オリジンパス（例 /articles/…）は、ブラウザ既定だと proxy オリジン直下へ
-    // 解決され離脱する。現ターゲット（url=）を base に解決し直して proxy 中継へ振り向ける。
+    // それ以外の同一オリジン（例 /articles/… のルート相対・相対、および上記のクエリのみ相対
+    // ?q=…）は、ブラウザ既定だと proxy オリジン直下や url= 無しの …/browse へ解決され離脱・
+    // 失効する。現ターゲット（url=）を base に解決し直して proxy 中継へ振り向ける。
     const target = page.searchParams.get("url");
     if (!target) return null;
     let real: URL;
