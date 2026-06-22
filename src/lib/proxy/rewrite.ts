@@ -47,6 +47,45 @@ function assetUrl(href: string, base: string): string {
   return `${BASE_PATH}/api/proxy?url=${encodeURIComponent(resolved)}`;
 }
 
+// srcset 属性（`url [記述子]` のカンマ区切りリスト）の各候補の URL 部のみを
+// assetUrl() で書き換え、記述子（1x / 2x / 640w 等）はそのまま保持して再結合する。
+// WHATWG の srcset 解析に準じ、URL 部は空白以外の連続文字として取り出すため、
+// data: URL 内のカンマでも誤分割しない。src だけ書き換えて srcset を放置すると
+// ブラウザが srcset 側の未書き換え候補を採用してしまう（Next.js <Image> の
+// /_next/image?url=… がプロキシ origin 直下へ解決され 400 になる等。#98）。
+// 仕様: docs/spec/features/proxy.md §srcset の書き換え
+export function rewriteSrcset(value: string, base: string): string {
+  const isWs = (c: string) =>
+    c === " " || c === "\t" || c === "\n" || c === "\f" || c === "\r";
+  const candidates: string[] = [];
+  let pos = 0;
+  const len = value.length;
+  while (pos < len) {
+    // 先頭の空白・カンマ（候補区切り）を読み飛ばす。
+    while (pos < len && (isWs(value[pos]) || value[pos] === ",")) pos++;
+    if (pos >= len) break;
+    // URL 部: 空白以外の連続文字。
+    const urlStart = pos;
+    while (pos < len && !isWs(value[pos])) pos++;
+    let url = value.slice(urlStart, pos);
+    let descriptor = "";
+    if (url.endsWith(",")) {
+      // 末尾カンマは「記述子なし」の候補区切り。URL から外す。
+      url = url.replace(/,+$/, "");
+    } else {
+      // URL 直後の空白を読み飛ばし、次のカンマまでを記述子として保持する。
+      while (pos < len && isWs(value[pos])) pos++;
+      const descStart = pos;
+      while (pos < len && value[pos] !== ",") pos++;
+      descriptor = value.slice(descStart, pos).trim();
+      if (pos < len) pos++; // 候補区切りのカンマを消費する。
+    }
+    const rewritten = assetUrl(url, base);
+    candidates.push(descriptor ? `${rewritten} ${descriptor}` : rewritten);
+  }
+  return candidates.join(", ");
+}
+
 const ADDRESS_BAR_HTML = (currentUrl: string) =>
   `
 <div id="proxy-addressbar" style="position:sticky;top:0;z-index:99999;background:#1e1e2e;padding:6px 12px;display:flex;gap:8px;align-items:center;font-family:sans-serif;box-shadow:0 2px 4px rgba(0,0,0,.4)">
@@ -318,6 +357,15 @@ export function rewriteHtml(html: string, baseUrl: string): string {
     root.querySelectorAll(sel).forEach((el) => {
       const src = el.getAttribute("src");
       if (src) el.setAttribute("src", assetUrl(src, baseUrl));
+    });
+  }
+
+  // <img> / <source> の srcset を書き換える。src だけ書き換えて srcset を放置すると
+  // ブラウザが srcset 側の未書き換え候補を採用してしまう（#98）。
+  for (const sel of ["img[srcset]", "source[srcset]"] as const) {
+    root.querySelectorAll(sel).forEach((el) => {
+      const srcset = el.getAttribute("srcset");
+      if (srcset) el.setAttribute("srcset", rewriteSrcset(srcset, baseUrl));
     });
   }
 
