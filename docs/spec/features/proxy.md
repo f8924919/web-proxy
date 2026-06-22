@@ -453,15 +453,18 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 
 以下のヘッダーを除去してからブラウザへ返す。
 
-| 除去対象                  | 理由                                                                                                                          |
-| ------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `Content-Security-Policy` | プロキシの書き換え済みリソースをブロックする                                                                                  |
-| `X-Frame-Options`         | iframe 埋め込み対応の障害になる                                                                                               |
-| `Content-Encoding`        | fetch 後に展開済みのため再設定不要                                                                                            |
-| `Transfer-Encoding`       | 同上                                                                                                                          |
-| `Speculation-Rules`       | ブラウザがページ内の `/browse?url=...` リンクを prefetch し、各先読みがフル中継としてレート枠を消費するのを防ぐ（防御的措置） |
+| 除去対象                  | 理由                                                                                                                                                                                                                                  |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Content-Security-Policy` | プロキシの書き換え済みリソースをブロックする                                                                                                                                                                                          |
+| `X-Frame-Options`         | iframe 埋め込み対応の障害になる                                                                                                                                                                                                       |
+| `Content-Encoding`        | fetch 後に展開済みのため再設定不要                                                                                                                                                                                                    |
+| `Transfer-Encoding`       | 同上                                                                                                                                                                                                                                  |
+| `Content-Length`          | 上流の値（多くは圧縮時のサイズ）と、展開・書き換え後にブラウザへ返す実本文長が食い違い、ブラウザが本文を宣言長で切り詰める／`ERR_CONTENT_LENGTH_MISMATCH` を起こすのを防ぐ（#97）。除去してランタイムに再計算（または chunked）させる |
+| `Speculation-Rules`       | ブラウザがページ内の `/browse?url=...` リンクを prefetch し、各先読みがフル中継としてレート枠を消費するのを防ぐ（防御的措置）                                                                                                         |
 
 `Content-Type` / `Cache-Control` などはそのまま維持する。
+
+> **`Content-Length` を除去する理由（#97）**: `proxyFetch` は `Accept-Encoding: identity` を送るが、CDN によってはこれを無視して gzip 等で応答する。このとき fetch は本文を展開して渡す一方、上流の `Content-Length` は**圧縮時のサイズ**のまま残る。`Content-Encoding` は除去するため、この値を転送すると実本文長（展開後）と宣言長が食い違い、ブラウザが本文を途中で切り詰める（例: SPA の JS が `Unterminated string in JSON` で初期化失敗）。`text/css` のように本文を作り直す経路ではランタイムが再計算するが、その他の素通し経路では上流値が残るため、`Content-Length` は一律除去してランタイムに再計算させる。
 
 > **前段 CDN（Cloudflare 等）の Speculation/Prefetch について**: `sanitizeHeaders` が除去できるのは**上流（ターゲット）応答**のヘッダーのみ。プロキシ自身の前段に Cloudflare 等がいる場合、`Speculation-Rules`（`/cdn-cgi/speculation` を指す）はアプリ応答の**後段**で注入されるためコードからは除去できない。同一オリジン（プロキシのドメイン）の `/browse?url=...` リンクが prefetch されると中継リクエストが増え、レート制限の枯渇やターゲットへの過剰アクセスを招くため、**当該ドメインでは CDN 側の Speculation Rules / Prefetch URLs 機能を無効化する**こと。
 
