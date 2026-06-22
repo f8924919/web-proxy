@@ -2,7 +2,7 @@
 
 - **Issue**: [#108](https://github.com/f8924919/web-proxy/issues/108)
 - **ブランチ**: `bugfix/108-addressbar-fixed-position`
-- **ステータス**: 進行中
+- **ステータス**: 完了
 - **種別**: バグ修正
 - **関連**: アドレスバー注入（`rewrite.ts` の `ADDRESS_BAR_HTML`）/ docs/arch/proxy.md §アドレスバー注入 / docs/spec/screens/browse.md §コンテンツエリア
 
@@ -23,7 +23,7 @@ ipleak と同条件（`body{height:100%}` + 縦長コンテンツ）で再現・
 | 修正前 `position:sticky`             | top:0                                               | **top:-830 → 画面外（消える）** |
 | 修正後 `position:fixed` + スペーサー | top:0（content はスペーサー分押し下げ・重なりなし） | top:0（固定表示を維持）         |
 
-> テスト方針上 E2E/UI スモークはスコープ外（[policy §2.4](../testing/policy.md)）のため、自動テストは `rewriteHtml` 出力マークアップに対するロジック層検証（fixed 指定・スペーサー・高さ同期スクリプトの存在）で行う。視覚挙動は上記 Playwright で手動確認。
+> テスト方針上 E2E/UI スモークはスコープ外（[policy §2.4](../../testing/policy.md)）のため、自動テストは `rewriteHtml` 出力マークアップに対するロジック層検証（fixed 指定・スペーサー・高さ同期スクリプトの存在）で行う。視覚挙動は上記 Playwright で手動確認。
 
 ## 修正方針
 
@@ -31,7 +31,7 @@ ipleak と同条件（`body{height:100%}` + 縦長コンテンツ）で再現・
 
 ## 受け入れ条件（Issue #108）
 
-- [ ] `#proxy-addressbar` を `position: fixed` 化しビューポート上部へ常に固定
-- [ ] バー直後にスペーサーを挿入し、高さをバー実高に同期してコンテンツの重なりを回避
-- [ ] ロジック層テスト（fixed 指定・スペーサー・同期スクリプトの存在）を追加
-- [ ] 既存の注入挙動（GET フォーム横取り・クリックナビ横取り・SW 登録）に回帰なし
+- [x] `#proxy-addressbar` を `position: fixed` 化しビューポート上部へ常に固定
+- [x] バー直後にスペーサーを挿入し、高さをバー実高に同期してコンテンツの重なりを回避
+- [x] ロジック層テスト（fixed 指定・スペーサー・同期スクリプトの存在）を追加
+- [x] 既存の注入挙動（GET フォーム横取り・クリックナビ横取り・SW 登録）に回帰なし
