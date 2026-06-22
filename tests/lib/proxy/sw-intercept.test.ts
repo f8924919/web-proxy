@@ -29,6 +29,9 @@ describe("isProxyOwnPath", () => {
     ["/browse", true],
     ["/api/proxy", true],
     ["/_next/static/x.js", true],
+    // /_next/image はターゲット（Next.js 製）の最適化エンドポイントなので自前ルート扱いしない（#102）
+    ["/_next/image", false],
+    ["/_next/data/build/x.json", true],
     ["/sw.js", true],
     ["/images/nav_logo229.png", false],
     ["/xjs/_/js/k=foo", false],
@@ -42,6 +45,8 @@ describe("isProxyOwnPath", () => {
     ["/proxy/3000/browse", true],
     ["/proxy/3000/api/proxy", true],
     ["/proxy/3000/", true],
+    ["/proxy/3000/_next/static/x.js", true],
+    ["/proxy/3000/_next/image", false],
     ["/images/x.png", false],
   ])("basePath='/proxy/3000' %s → %s", (pathname, expected) => {
     expect(isProxyOwnPath(pathname, "/proxy/3000")).toBe(expected);
@@ -93,6 +98,47 @@ describe("rewriteRequestUrl", () => {
     [`${SW_ORIGIN}/`, "ホーム"],
   ])("自前ルート %s（%s）→ null（素通し）", (reqUrl) => {
     expect(rewriteRequestUrl(reqUrl, page, SW_ORIGIN, "")).toBeNull();
+  });
+
+  describe("/_next/image の振り向け（#102）", () => {
+    const inner = "https://s.yimg.jp/i/kids/x.png";
+    const nextImg = (basePath = "") =>
+      `${SW_ORIGIN}${basePath}/_next/image?url=${encodeURIComponent(inner)}&w=256&q=75`;
+    const resolvedImg =
+      "https://kids.yahoo.co.jp/_next/image?url=" +
+      `${encodeURIComponent(inner)}&w=256&q=75`;
+    const kidsPage = (basePath = "") =>
+      PAGE("https://kids.yahoo.co.jp", basePath);
+
+    test("browse ページ上ではターゲット origin の /_next/image へ振り向ける", () => {
+      expect(rewriteRequestUrl(nextImg(), kidsPage(), SW_ORIGIN, "")).toBe(
+        PROXY(resolvedImg)
+      );
+    });
+
+    test("BASE_PATH 付きでも振り向ける", () => {
+      const bp = "/proxy/3000";
+      expect(rewriteRequestUrl(nextImg(bp), kidsPage(bp), SW_ORIGIN, bp)).toBe(
+        PROXY(resolvedImg, bp)
+      );
+    });
+
+    test("ターゲット不明（url 無しページ）では素通し（null）＝プロキシ自身の最適化を壊さない", () => {
+      expect(
+        rewriteRequestUrl(nextImg(), `${SW_ORIGIN}/`, SW_ORIGIN, "")
+      ).toBeNull();
+    });
+
+    test("/_next/static は引き続き自前ルートとして素通し（回帰防止）", () => {
+      expect(
+        rewriteRequestUrl(
+          `${SW_ORIGIN}/_next/static/chunks/x.js`,
+          kidsPage(),
+          SW_ORIGIN,
+          ""
+        )
+      ).toBeNull();
+    });
   });
 
   test("ページに url が無ければ同一オリジン非自前パスは null", () => {
