@@ -12,7 +12,9 @@
 src/
 ├── app/
 │   ├── browse/
-│   │   └── route.ts          # ブラウズ Route Handler
+│   │   ├── route.ts          # ブラウズ Route Handler（後方互換 ?url=・GET は 307 でパス反映へ・POST 中継）
+│   │   └── [...slug]/
+│   │       └── route.ts      # ブラウズ Route Handler（パス反映形式 /browse/<scheme>/<host>/<path>・正本。#115）
 │   └── api/
 │       └── proxy/
 │           ├── route.ts            # アセット中継 Route Handler（旧 ?url= 形式・後方互換）
@@ -23,8 +25,10 @@ src/
 │       ├── fetch.ts          # SSRF チェック付き fetch
 │       ├── browserFetch.ts   # ヘッドレスブラウザ中継（ブラウザバック中継・ティア判定・Cookie ウォーミング）
 │       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・クリックナビ横取り・document.domain シム <script> 注入含む）
-│       ├── proxyPath.ts      # プロキシ URL スキーム（パス反映）の組み立て・復元（純粋関数。#100）
+│       ├── proxyPath.ts      # アセット中継 URL スキーム（パス反映）の組み立て・復元（純粋関数。#100）
+│       ├── browsePath.ts     # ブラウズ URL スキーム（パス反映）の組み立て・復元（純粋関数。#115）
 │       ├── relayAsset.ts     # アセット中継の共通処理（両 route が共有。中継・CORS・OPTIONS）
+│       ├── browseRelay.ts    # ブラウズ中継の共通処理（両 route が共有。ティア選択・ループ検出・HTML 書き換え）
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
@@ -39,18 +43,26 @@ public/
 
 ---
 
-## Route Handler: `src/app/browse/route.ts`
+## Route Handler: `src/app/browse/route.ts` ＋ `src/app/browse/[...slug]/route.ts`
 
-**役割**: ブラウズ画面の生 HTML レスポンスを返す。React を介さない。`GET`（ページ閲覧）と `POST`（フォーム送信の中継、[機能仕様 §POST 中継](../spec/features/proxy.md#post-中継)）をエクスポートする。
+**役割**: ブラウズ画面の生 HTML レスポンスを返す。React を介さない。パス反映形式 `/browse/<scheme>/<host>/<path>`（`[...slug]/route.ts`・正本。#115）が中継の本体で、後方互換 `/browse?url=`（`route.ts`）は GET をパス反映 URL へ 307 リダイレクトし、POST のみ直接中継する。中継・レスポンス処理・ループ検出は共通処理 `src/lib/proxy/browseRelay.ts`（`relayBrowse` / `browseGuards`）へ委譲し、両 route が共有する。
 
-### 処理フロー（GET）
+### パス反映ルート `[...slug]/route.ts`（正本・#115）
+
+`browsePath.ts` の純粋関数 `targetFromBrowsePath(pathname, search)` で `/browse/<scheme>/<host>/<path>` からターゲット絶対 URL を復元する（percent-encoding を保つため `req.nextUrl.pathname`（生）から復元）。復元不能なら 400。以降は下記 GET / POST フローの 3 以降と同じ。閲覧ページの `location` がターゲットを反映するため、ターゲット SPA が `location` を読んで再構築するリンクが proxy 専用パラメータで汚染されない（[機能仕様 §ページ遷移のパス反映](../spec/features/proxy.md#ページ遷移のパス反映115)）。
+
+> 末尾スラッシュ（ターゲット root `path="/"`）の URL `…/browse/https/host/` を Next 既定の trailing-slash 正規化が 308 で剥がすと、その Location が BASE_PATH を失いリバースプロキシ配下で 404 になる（#74 と同類）。`next.config.mjs` の `skipTrailingSlashRedirect: true` で無効化し、catch-all ルートが末尾スラッシュ有無を直接処理する。
+
+### 後方互換ルート `route.ts`（?url=）
+
+- **GET**: `searchParams.get('url')` を取得。null は案内ページ(200)、パース失敗・非 http(s) は 400。url があれば `buildBrowsePath(url, BASE_PATH)` で組み立てたパス反映 URL へ **307 リダイレクト**する（上流取得・レート制限・ループ検出はリダイレクト先で行い二重計上しない）。外部リンク・ブックマーク・アドレスバー入力経由でも最終的に `location` をクリーンにする。
+- **POST**: パス反映へのリダイレクトは行わず、従来どおり `?url=` を直接中継する（下記 POST フロー）。
+
+### 処理フロー（GET・パス反映ルート / 旧ルートのリダイレクト先）
 
 ```
-1. searchParams.get('url') を取得
-2. url が null → アドレスバー付き案内ページ(200) を返す（リダイレクトしない。#74）
-   パース失敗 → 400
-   （リバースプロキシ配下で 307→ホームが 404 になるのを避けるため 200 ページを直接返す。
-    [機能仕様 §url 未指定時の案内ページ](../spec/features/proxy.md#url-未指定時の案内ページget)）
+1. （[...slug]）targetFromBrowsePath(nextUrl.pathname, nextUrl.search) でターゲット復元 → 復元不能なら 400
+2. （旧ルート GET）url が null → 案内ページ(200)。あればパス反映 URL へ 307 リダイレクト
 3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
 3b. navigationLoopGuard.check(ip, url) → ループ検出なら静的案内ページ(200) を返して打ち切り
    （host+path 単位の短時間連続遷移を検出。[機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策)）
@@ -287,15 +299,15 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 | 対象                               | 書き換え先                                                      |
 | ---------------------------------- | --------------------------------------------------------------- |
-| `<a href>`                         | `/browse?url=<encoded>`                                         |
-| `<form action>`                    | `/browse?url=<encoded>`                                         |
+| `<a href>`                         | `/browse/<scheme>/<host>/<path>`                                |
+| `<form action>`                    | `/browse/<scheme>/<host>/<path>`                                |
 | `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                             |
 | `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持） |
 | `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`                             |
 | `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                             |
-| `<meta http-equiv=refresh>`        | `/browse?url=<encoded>`                                         |
+| `<meta http-equiv=refresh>`        | `/browse/<scheme>/<host>/<path>`                                |
 
-> アセット系（`<img>`/`<link>`/`<script>`/`srcset`/CSS）の書き換え先は `assetUrl()` → `proxyPath.ts` の `buildProxyPath()` でパス反映形式に組み立てる（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)。#100）。ナビゲーション系（`<a>`/`<form>`/meta refresh）は従来どおり `browseUrl()` の `?url=` 形式。
+> アセット系（`<img>`/`<link>`/`<script>`/`srcset`/CSS）は `assetUrl()` → `proxyPath.ts` の `buildProxyPath()`（`/api/proxy/...`・#100）、ナビゲーション系（`<a>`/`<form>`/meta refresh）は `browseUrl()` → `browsePath.ts` の `buildBrowsePath()`（`/browse/...`・#115）でパス反映形式に組み立てる（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)）。両者は同形のスキームで、`%2F`/非 ASCII の percent-encoding を保持する（#111）。
 
 `<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` は `content` 内の `url=` を正規表現で抜き出し、`<a href>` と同じ `browseUrl()` で書き換える（遅延値は保持）。ルート相対 `url` がプロキシオリジン直下へ解決されて離脱するのを防ぐ。`<noscript>` 内の meta refresh はパーサが生テキスト扱いするため対象外（[機能仕様 §meta refresh の書き換え](../spec/features/proxy.md#meta-refresh-の書き換え)の制限）。
 
@@ -315,20 +327,20 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 > 関連仕様: [プロキシ機能仕様 §GET フォーム送信の横取り](../spec/features/proxy.md#get-フォーム送信の横取り)
 
-`rewriteHtml` は `<body>` 直後（アドレスバー・SW 登録に続けて）に、GET フォーム送信を横取りする `<script>` を注入する。GET フォーム送信ではブラウザが `action` のクエリ文字列（`?url=<target>`）を破棄し、`url` が消失して [ブラウズ Route Handler](#route-handler-srcappbrowseroutets) が案内ページ（HTTP 200）を表示してしまうため、それを補う。
+`rewriteHtml` は `<body>` 直後（アドレスバー・SW 登録に続けて）に、GET フォーム送信を横取りする `<script>` を注入する。パス反映ナビ形式（#115）では `action` がターゲットを**パス部**に持つため GET 送信でも消失しないが、SPA（React 等）が自前 submit ハンドラで実サイトへ後勝ち遷移する（#93）のを阻止するため横取りは維持する。
 
-注入スクリプトは 2 経路で捕捉する。いずれも振り向け先の決定は純粋関数 `buildGetFormDestination` を共用する。
+注入スクリプトは 2 経路で捕捉する。いずれも振り向け先の決定は純粋関数 `buildGetFormDestination`（＋共有ヘルパー `extractBrowseTarget` / `browseNavPrefix` / `buildBrowseDest`）を共用する。
 
 ```
 (A) document に submit を capture で委任（動的フォーム・ネイティブ submit・requestSubmit にも効く）:
 0. 自前のアドレスバー（#proxy-addressbar 内のフォーム）は独自 onsubmit を持つため除外
-1. method が GET 以外 → 何もしない（POST 等は action のクエリが保たれるため素通し）
-2. 送信フォームの action から url パラメータを取り出してターゲットとする
-   （action に url が無い場合は window.location の url パラメータをフォールバック）
+1. method が GET 以外 → 何もしない（POST 等はそのまま素通し）
+2. 送信フォームの action（パス反映 …/browse/<scheme>/<host>/<path>）からターゲットを復元する
+   （action から復元不可なら window.location から復元。後方互換で旧 ?url= 形式も復元可）
 3. preventDefault + stopImmediatePropagation（SPA の自前 submit ハンドラ阻止。#93）し、
    ターゲットのクエリ全体を FormData（フォーム項目）で置き換える
-4. action（または window.location）のパス部（BASE_PATH 込みの …/browse）を再利用し、
-   <path>?url=<encodeURIComponent(ターゲット)> へ window.location.href で遷移する
+4. パス反映プレフィックス（BASE_PATH 込みの …/browse/）を再利用し、
+   <prefix><scheme>/<host>/<path>?<再構築クエリ> へ window.location.href で遷移する
 
 (B) HTMLFormElement.prototype.submit のオーバーライド（#78）:
 - form.submit()（プログラム送信）は submit イベントを発火しないため (A) で捕捉できない
@@ -337,7 +349,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
   そのまま呼ぶ（挙動を変えない）。dest が得られた場合のみ location.href で遷移する。
 ```
 
-`BASE_PATH` は `action`/`window.location` のパス部をそのまま再利用することで保持される（スクリプト内で個別に組み立てない）。`location.assign` / `history` 駆動の純粋な JS ナビゲーション（フォームを介さない）は対象外。
+`BASE_PATH` とパス反映プレフィックスは `action`/`window.location` から再利用することで保持される（スクリプト内で BASE_PATH を個別に組み立てない）。`location.assign` / `history` 駆動の純粋な JS ナビゲーション（フォームを介さない）は対象外。
 
 ### クライアント側ナビゲーション横取りスクリプト注入
 
@@ -355,16 +367,19 @@ document に click を capture で委任（動的リンクにも効き、SPA の
    （新規タブはブラウザ標準挙動を尊重＝離脱は既知の制限）
 3. buildClickNavDestination(href, location.href):
    - href を location.href 基準で解決し、http(s) 以外・# アンカーは null
-   - 外部オリジンの絶対 URL（プロトコル相対含む）→ <path>?url=<encode(絶対URL)>
-   - 同一オリジンの …/browse リンクかつ url= パラメータを持つ（書き換え済み）→ その path+search をそのまま返す
-   - 同一オリジンのその他パス（/articles/… 等）・同一 /browse パスだが url= 無し（#114）→ 現在ページの url= を base に
-     解決し直して <path>?url=<encode(再解決した絶対URL)>（url= 欠落時は null）
-   - <path> は location.pathname（BASE_PATH 込みの …/browse）を再利用
+   - 現ターゲットは location（パス反映ナビ形式 …/browse/<scheme>/<host>/… のマーカー以降）
+     から復元。後方互換でリダイレクト前の …/browse?url= 形式は url= からも復元
+   - 外部オリジンの絶対 URL（プロトコル相対含む）→ 当該絶対 URL をパス反映ナビ形式へ
+   - 同一オリジンの書き換え済み browse リンク（…/browse/<scheme>/<host>/… 形式、または
+     後方互換の …/browse パスかつ url= 付き）→ その path+search+hash をそのまま返す
+   - 同一オリジンのその他パス（/articles/… 等）・クエリのみ相対（?q=… ・#114）→ 現ターゲットを
+     base に解決し直してパス反映ナビ形式へ（ターゲット復元不可なら null）
+   - パス反映プレフィックス（BASE_PATH 込みの …/browse/）は location から再利用
 4. dest があれば preventDefault + stopImmediatePropagation（SPA ルーターの横取り阻止）し
    location.href = dest で遷移
 ```
 
-`BASE_PATH` は `window.location.pathname` をそのまま再利用することで保持される（GET フォーム横取りと同方式）。リンククリックを伴わない `location`/`history` API 駆動の JS 遷移は依然対象外（ブラウザ仕様上フック不能。完全対応は RBI #72）。本方式は同一サイト内の SPA クライアントルーティングもフルナビゲーション化するトレードオフを持つ（spec 参照）。
+`BASE_PATH` とパス反映プレフィックスは `window.location` から再利用することで保持される（GET フォーム横取りと同方式）。リンククリックを伴わない `location`/`history` API 駆動の JS 遷移は依然対象外（ブラウザ仕様上フック不能。完全対応は RBI #72）。本方式は同一サイト内の SPA クライアントルーティングもフルナビゲーション化するトレードオフを持つ（spec 参照）。
 
 ### `document.domain` ドメインガード無効化シム注入
 
@@ -395,7 +410,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 ```
 1. request.mode === "navigate" → 素通し（ページ遷移・フォーム送信に委ねる）
 2. 同一オリジンの自前ルート（/browse・/api/proxy・/_next/* 等。ただし /_next/image を除く）→ 素通し
-3. clientId から要求元ページ URL（/browse?url=<target>）を取得し、url パラメータをターゲットとする
+3. clientId から要求元ページ URL（パス反映 /browse/<scheme>/<host>/<path>・後方互換 /browse?url=<target>）を取得し、extractTarget でターゲットを復元する
 4. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
    （振り向け先はパス反映形式 /api/proxy/<scheme>/<host>/<path>。#100）
    - クロスオリジンの絶対 URL → /api/proxy/<scheme>/<host>/<path>
