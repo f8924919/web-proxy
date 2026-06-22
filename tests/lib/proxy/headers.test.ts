@@ -45,6 +45,7 @@ describe("sanitizeHeaders", () => {
     "x-frame-options",
     "content-encoding",
     "transfer-encoding",
+    "content-length",
     "speculation-rules",
   ];
 
@@ -55,6 +56,21 @@ describe("sanitizeHeaders", () => {
     });
     const result = sanitizeHeaders(headers, ORIGIN_A);
     expect(result.has(name)).toBe(false);
+  });
+
+  // #97: 上流が identity 要求を無視して gzip 応答すると、fetch は本文を展開して渡す一方
+  // content-length は圧縮時サイズのまま残る。content-encoding を除去しつつこの値を転送すると
+  // 実本文長と宣言長が食い違い ERR_CONTENT_LENGTH_MISMATCH／本文切り詰めを招くため除去する。
+  test("content-encoding と共に content-length も除去する（#97）", () => {
+    const headers = new Headers({
+      "content-encoding": "gzip",
+      "content-length": "114",
+      "content-type": "text/javascript",
+    });
+    const result = sanitizeHeaders(headers, ORIGIN_A);
+    expect(result.has("content-encoding")).toBe(false);
+    expect(result.has("content-length")).toBe(false);
+    expect(result.get("content-type")).toBe("text/javascript");
   });
 
   test("content-type はそのまま維持する", () => {
