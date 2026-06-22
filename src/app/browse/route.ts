@@ -8,8 +8,6 @@ import {
   htmlResponse,
 } from "@/lib/proxy/browseRelay";
 
-const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
-
 // 後方互換ルート（?url= クエリ方式）。パス反映ナビ形式（/browse/<scheme>/<host>/<path>・#115）が
 // 正本だが、外部リンク・ブックマーク・アドレスバー入力経由の ?url= も受理する。
 // GET は閲覧ページの location をクリーンにするためパス反映 URL へ 307 リダイレクトする。
@@ -40,9 +38,14 @@ export function GET(req: NextRequest) {
 
   // パス反映ナビ形式へ 307 リダイレクトする。上流取得・レート制限・ループ検出は
   // リダイレクト先の [...slug] ルートで行う（ここでは二重計上しない）。
+  // Location は BASE_PATH を含めない（アプリ相対）。リバースプロキシ（code-server の
+  // /proxy/3000 等）は受信時に prefix を剥がす一方、応答の Location には prefix を再付加する
+  // ため、BASE_PATH を含めると二重（/proxy/3000/proxy/3000/…）になる（#74/#55 と同じ理由。
+  // <a href> 等のブラウザ送信 URL は逆に BASE_PATH が必要で、buildBrowsePath は BASE_PATH 付きで
+  // 組み立てる）。BASE_PATH 無し環境では Location はそのまま機能する。
   return new Response(null, {
     status: 307,
-    headers: { Location: buildBrowsePath(parsed.href, BASE_PATH) },
+    headers: { Location: buildBrowsePath(parsed.href, "") },
   });
 }
 
