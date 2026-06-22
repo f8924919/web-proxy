@@ -66,6 +66,7 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 ```
 
 - `<scheme>` は `http` / `https`。`<host>` はポート込み（例 `host:8080`）。`<targetPath>` はターゲットのパスを percent-encoding 済みのまま反映する。ターゲットのクエリ（例 `/_next/image?url=…`）は中継 URL のクエリへそのまま載せる。
+- **特殊パスの percent-encoding 保持**: パス／クエリ中の `%2F`（エンコード済みスラッシュ）や非 ASCII（日本語等の `%E3%81%…`）は、デコード／再エンコードを挟まず**そのままの percent-encoding で**ターゲットへ転送する。`%2F` を生の `/` に潰すとパス構造が変わり別リソースを指してしまうため。実装は `buildProxyPath` が WHATWG `URL` の `pathname`（`%2F` を正規化しない）を用い、復元側 `targetFromProxyPath` はデコード済み catch-all params ではなく**生の `req.nextUrl.pathname` を文字列処理**で扱うことでこれを保証する（[arch/proxy.md](../../arch/proxy.md) の Route Handler 節・回帰テスト `tests/lib/proxy/proxyPath.test.ts`）。
 
 **なぜパス反映か（#100）**: 旧 `/api/proxy?url=<encoded>` クエリ方式では、配信される JS モジュールの `import.meta.url` のディレクトリが常に `…/api/`（クエリより前）に固定され、**チャンク分割 SPA（Nuxt/Vite/webpack 等）がランタイムで発行する相対 import（`import('./chunk.js')`）が `…/api/chunk.js` に解決**されてしまう。これを SW がターゲット origin 直下（`<host>/api/chunk.js`）へ誤振り向けし 404・MIME エラーになる（動的 import 失敗）。パス反映方式ではモジュールの URL ディレクトリがターゲットのディレクトリを反映するため、相対 import はブラウザ上でネイティブに正しく解決され、SW を介さずに（`/api/proxy/…` は自前ルート＝素通し）正しい中継 URL に着地する。
 
@@ -85,29 +86,31 @@ ${BASE_PATH}/api/proxy/<scheme>/<host>/<targetPath><?targetQuery><#hash>
 
 ### 書き換えルール
 
-相対パスはターゲットサイトのオリジンを基準に絶対 URL へ変換してからエンコードする。
+相対パスはターゲットサイトのオリジンを基準に絶対 URL へ変換する。ナビゲーション系（`<a>` / `<form>`）はエンコードして `/browse?url=<encoded>` へ、アセット系（`<img>` / `<link>` / `<script>` / `srcset`）は上記 §プロキシ URL スキームのパス反映形式 `/api/proxy/<scheme>/<host>/<path>` へ書き換える（#100）。
 
-| 対象タグ / 属性                    | 遷移先ルート                             | 理由                                                       |
-| ---------------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
-| `<a href>`                         | `/browse?url=<encoded>`                  | リンク先もブラウズ画面で開く                               |
-| `<form action>`                    | `/browse?url=<encoded>`                  | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）   |
-| `<img src>`                        | `/api/proxy?url=<encoded>`               | 透過中継（UI 不要）                                        |
-| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy?url=<encoded>` | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照） |
-| `<link href>`                      | `/api/proxy?url=<encoded>`               | 透過中継                                                   |
-| `<script src>`                     | `/api/proxy?url=<encoded>`               | 透過中継                                                   |
+| 対象タグ / 属性                    | 遷移先ルート                                    | 理由                                                       |
+| ---------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
+| `<a href>`                         | `/browse?url=<encoded>`                         | リンク先もブラウズ画面で開く                               |
+| `<form action>`                    | `/browse?url=<encoded>`                         | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）   |
+| `<img src>`                        | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継（UI 不要）                                        |
+| `<img srcset>` / `<source srcset>` | 各候補 URL をパス反映形式                       | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照） |
+| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                   |
+| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                   |
+
+> パス反映形式の組み立て・`%2F`／非 ASCII の percent-encoding 保持は上記 §プロキシ URL スキーム（パス反映）を参照。
 
 ### srcset の書き換え
 
 `<img>` / `<source>` の `srcset` 属性は、`url [記述子]` のカンマ区切りリスト（記述子は `1x` / `2x` の画素密度、または `640w` の幅）。`src` だけを書き換えて `srcset` を放置すると、ブラウザは `srcset` 側の候補を優先採用し、**書き換え前の URL** で取得してしまう。特にプロキシ対象が Next.js 製サイトの場合、`<Image>` が出力する `srcset="/_next/image?url=<外部>&w=256 1x, …"` がそのまま残り、プロキシ origin 直下の `/_next/image`（=プロキシ自身の画像最適化エンドポイント）へ解決され、外部ドメインが `images.remotePatterns` 未許可のため **400** になる（#98）。
 
-これを防ぐため、`rewriteHtml` は `<img>` / `<source>` の `srcset` を各候補に分解し、URL 部のみを `assetUrl()`（`<img src>` と同じ `/api/proxy?url=<encoded>` 化）で書き換え、**記述子（`1x` / `640w` 等）はそのまま保持**して再結合する。
+これを防ぐため、`rewriteHtml` は `<img>` / `<source>` の `srcset` を各候補に分解し、URL 部のみを `assetUrl()`（`<img src>` と同じパス反映形式 `/api/proxy/<scheme>/<host>/<path>` 化）で書き換え、**記述子（`1x` / `640w` 等）はそのまま保持**して再結合する。
 
 - **候補の分割**: WHATWG の srcset 解析に準じ、URL 部は空白以外の連続文字として取り出す（`data:` URL 内のカンマで誤分割しない）。URL 直後の記述子はカンマまでを保持する。
 - **http(s) 以外**: `assetUrl` と同じく、`data:` URL や http(s) に解決されない値はそのまま残す。
 
 ### サブリソース整合性（SRI）属性の除去
 
-`<script src>` を `/api/proxy?url=...` へ書き換えると、ブラウザが実際に取得するのは**プロキシが中継したレスポンス**になる。元の `src` に `integrity`（SRI）属性が付いている場合、中継レスポンスは元 URL のバイト列と一致する保証がなく（ヘッダーサニタイズ・エンコーディング差異等）、**SRI ハッシュ不一致でスクリプトの実行がブロック**される。これを防ぐため、`src` を書き換える `<script>` からは `integrity` 属性を除去する。
+`<script src>` をパス反映形式 `/api/proxy/<scheme>/<host>/<path>` へ書き換えると、ブラウザが実際に取得するのは**プロキシが中継したレスポンス**になる。元の `src` に `integrity`（SRI）属性が付いている場合、中継レスポンスは元 URL のバイト列と一致する保証がなく（ヘッダーサニタイズ・エンコーディング差異等）、**SRI ハッシュ不一致でスクリプトの実行がブロック**される。これを防ぐため、`src` を書き換える `<script>` からは `integrity` 属性を除去する。
 
 - **対象**: `src` を書き換える `<script src>`。同時に `crossorigin` 属性も除去する（書換後は同一 origin の `/api/proxy` 経由となり、CORS モード指定が不整合・不要になるため）。
 - **対象外**: `src` を持たないインライン `<script>`、および `img` / `link` 等の他タグ（現状 SRI の実害が観測されていないため最小限に留める）。
