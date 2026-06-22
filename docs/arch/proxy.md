@@ -383,11 +383,12 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 ```
 1. request.mode === "navigate" → 素通し（ページ遷移・フォーム送信に委ねる）
-2. 同一オリジンの自前ルート（/browse・/api/proxy・/_next/* 等）→ 素通し
+2. 同一オリジンの自前ルート（/browse・/api/proxy・/_next/* 等。ただし /_next/image を除く）→ 素通し
 3. clientId から要求元ページ URL（/browse?url=<target>）を取得し、url パラメータをターゲットとする
 4. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
    - クロスオリジンの絶対 URL → /api/proxy?url=<absolute>
    - 同一オリジンのルート絶対パス（自前ルート以外）→ ターゲット origin に解決し /api/proxy?url=<resolved>
+   - 同一オリジンの /_next/image → ターゲット origin の /_next/image に解決し /api/proxy?url=<resolved>（#102）
    - 自前ルート → 素通し（null）
 5. 振り向け先があれば fetch で応答（非 GET はメソッド・ボディ・リクエストヘッダーを保持、
    credentials: "same-origin"）。なければ素通し。振り向け fetch が失敗しても未処理 reject に
@@ -395,6 +396,8 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 ```
 
 > メソッド非依存の URL 書き換えは純粋関数 `rewriteRequestUrl` が担い（メソッドで分岐しない）、非 GET のボディ・ヘッダー保持は `fetch` ハンドラ（ランタイム配線）側で行う。
+
+`isProxyOwnPath` は `/_next/` を原則プロキシ自身の資産として素通し扱いにするが、`/_next/image` だけは「自前ルートでない」と判定し、`rewriteRequestUrl` の既存フォールバック（同一オリジンの非自前パス → ターゲット origin に解決）へ委ねる。Next.js 製ターゲットのクライアント hydration が再生成する `/_next/image?url=<外部>` をターゲット自身の最適化エンドポイントへ中継して 400 を防ぐ（#102。サーバー描画分の `srcset` は #98 で対応済み）。ターゲット不明のページ（ホーム等）では `extractTarget` が `null` を返し素通しされるため、プロキシ自身の `/_next/image` 利用には影響しない（[機能仕様 §Service Worker](../spec/features/proxy.md#service-worker-による実行時リクエスト横取り)）。
 
 ### 純粋ロジックの分離とテスト
 

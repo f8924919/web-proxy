@@ -32,7 +32,16 @@
     // 完全一致＋パス境界で判定する（ターゲット側の /browser や /api/proxyData を誤判定しない）
     if (p === "/browse" || p.startsWith("/browse/")) return true;
     if (p === "/api/proxy" || p.startsWith("/api/proxy/")) return true;
-    if (p.startsWith("/_next/")) return true;
+    if (p.startsWith("/_next/")) {
+      // /_next/image はターゲット（Next.js 製サイト）の画像最適化エンドポイント。
+      // クライアント hydration が再生成する /_next/image?url=<外部> をプロキシ自身の
+      // 最適化エンドポイントに当てると外部ドメインが remotePatterns 未許可で 400 になる。
+      // 自前ルートから除外し、rewriteRequestUrl のフォールバックでターゲット origin の
+      // /_next/image へ振り向ける（#102。サーバー描画分の srcset 書き換えは #98）。
+      // それ以外の /_next/（static チャンク・data 等）はプロキシ自身の資産として素通し。
+      if (p === "/_next/image" || p.startsWith("/_next/image/")) return false;
+      return true;
+    }
     if (p === "/favicon.ico") return true;
     return false;
   }
