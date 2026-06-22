@@ -4,6 +4,7 @@
 import {
   rewriteHtml,
   rewriteCss,
+  rewriteSrcset,
   buildGetFormDestination,
   buildClickNavDestination,
   noUrlBrowseHtml,
@@ -108,6 +109,37 @@ describe("rewriteHtml", () => {
       const result = rewriteHtml(html, BASE);
       const expected = `/api/proxy?url=${encodeURIComponent(`https://example.com${path}`)}`;
       expect(result).toContain(`${attr}="${expected}"`);
+    });
+  });
+
+  describe("srcset の書き換え（#98）", () => {
+    const proxied = (path: string) =>
+      `/api/proxy?url=${encodeURIComponent(`https://example.com${path}`)}`;
+
+    test("<img srcset> の各候補を書き換え記述子を保持する", () => {
+      const result = rewriteHtml(`<img srcset="/a.png 1x, /b.png 2x">`, BASE);
+      expect(result).toContain(
+        `srcset="${proxied("/a.png")} 1x, ${proxied("/b.png")} 2x"`
+      );
+    });
+
+    test("<source srcset> の幅記述子（w）を保持する", () => {
+      const result = rewriteHtml(
+        `<picture><source srcset="/a.png 640w, /b.png 1280w"></picture>`,
+        BASE
+      );
+      expect(result).toContain(
+        `srcset="${proxied("/a.png")} 640w, ${proxied("/b.png")} 1280w"`
+      );
+    });
+
+    test("Next.js <Image> の /_next/image?url= を /api/proxy 経由へ振り向ける（400 回避）", () => {
+      const inner = "https://s.yimg.jp/i/kids/x.png";
+      const nextSrc = `/_next/image?url=${encodeURIComponent(inner)}&w=256&q=75`;
+      const result = rewriteHtml(`<img srcset="${nextSrc} 1x">`, BASE);
+      // proxy origin 直下の /_next/image ではなく、上流の最適化 URL を中継する
+      expect(result).toContain(proxied(nextSrc));
+      expect(result).not.toMatch(/srcset="\/_next\/image/);
     });
   });
 
@@ -404,6 +436,48 @@ describe("buildClickNavDestination", () => {
     expect(
       buildClickNavDestination("https://news.yahoo.co.jp/x", "not a url")
     ).toBeNull();
+  });
+});
+
+describe("rewriteSrcset", () => {
+  const proxied = (path: string) =>
+    `/api/proxy?url=${encodeURIComponent(`https://example.com${path}`)}`;
+
+  test("密度記述子（1x/2x）付きの複数候補を書き換える", () => {
+    expect(rewriteSrcset("/a.png 1x, /b.png 2x", BASE)).toBe(
+      `${proxied("/a.png")} 1x, ${proxied("/b.png")} 2x`
+    );
+  });
+
+  test("幅記述子（w）付きの複数候補を書き換える", () => {
+    expect(rewriteSrcset("/a.png 640w, /b.png 1280w", BASE)).toBe(
+      `${proxied("/a.png")} 640w, ${proxied("/b.png")} 1280w`
+    );
+  });
+
+  test("記述子なしの単一候補も書き換える", () => {
+    expect(rewriteSrcset("/a.png", BASE)).toBe(proxied("/a.png"));
+  });
+
+  test("不揃いな空白を正規化して書き換える", () => {
+    expect(rewriteSrcset("  /a.png   1x ,  /b.png   2x  ", BASE)).toBe(
+      `${proxied("/a.png")} 1x, ${proxied("/b.png")} 2x`
+    );
+  });
+
+  test("data: URL 内のカンマで誤分割しない", () => {
+    const data = "data:image/png;base64,AAAAC, ";
+    // data: は http(s) に解決されないため assetUrl はそのまま返す（記述子 1x は保持）
+    const src = "data:image/png;base64,AAAAC";
+    expect(rewriteSrcset(`${src} 1x`, BASE)).toBe(`${src} 1x`);
+    void data;
+  });
+
+  test("絶対 URL も書き換える", () => {
+    const abs = "https://cdn.example.org/a.png";
+    expect(rewriteSrcset(`${abs} 2x`, BASE)).toBe(
+      `/api/proxy?url=${encodeURIComponent(abs)} 2x`
+    );
   });
 });
 

@@ -66,13 +66,23 @@ Next.js サーバー
 
 相対パスはターゲットサイトのオリジンを基準に絶対 URL へ変換してからエンコードする。
 
-| 対象タグ / 属性 | 遷移先ルート               | 理由                                                     |
-| --------------- | -------------------------- | -------------------------------------------------------- |
-| `<a href>`      | `/browse?url=<encoded>`    | リンク先もブラウズ画面で開く                             |
-| `<form action>` | `/browse?url=<encoded>`    | フォーム送信もプロキシ経由（GET は下記スクリプトで補完） |
-| `<img src>`     | `/api/proxy?url=<encoded>` | 透過中継（UI 不要）                                      |
-| `<link href>`   | `/api/proxy?url=<encoded>` | 透過中継                                                 |
-| `<script src>`  | `/api/proxy?url=<encoded>` | 透過中継                                                 |
+| 対象タグ / 属性                    | 遷移先ルート                             | 理由                                                       |
+| ---------------------------------- | ---------------------------------------- | ---------------------------------------------------------- |
+| `<a href>`                         | `/browse?url=<encoded>`                  | リンク先もブラウズ画面で開く                               |
+| `<form action>`                    | `/browse?url=<encoded>`                  | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）   |
+| `<img src>`                        | `/api/proxy?url=<encoded>`               | 透過中継（UI 不要）                                        |
+| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy?url=<encoded>` | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照） |
+| `<link href>`                      | `/api/proxy?url=<encoded>`               | 透過中継                                                   |
+| `<script src>`                     | `/api/proxy?url=<encoded>`               | 透過中継                                                   |
+
+### srcset の書き換え
+
+`<img>` / `<source>` の `srcset` 属性は、`url [記述子]` のカンマ区切りリスト（記述子は `1x` / `2x` の画素密度、または `640w` の幅）。`src` だけを書き換えて `srcset` を放置すると、ブラウザは `srcset` 側の候補を優先採用し、**書き換え前の URL** で取得してしまう。特にプロキシ対象が Next.js 製サイトの場合、`<Image>` が出力する `srcset="/_next/image?url=<外部>&w=256 1x, …"` がそのまま残り、プロキシ origin 直下の `/_next/image`（=プロキシ自身の画像最適化エンドポイント）へ解決され、外部ドメインが `images.remotePatterns` 未許可のため **400** になる（#98）。
+
+これを防ぐため、`rewriteHtml` は `<img>` / `<source>` の `srcset` を各候補に分解し、URL 部のみを `assetUrl()`（`<img src>` と同じ `/api/proxy?url=<encoded>` 化）で書き換え、**記述子（`1x` / `640w` 等）はそのまま保持**して再結合する。
+
+- **候補の分割**: WHATWG の srcset 解析に準じ、URL 部は空白以外の連続文字として取り出す（`data:` URL 内のカンマで誤分割しない）。URL 直後の記述子はカンマまでを保持する。
+- **http(s) 以外**: `assetUrl` と同じく、`data:` URL や http(s) に解決されない値はそのまま残す。
 
 ### サブリソース整合性（SRI）属性の除去
 
