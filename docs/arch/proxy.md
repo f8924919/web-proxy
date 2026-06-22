@@ -276,16 +276,19 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 相対 URL は `baseUrl` を基準に絶対 URL へ変換してからエンコードする。
 
-| 対象                         | 書き換え先                 |
-| ---------------------------- | -------------------------- |
-| `<a href>`                   | `/browse?url=<encoded>`    |
-| `<form action>`              | `/browse?url=<encoded>`    |
-| `<img src>` / `<source src>` | `/api/proxy?url=<encoded>` |
-| `<link href>`                | `/api/proxy?url=<encoded>` |
-| `<script src>`               | `/api/proxy?url=<encoded>` |
-| `<meta http-equiv=refresh>`  | `/browse?url=<encoded>`    |
+| 対象                               | 書き換え先                                             |
+| ---------------------------------- | ------------------------------------------------------ |
+| `<a href>`                         | `/browse?url=<encoded>`                                |
+| `<form action>`                    | `/browse?url=<encoded>`                                |
+| `<img src>` / `<source src>`       | `/api/proxy?url=<encoded>`                             |
+| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy?url=<encoded>`（記述子保持） |
+| `<link href>`                      | `/api/proxy?url=<encoded>`                             |
+| `<script src>`                     | `/api/proxy?url=<encoded>`                             |
+| `<meta http-equiv=refresh>`        | `/browse?url=<encoded>`                                |
 
 `<meta http-equiv="refresh" content="<遅延>;url=<TARGET>">` は `content` 内の `url=` を正規表現で抜き出し、`<a href>` と同じ `browseUrl()` で書き換える（遅延値は保持）。ルート相対 `url` がプロキシオリジン直下へ解決されて離脱するのを防ぐ。`<noscript>` 内の meta refresh はパーサが生テキスト扱いするため対象外（[機能仕様 §meta refresh の書き換え](../spec/features/proxy.md#meta-refresh-の書き換え)の制限）。
+
+`<img>` / `<source>` の `srcset` は純粋関数 `rewriteSrcset(value, baseUrl)` で各候補に分解し、URL 部のみ `assetUrl()` で書き換え記述子を保持して再結合する。WHATWG srcset 解析に準じ URL 部を空白以外の連続文字として取り出すため `data:` URL 内のカンマで誤分割しない（[機能仕様 §srcset の書き換え](../spec/features/proxy.md#srcset-の書き換え)）。Next.js 製サイトの `<Image>` が出力する `/_next/image?url=…` をプロキシ origin 直下の最適化エンドポイントへ解決させず（400 回避）、上流の最適化 URL を中継する（#98）。
 
 `src` を書き換える `<script>` からは `integrity` / `crossorigin` 属性を除去する。書換後は `/api/proxy` 経由の中継レスポンスとなり SRI ハッシュが一致せずブロックされるため（[機能仕様 §SRI 属性の除去](../spec/features/proxy.md#サブリソース整合性sri属性の除去)）。あわせて inline の `<meta http-equiv="Content-Security-Policy">`（enforce のみ。`...-Report-Only` は残す）を除去し、注入スクリプト・書換 src が CSP でブロックされるのを防ぐ（[機能仕様 §inline CSP（meta）の除去](../spec/features/proxy.md#inline-cspmetaの除去)）。
 
