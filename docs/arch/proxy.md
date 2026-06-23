@@ -24,7 +24,7 @@ src/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
 │       ├── browserFetch.ts   # ヘッドレスブラウザ中継（ブラウザバック中継・ティア判定・Cookie ウォーミング）
-│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・クリックナビ横取り・document.domain シム <script> 注入含む）
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・クリックナビ横取り・document.domain シム・実行時リクエスト横取りシム <script> 注入含む）
 │       ├── proxyPath.ts      # アセット中継 URL スキーム（パス反映）の組み立て・復元（純粋関数。#100）
 │       ├── browsePath.ts     # ブラウズ URL スキーム（パス反映）の組み立て・復元（純粋関数。#115）
 │       ├── relayAsset.ts     # アセット中継の共通処理（両 route が共有。中継・CORS・OPTIONS）
@@ -403,6 +403,22 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 - **実装方式**: `Object.defineProperty(Document.prototype, 'domain', { get: () => <hostname>, set: () => {} })` で getter を上書きする（代入方式は `Origin-Agent-Cluster` 等で禁止され得るため不採用）。`try/catch` で例外を吸収する。
 - **注入位置と最先頭性**: `yjsecure.js` は `templa.min.js` が `<head>` 段階で動的挿入し得るため、`<body>` 直後注入では間に合わない。`<head[^>]*>` 直後へ正規表現置換で注入する。`<head>` が無い HTML は `<html>` 直後、それも無ければ文書先頭へフォールバックする。
 - **スコープ外**: `location.hostname` / `location.href` など `location` 全体を偽装する汎用シムは対象外（`document.domain` ベースのガード無効化に範囲を限定）。
+
+### 実行時リクエスト横取りシム注入（SW 非依存・#124）
+
+> 関連仕様: [プロキシ機能仕様 §実行時リクエスト横取りシム](../spec/features/proxy.md#実行時リクエスト横取りシムsw-非依存124)
+
+`rewriteHtml` は、`window.fetch` と `XMLHttpRequest.prototype.open` を上書きしてリクエスト URL を `/api/proxy/<scheme>/<host>/<path>` へ書き換える横取りシム `<script>` を、ページ内スクリプトより先に実行されるよう **`<head>` 最先頭**へ注入する（`document.domain` シムと同様）。SW は初回ロードで `clients.claim()` 確立前のサブリソース要求を横取りできず、同一オリジン相対は 404・クロスオリジン XHR は CORS 失敗する。本シムは SW 制御の有無に依らずこのギャップを埋める。
+
+| 純粋関数                                            | 役割                                                                                                                                                          |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isProxyOwnPath(pathname, basePath)`                | 横取りしてはいけないプロキシ自前ルート（`/browse`・`/api/proxy/*`・`/_next/*`〔`/_next/image` を除く〕・`/sw.js`・`/favicon.ico`・ホーム）か判定する（`public/sw.js` の同名関数と対の規則） |
+| `buildRequestInterceptUrl(requestUrl, pageUrl, swOrigin, basePath)` | リクエスト URL を SW の `rewriteRequestUrl` と同一規則で `/api/proxy/<scheme>/<host>/<path>` へ書き換える。クロスオリジン絶対 URL はそのまま中継、同一オリジン非自前パスは閲覧ページからターゲット origin を復元して解決、自前ルート・非 http(s) は `null`（素通し） |
+
+- **共有ヘルパー**: ターゲット復元は既存の純粋関数 `extractBrowseTarget` を再利用する。`buildRequestInterceptUrl` / `isProxyOwnPath` / `extractBrowseTarget` を `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
+- **SW との非競合**: シムの振り向け先（同一オリジンの `/api/proxy/...`）は SW が自前ルートと判定して素通しするため二重書き換えにならない。判定規則は `public/sw.js` と揃え、差分が出ないよう対で保守する（SW は `importScripts` 不可のためロジック共有はできず、両ファイルに同等実装を持つ）。
+- **fetch / XHR の配線**: `fetch` シムは `input` が文字列・`URL`・`Request` のいずれでも URL を取り出して書き換える（`Request` は新 `Request` で再構築）。XHR シムは `open(method, url)` の `url` を書き換える。いずれも非 GET のメソッド・ボディ・ヘッダーを保持する。書き換え不要（`null`）なら元の `fetch` / `open` を素通しする。
+- **テスト**: `isProxyOwnPath` / `buildRequestInterceptUrl`（純粋関数）を単体テスト対象とする。`window.fetch` / XHR の上書き配線（ブラウザ I/O）は[テスト方針](../testing/policy.md)によりテスト対象外。
 
 ---
 
