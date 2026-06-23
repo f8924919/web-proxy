@@ -1,5 +1,11 @@
 import { NextRequest } from "next/server";
-import { proxyFetch, SsrfBlockedError } from "@/lib/proxy/fetch";
+import {
+  proxyFetch,
+  SsrfBlockedError,
+  BodyTooLargeError,
+  readTextWithLimit,
+  maxBufferBytesFromEnv,
+} from "@/lib/proxy/fetch";
 import { rewriteCss } from "@/lib/proxy/rewrite";
 import {
   sanitizeHeaders,
@@ -82,7 +88,9 @@ export async function relayAsset(
     }
 
     if (contentType.includes("text/css")) {
-      const css = await res.text();
+      // 書き換えのため CSS を全量バッファするが、巨大レスポンスによる OOM を防ぐため
+      // サイズ上限を課す（超過は BodyTooLargeError → 413。#134）。
+      const css = await readTextWithLimit(res, maxBufferBytesFromEnv());
       // baseUrl はリダイレクト追従後の最終 URL を用いる（#42）。
       const rewritten = rewriteCss(css, finalUrl);
       outHeaders.set("Content-Type", "text/css; charset=utf-8");
@@ -94,6 +102,10 @@ export async function relayAsset(
 
     return new Response(res.body, { status: res.status, headers: outHeaders });
   } catch (err) {
+    // 本文が上限超過なら 413（メモリ枯渇 DoS 対策。#134）。
+    if (err instanceof BodyTooLargeError) {
+      return new Response("Payload Too Large", { status: 413 });
+    }
     // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
     console.error("[proxy/asset]", err);
     return new Response("Bad Gateway", { status: 502 });
