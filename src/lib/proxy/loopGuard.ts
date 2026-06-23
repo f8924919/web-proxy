@@ -10,6 +10,8 @@ const DEFAULT_MAX_NAVIGATIONS = 6;
 export class NavigationLoopGuard {
   // Map<`${ip}\n${host}${pathname}`, タイムスタンプ配列（直近 windowMs 分）>
   private store = new Map<string, number[]>();
+  // 前回 eviction を実行した時刻。毎リクエストの全走査を避け windowMs ごとに間引く。
+  private lastEviction = 0;
 
   constructor(
     private readonly maxNavigations: number = DEFAULT_MAX_NAVIGATIONS,
@@ -21,13 +23,29 @@ export class NavigationLoopGuard {
   check(ip: string, target: URL): boolean {
     const now = Date.now();
     const cutoff = now - this.windowMs;
-    const key = `${ip}\n${target.host}${target.pathname}`;
+    this.evictExpired(cutoff, now);
 
+    const key = `${ip}\n${target.host}${target.pathname}`;
     const timestamps = (this.store.get(key) ?? []).filter((t) => t > cutoff);
     timestamps.push(now);
     this.store.set(key, timestamps);
 
     return timestamps.length > this.maxNavigations;
+  }
+
+  // 全タイムスタンプがウィンドウ外になった空エントリを削除し、偽装 IP 等での store 肥大を
+  // 防ぐ（#132）。前回 eviction から windowMs 未満なら走査を省く。
+  private evictExpired(cutoff: number, now: number): void {
+    if (now - this.lastEviction < this.windowMs) return;
+    this.lastEviction = now;
+    for (const [key, timestamps] of this.store) {
+      if (timestamps.every((t) => t <= cutoff)) this.store.delete(key);
+    }
+  }
+
+  // テスト用: 現在のエントリ数。
+  get size(): number {
+    return this.store.size;
   }
 }
 
