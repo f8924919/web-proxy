@@ -14,6 +14,7 @@ import {
   isProxyOwnPath,
   buildRequestInterceptUrl,
   fetchInputUrl,
+  escapeHtml,
 } from "@/lib/proxy/rewrite";
 
 const BASE = "https://example.com";
@@ -214,6 +215,36 @@ describe("rewriteHtml", () => {
     const bodyIdx = result.indexOf("<body>");
     const barIdx = result.indexOf('id="proxy-addressbar"');
     expect(barIdx).toBeGreaterThan(bodyIdx);
+  });
+
+  // 仕様: docs/spec/screens/browse.md §アドレスバー / docs/arch/proxy.md §アドレスバー注入（#137）
+  describe("アドレスバー URL の HTML エスケープ（#137）", () => {
+    // value="…" 属性内の文字列（最初の生 " までを切り出す。エスケープ済みなら
+    // 値の途中に生 " は現れないため終端を正しく検出できる）。
+    const addressBarValue = (html: string): string => {
+      const bar = html.slice(html.indexOf('id="proxy-addressbar"'));
+      const marker = '<input value="';
+      const start = bar.indexOf(marker) + marker.length;
+      const end = bar.indexOf('"', start);
+      return bar.slice(start, end);
+    };
+
+    test("& < > \" ' を含む URL を一括実体化して value へ埋め込む", () => {
+      const url = `https://example.com/?q=<i>&p='x'&r="y"`;
+      const result = rewriteHtml(`<html><body></body></html>`, url);
+      expect(addressBarValue(result)).toBe(
+        `https://example.com/?q=&lt;i&gt;&amp;p=&#39;x&#39;&amp;r=&quot;y&quot;`
+      );
+    });
+
+    test("属性ブレイクアウトとなる生の < > ' を value 内へ出力しない", () => {
+      const url = `https://example.com/?x=<script>alert(1)</script>&y='z'`;
+      const value = addressBarValue(
+        rewriteHtml(`<html><body></body></html>`, url)
+      );
+      expect(value).not.toMatch(/[<>']/);
+      expect(value).not.toContain("<script>");
+    });
   });
 
   // 仕様: docs/spec/screens/browse.md §コンテンツエリア / docs/arch/proxy.md §アドレスバー注入（#108）
@@ -618,6 +649,33 @@ describe("noUrlBrowseHtml", () => {
   });
 });
 
+// 仕様: docs/spec/screens/browse.md §アドレスバー / docs/arch/proxy.md §アドレスバー注入（#137）
+describe("escapeHtml（#137）", () => {
+  test.each([
+    ["&", "&amp;"],
+    ["<", "&lt;"],
+    [">", "&gt;"],
+    ['"', "&quot;"],
+    ["'", "&#39;"],
+  ])("%p を %p へ実体化する", (input, expected) => {
+    expect(escapeHtml(input)).toBe(expected);
+  });
+
+  test("& を最初に処理し、生成した実体参照の & を二重実体化しない", () => {
+    // 入力の生 < は &lt; になるが、その &lt; の & を &amp;lt; へ二重変換しない。
+    expect(escapeHtml("<")).toBe("&lt;");
+    // 入力に含まれる生 & のみ &amp; になる（& 優先順を保証）。
+    expect(escapeHtml("a&<b")).toBe("a&amp;&lt;b");
+  });
+
+  test("特殊文字を含まない文字列・空文字はそのまま返す", () => {
+    expect(escapeHtml("")).toBe("");
+    expect(escapeHtml("https://example.com/path")).toBe(
+      "https://example.com/path"
+    );
+  });
+});
+
 // 実行時リクエスト横取りシム（SW 非依存・#124）の純粋関数。
 // 振り向け規則は public/sw.js の rewriteRequestUrl / isProxyOwnPath と対の関係。
 describe("isProxyOwnPath（#124）", () => {
@@ -700,7 +758,12 @@ describe("buildRequestInterceptUrl（#124）", () => {
       )
     ).toBeNull();
     expect(
-      buildRequestInterceptUrl(`${ORIGIN}/browse/https/x.com/y`, PAGE, ORIGIN, "")
+      buildRequestInterceptUrl(
+        `${ORIGIN}/browse/https/x.com/y`,
+        PAGE,
+        ORIGIN,
+        ""
+      )
     ).toBeNull();
   });
 
@@ -758,9 +821,7 @@ describe("fetchInputUrl（#124）", () => {
   });
 
   test("URL オブジェクトは href を返す（.url は存在しないため）", () => {
-    expect(fetchInputUrl(new URL("https://x.test/a"))).toBe(
-      "https://x.test/a"
-    );
+    expect(fetchInputUrl(new URL("https://x.test/a"))).toBe("https://x.test/a");
   });
 
   test("Request 風オブジェクト（.url 文字列）は url を返す", () => {
