@@ -19,6 +19,17 @@ const ORIGIN_B = "https://b.example";
 const scoped = (origin: string, name: string, value: string): string =>
   `__pxy.${cookieScopeKey(origin)}.${name}=${value}`;
 
+// テスト用: 中継元ページのオリジン origin を反映したプロキシ origin 上の Referer を
+// 組み立てる（#136 の Authorization オリジンスコープ判定の入力）。
+// scheme:"browse"（パス反映ナビ）/ "api/proxy"（パス反映アセット）を切り替える。
+const proxyRef = (
+  origin: string,
+  { path = "/", scheme = "browse" as "browse" | "api/proxy" } = {}
+): string => {
+  const u = new URL(origin);
+  return `https://proxy.example/${scheme}/${u.protocol.replace(/:$/, "")}/${u.host}${path}`;
+};
+
 describe("cookieScopeKey", () => {
   test("URL セーフ文字（base64url）のみ・パディング無しで返す", () => {
     expect(cookieScopeKey(ORIGIN_A)).toMatch(/^[A-Za-z0-9_-]+$/);
@@ -166,13 +177,14 @@ describe("scopedCookieHeader", () => {
 });
 
 describe("forwardableRequestHeaders", () => {
-  test("Cookie は現ターゲット origin 分だけを抽出し Authorization は転送する", () => {
+  test("Cookie は現ターゲット origin 分だけを抽出し Authorization は中継元一致時に転送する", () => {
     const headers = new Headers({
       cookie: [
         scoped(ORIGIN_A, "sid", "aaa"),
         scoped(ORIGIN_B, "sid", "bbb"),
       ].join("; "),
       authorization: "Bearer xyz",
+      referer: proxyRef(ORIGIN_B),
     });
     expect(forwardableRequestHeaders(headers, ORIGIN_B)).toEqual({
       cookie: "sid=bbb",
@@ -205,6 +217,7 @@ describe("forwardableRequestHeaders", () => {
     const headers = new Headers({
       cookie: `CF_Authorization=jwt; ${scoped(ORIGIN_A, "sid", "aaa")}`,
       authorization: "Bearer xyz",
+      referer: proxyRef(ORIGIN_A),
     });
     expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({
       cookie: "sid=aaa",
@@ -240,6 +253,7 @@ describe("relayRequestHeaders", () => {
     const headers = new Headers({
       "content-type": "application/json",
       authorization: "Bearer xyz",
+      referer: proxyRef(ORIGIN_B, { scheme: "api/proxy" }),
       cookie: [
         scoped(ORIGIN_A, "sid", "aaa"),
         scoped(ORIGIN_B, "sid", "bbb"),
@@ -289,11 +303,25 @@ describe("relayRequestHeaders", () => {
     expect(result["content-type"]).toBe("application/json");
   });
 
-  test("Authorization はクライアント設定値をそのまま転送する（#27）", () => {
-    const headers = new Headers({ authorization: "Bearer xyz" });
+  test("Authorization は中継元 origin が宛先一致時のみ転送する（#136）", () => {
+    const headers = new Headers({
+      authorization: "Bearer xyz",
+      referer: proxyRef(ORIGIN_A, { scheme: "api/proxy" }),
+    });
     expect(relayRequestHeaders(headers, ORIGIN_A).authorization).toBe(
       "Bearer xyz"
     );
+  });
+
+  test("中継元 origin が宛先と異なれば Authorization を転送しない（#136）", () => {
+    const headers = new Headers({
+      authorization: "Bearer xyz",
+      referer: proxyRef(ORIGIN_A, { scheme: "api/proxy" }),
+      "content-type": "application/json",
+    });
+    const result = relayRequestHeaders(headers, ORIGIN_B);
+    expect(result.authorization).toBeUndefined();
+    expect(result["content-type"]).toBe("application/json");
   });
 
   test("非スコープのインフラ認証 cookie は転送しない", () => {
@@ -314,6 +342,78 @@ describe("relayRequestHeaders", () => {
     const result = relayRequestHeaders(headers, ORIGIN_A);
     expect(result.cookie).toBeUndefined();
     expect(result["content-type"]).toBe("application/json");
+  });
+});
+
+// #136: Authorization のオリジンスコープ。中継元ページ（Referer に反映）の origin が
+// 宛先ターゲット origin と完全一致する場合のみ転送し、それ以外は fail-closed で除去する。
+describe("Authorization のオリジンスコープ（#136）", () => {
+  describe.each([
+    ["forwardableRequestHeaders", forwardableRequestHeaders],
+    ["relayRequestHeaders", relayRequestHeaders],
+  ] as const)("%s", (_name, fn) => {
+    test("中継元 origin が宛先と一致すれば転送する（パス反映ナビ Referer）", () => {
+      const headers = new Headers({
+        authorization: "Bearer xyz",
+        referer: proxyRef(ORIGIN_A, { path: "/page?q=1", scheme: "browse" }),
+      });
+      expect(fn(headers, ORIGIN_A).authorization).toBe("Bearer xyz");
+    });
+
+    test("中継元 origin が宛先と一致すれば転送する（パス反映アセット Referer）", () => {
+      const headers = new Headers({
+        authorization: "Bearer xyz",
+        referer: proxyRef(ORIGIN_A, { scheme: "api/proxy" }),
+      });
+      expect(fn(headers, ORIGIN_A).authorization).toBe("Bearer xyz");
+    });
+
+    test("中継元 origin が宛先と一致すれば転送する（後方互換 ?url= Referer）", () => {
+      const headers = new Headers({
+        authorization: "Bearer xyz",
+        referer: `https://proxy.example/browse?url=${encodeURIComponent(
+          `${ORIGIN_A}/page`
+        )}`,
+      });
+      expect(fn(headers, ORIGIN_A).authorization).toBe("Bearer xyz");
+    });
+
+    test("中継元 origin が宛先と異なれば転送しない", () => {
+      const headers = new Headers({
+        authorization: "Bearer xyz",
+        referer: proxyRef(ORIGIN_A),
+      });
+      expect(fn(headers, ORIGIN_B).authorization).toBeUndefined();
+    });
+
+    test("サブドメイン違いは不一致として転送しない", () => {
+      const headers = new Headers({
+        authorization: "Bearer xyz",
+        referer: proxyRef("https://sub.a.example"),
+      });
+      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+    });
+
+    test("Referer 欠落は fail-closed で転送しない", () => {
+      const headers = new Headers({ authorization: "Bearer xyz" });
+      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+    });
+
+    test("中継元ターゲットを復元できない Referer は転送しない", () => {
+      const headers = new Headers({
+        authorization: "Bearer xyz",
+        referer: "https://proxy.example/about",
+      });
+      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+    });
+
+    test("パース不能な Referer は転送しない", () => {
+      const headers = new Headers({
+        authorization: "Bearer xyz",
+        referer: "::not a url::",
+      });
+      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+    });
   });
 });
 
