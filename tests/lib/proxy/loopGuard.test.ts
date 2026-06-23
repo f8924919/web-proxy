@@ -74,6 +74,19 @@ describe("NavigationLoopGuard", () => {
       last = navigationLoopGuard.check("guard-ip", target);
     expect(last).toBe(true);
   });
+
+  // #132: 偽装 IP × 多数キーで store が肥大しないよう、ウィンドウ外の空エントリを eviction する。
+  test("ウィンドウ経過後の空エントリは eviction され store が肥大しない", () => {
+    const guard = new NavigationLoopGuard(6, 10_000);
+    for (let i = 0; i < 50; i++)
+      guard.check(`10.0.0.${i}`, new URL("https://example.com/p"));
+    expect(guard.size).toBe(50);
+
+    jest.advanceTimersByTime(11_000);
+    guard.check("9.9.9.9", new URL("https://example.com/p"));
+
+    expect(guard.size).toBe(1);
+  });
 });
 
 describe("loopGuidanceHtml", () => {
