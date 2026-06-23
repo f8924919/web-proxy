@@ -77,11 +77,15 @@ public/
    shouldPromoteToBrowser(html, status, contentType) が崩れ/チャレンジを検出し、かつ promotionGuard が
    同一 host+path を再昇格抑止しない場合、browserFetch で再取得して結果を差し替える
    （失敗時は初回の中継応答へフォールバック。[機能仕様 §ヒューリスティック自動ティア昇格](../spec/features/proxy.md#ヒューリスティック自動ティア昇格崩れチャレンジ検出)）
-5. rewriteHtml(html, finalUrl) でアドレスバー HTML を先頭に注入 + URL 書き換え
-   （baseUrl はリダイレクト追従後の最終 URL。#42。[機能仕様 §リダイレクト追従](../spec/features/proxy.md#リダイレクト追従)）
+5. text/html は readTextWithLimit(res, maxBufferBytesFromEnv()) で上限内に読み
+   （超過は BodyTooLargeError → 413。#134）、rewriteHtml(html, finalUrl) でアドレスバー HTML を
+   先頭に注入 + URL 書き換え（baseUrl はリダイレクト追従後の最終 URL。#42。
+   [機能仕様 §リダイレクト追従](../spec/features/proxy.md#リダイレクト追従)）。
+   非 HTML は res.body をストリーム透過（上限対象外）
 6. headers.sanitize(responseHeaders) でヘッダーを除去
 7. new Response(rewrittenHtml, { headers }) を返す
-   （非 HTML はそのまま中継。204/205/304 はボディ null、1xx・範囲外・変換中の例外は 502。
+   （非 HTML はそのまま中継。204/205/304 はボディ null、HTML 本文が上限超過なら 413、
+    1xx・範囲外・変換中の例外は 502。
     [機能仕様 §ステータスコードの中継](../spec/features/proxy.md#ステータスコードの中継) 参照）
 ```
 
@@ -126,13 +130,16 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
    - GET/HEAD: forwardableRequestHeaders（許可リスト＝Cookie/Authorization、既存挙動）
    - 非 GET   : relayRequestHeaders（拒否リスト方式で広めに転送）＋ body を転送
    { response, finalUrl } = proxyFetch(url, { method, body, headers }) → SSRF ブロックなら 403
-5. Content-Type が text/css → rewriteCss(body, finalUrl)（baseUrl は追従後の最終 URL。#42）
+5. Content-Type が text/css → readTextWithLimit(res, maxBufferBytesFromEnv()) で
+   上限内に読み（超過は BodyTooLargeError → 413）、rewriteCss(css, finalUrl)
+   （baseUrl は追従後の最終 URL。#42。サイズ上限は #134）。
+   text/css 以外は res.body をストリーム透過（上限対象外）
 6. headers.sanitize(responseHeaders)
 7. allowedCorsOrigin(Origin, Host) が非 null（＝同一オリジン）の場合のみ
    Access-Control-Allow-Origin/-Credentials を付与（第三者クロスオリジンには付けない。#27）
 8. Response を中継して返す
-   （204/205/304 はボディを null として返す。1xx・ステータス範囲外・
-    Response 構築・CSS 読取り/変換中の未捕捉例外は 502。
+   （204/205/304 はボディを null として返す。CSS 本文が上限超過なら 413。
+    1xx・ステータス範囲外・Response 構築・CSS 読取り/変換中の未捕捉例外は 502。
     [機能仕様 §ステータスコードの中継](../spec/features/proxy.md#ステータスコードの中継) 参照）
 ```
 
@@ -203,6 +210,18 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | `SsrfBlockedError`      | SSRF ブロック（403 を返す）              |
 | `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）    |
 | `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す） |
+| `BodyTooLargeError`     | 中継本文が上限超過（413 を返す。#134）   |
+
+### 中継本文のサイズ上限（`readTextWithLimit` / `maxBufferBytesFromEnv`・#134）
+
+> 関連仕様: [プロキシ機能仕様 §中継本文のサイズ上限](../spec/features/proxy.md#中継本文のサイズ上限メモリ枯渇-dos-対策134)
+
+書き換えのため全量バッファする HTML / CSS の本文に上限を設ける純粋関数群。
+
+- `maxBufferBytesFromEnv(env = process.env)`: `PROXY_MAX_BUFFER_BYTES` を整数として読み、正の整数以外・未設定なら既定 `10 * 1024 * 1024`（10 MiB）を返す（`*FromEnv` パターン）。
+- `readTextWithLimit(res, maxBytes)`: `res.text()` の代替。①`Content-Length` が `maxBytes` 超過を宣言していれば読む前に `BodyTooLargeError` を投げる。②`res.body`（Web Streams `ReadableStream<Uint8Array>`）を `getReader()` でチャンク読みし、累積バイト数が `maxBytes` を超えたらストリームを `cancel` して `BodyTooLargeError` を投げる。上限内なら UTF-8 デコードした文字列を返す（`res.body` が無ければ空文字）。
+
+`relayBrowse`（HTML）・`relayAsset`（CSS）はこれを用いて読み、`BodyTooLargeError` を捕捉して `413` を返す。書き換え不要アセットは `res.body` ストリーム透過のため対象外。
 
 ---
 
