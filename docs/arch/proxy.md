@@ -274,6 +274,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 - **Cookie ウォーミング**: `context.cookies()` を `cookieToSetCookie` で `Set-Cookie` 化し、`text/html` の `Response` ヘッダーへ載せる。以降は `relayBrowse` の `sanitizeHeaders` が既存どおりスコープ化する。
 - **ライフサイクル**: ブラウザはプロセス内で再利用し、context はリクエストごとに作って確実に close する。同時実行数を上限（`PROXY_BROWSER_MAX_CONCURRENCY`、既定 2）で絞る。
 - **テスト**: 純粋関数（上記）のみ単体テスト対象。ブラウザ I/O は[テスト方針](../testing/policy.md)によりテスト対象外。
+- **既知の制約（#123）**: 配信する `page.content()` は hydration 後の DOM のため、クライアントの再 hydration で React の hydration エラー（`#418` 等）が console に多発する。実害なし（コンソールノイズ）と切り分け済みで、低減策は体験を壊すリスクから意図的に見送る。詳細は[機能仕様 §既知の制約: クライアント再 hydration](../spec/features/proxy.md#既知の制約-クライアント再-hydration123)。
 
 ---
 
@@ -410,9 +411,9 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 `rewriteHtml` は、`window.fetch` と `XMLHttpRequest.prototype.open` を上書きしてリクエスト URL を `/api/proxy/<scheme>/<host>/<path>` へ書き換える横取りシム `<script>` を、ページ内スクリプトより先に実行されるよう **`<head>` 最先頭**へ注入する（`document.domain` シムと同様）。SW は初回ロードで `clients.claim()` 確立前のサブリソース要求を横取りできず、同一オリジン相対は 404・クロスオリジン XHR は CORS 失敗する。本シムは SW 制御の有無に依らずこのギャップを埋める。
 
-| 純粋関数                                            | 役割                                                                                                                                                          |
-| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isProxyOwnPath(pathname, basePath)`                | 横取りしてはいけないプロキシ自前ルート（`/browse`・`/api/proxy/*`・`/_next/*`〔`/_next/image` を除く〕・`/sw.js`・`/favicon.ico`・ホーム）か判定する（`public/sw.js` の同名関数と対の規則） |
+| 純粋関数                                                            | 役割                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `isProxyOwnPath(pathname, basePath)`                                | 横取りしてはいけないプロキシ自前ルート（`/browse`・`/api/proxy/*`・`/_next/*`〔`/_next/image` を除く〕・`/sw.js`・`/favicon.ico`・ホーム）か判定する（`public/sw.js` の同名関数と対の規則）                                                                          |
 | `buildRequestInterceptUrl(requestUrl, pageUrl, swOrigin, basePath)` | リクエスト URL を SW の `rewriteRequestUrl` と同一規則で `/api/proxy/<scheme>/<host>/<path>` へ書き換える。クロスオリジン絶対 URL はそのまま中継、同一オリジン非自前パスは閲覧ページからターゲット origin を復元して解決、自前ルート・非 http(s) は `null`（素通し） |
 
 - **共有ヘルパー**: ターゲット復元は既存の純粋関数 `extractBrowseTarget` を再利用する。`buildRequestInterceptUrl` / `isProxyOwnPath` / `extractBrowseTarget` を `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
