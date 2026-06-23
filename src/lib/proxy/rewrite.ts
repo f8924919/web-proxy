@@ -562,16 +562,45 @@ function injectAtHeadStart(html: string, snippet: string): string {
 export function rewriteHtml(html: string, baseUrl: string): string {
   const root = parse(html);
 
+  // <base href> は相対 URL 解決の基点を変えるため最初に処理する（#135）。
+  // 文書内の最初の <base href>（HTML 仕様上、有効なのは最初の 1 つ）を baseUrl で
+  // 解決し、http(s) に解決できればそれを以降の全書き換えの実効解決基点とする。
+  // そのうえで全 <base> から href を除去する。残すと取りこぼし属性・実行時生成の
+  // 相対 URL がブラウザによって <base href> 基準で解決され、プロキシ枠を外れた
+  // 実サイト直アクセスを誘発し得る（注入シムは location.href 基準で <base> を見ない）。
+  // 仕様: docs/spec/features/proxy.md §<base href> の処理（枠外離脱防止・#135）
+  let effectiveBase = baseUrl;
+  const firstBaseHref = root.querySelector("base[href]")?.getAttribute("href");
+  if (firstBaseHref) {
+    const resolved = resolve(firstBaseHref, baseUrl);
+    if (resolved.startsWith("http://") || resolved.startsWith("https://")) {
+      effectiveBase = resolved;
+    }
+  }
+  root.querySelectorAll("base[href]").forEach((el) => {
+    el.removeAttribute("href");
+  });
+
   root.querySelectorAll("a[href]").forEach((el) => {
     const href = el.getAttribute("href");
     if (href && !href.startsWith("#") && !href.startsWith("javascript:")) {
-      el.setAttribute("href", browseUrl(href, baseUrl));
+      el.setAttribute("href", browseUrl(href, effectiveBase));
     }
   });
 
   root.querySelectorAll("form[action]").forEach((el) => {
     const action = el.getAttribute("action");
-    if (action) el.setAttribute("action", browseUrl(action, baseUrl));
+    if (action) el.setAttribute("action", browseUrl(action, effectiveBase));
+  });
+
+  // <iframe src>: 埋め込みページもブラウズ画面で開く（<a href> と同じ browseUrl）。
+  // 書き換えないと <base href> 除去後もブラウザが文書 URL 基準で実サイトへ解決し、
+  // プロキシ枠を外れた埋め込みになる（#135）。
+  root.querySelectorAll("iframe[src]").forEach((el) => {
+    const src = el.getAttribute("src");
+    if (src && !src.startsWith("#") && !src.startsWith("javascript:")) {
+      el.setAttribute("src", browseUrl(src, effectiveBase));
+    }
   });
 
   // <meta http-equiv="refresh" content="<遅延>;url=<TARGET>"> の url を /browse へ。
@@ -593,15 +622,23 @@ export function rewriteHtml(html: string, baseUrl: string): string {
     if (httpEquiv !== "refresh") return;
     const content = el.getAttribute("content");
     if (!content) return;
-    const rewrittenContent = rewriteMetaRefreshContent(content, baseUrl);
+    const rewrittenContent = rewriteMetaRefreshContent(content, effectiveBase);
     if (rewrittenContent !== content)
       el.setAttribute("content", rewrittenContent);
   });
 
-  for (const sel of ["img[src]", "source[src]"] as const) {
+  // 静的アセットの src を /api/proxy へ。<source src> は <picture> だけでなく
+  // <video>/<audio> 配下も同じセレクタでヒットし、直属の <video src>/<audio src> も
+  // メディアの透過中継として書き換える（#135）。
+  for (const sel of [
+    "img[src]",
+    "source[src]",
+    "video[src]",
+    "audio[src]",
+  ] as const) {
     root.querySelectorAll(sel).forEach((el) => {
       const src = el.getAttribute("src");
-      if (src) el.setAttribute("src", assetUrl(src, baseUrl));
+      if (src) el.setAttribute("src", assetUrl(src, effectiveBase));
     });
   }
 
@@ -610,7 +647,8 @@ export function rewriteHtml(html: string, baseUrl: string): string {
   for (const sel of ["img[srcset]", "source[srcset]"] as const) {
     root.querySelectorAll(sel).forEach((el) => {
       const srcset = el.getAttribute("srcset");
-      if (srcset) el.setAttribute("srcset", rewriteSrcset(srcset, baseUrl));
+      if (srcset)
+        el.setAttribute("srcset", rewriteSrcset(srcset, effectiveBase));
     });
   }
 
@@ -620,7 +658,7 @@ export function rewriteHtml(html: string, baseUrl: string): string {
   // 仕様: docs/spec/features/proxy.md §サブリソース整合性（SRI）属性の除去
   root.querySelectorAll("script[src]").forEach((el) => {
     const src = el.getAttribute("src");
-    if (src) el.setAttribute("src", assetUrl(src, baseUrl));
+    if (src) el.setAttribute("src", assetUrl(src, effectiveBase));
     el.removeAttribute("integrity");
     el.removeAttribute("crossorigin");
   });
@@ -639,7 +677,7 @@ export function rewriteHtml(html: string, baseUrl: string): string {
       .some((r) => RESOURCE_LINK_RELS.has(r));
     if (!isResource) return;
     const href = el.getAttribute("href");
-    if (href) el.setAttribute("href", assetUrl(href, baseUrl));
+    if (href) el.setAttribute("href", assetUrl(href, effectiveBase));
   });
 
   const rewritten = root.toString();
