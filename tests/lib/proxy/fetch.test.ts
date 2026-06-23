@@ -3,6 +3,10 @@
 
 import {
   isSsrfBlocked,
+  firstBlockedAddress,
+  decideSsrfLookup,
+  findSsrfCause,
+  SsrfBlockedError,
   buildProxyRequestInit,
   DEFAULT_USER_AGENT,
   isRedirectStatus,
@@ -14,6 +18,7 @@ import {
 
 describe("isSsrfBlocked", () => {
   test.each([
+    // --- IPv4 ---
     ["127.0.0.1", "loopback"],
     ["127.0.0.2", "loopback range"],
     ["10.0.0.1", "private class A"],
@@ -25,11 +30,27 @@ describe("isSsrfBlocked", () => {
     ["169.254.169.254", "cloud metadata"],
     ["169.254.0.1", "link-local"],
     ["0.0.0.0", "unspecified"],
+    // --- IPv4 CGNAT 100.64.0.0/10（#130）---
+    ["100.64.0.0", "CGNAT lower"],
+    ["100.100.50.1", "CGNAT mid"],
+    ["100.127.255.255", "CGNAT upper"],
+    // --- IPv6（#130）---
+    ["::1", "IPv6 loopback"],
+    ["::", "IPv6 unspecified"],
+    ["fe80::1", "IPv6 link-local"],
+    ["febf:ffff::1", "IPv6 link-local upper (fe80::/10)"],
+    ["fc00::1", "IPv6 ULA fc00::/7 lower"],
+    ["fd12:3456:789a::1", "IPv6 ULA fd00 range"],
+    // --- IPv4-mapped IPv6（#130）---
+    ["::ffff:127.0.0.1", "IPv4-mapped loopback (dotted)"],
+    ["::ffff:169.254.169.254", "IPv4-mapped cloud metadata (dotted)"],
+    ["::ffff:7f00:1", "IPv4-mapped loopback (hex)"],
   ])("returns true for %s (%s)", (ip) => {
     expect(isSsrfBlocked(ip)).toBe(true);
   });
 
   test.each([
+    // --- IPv4 ---
     ["1.1.1.1", "public DNS"],
     ["8.8.8.8", "Google DNS"],
     ["93.184.216.34", "example.com"],
@@ -37,8 +58,115 @@ describe("isSsrfBlocked", () => {
     ["172.32.0.0", "just above private class B"],
     ["11.0.0.0", "just above private class A"],
     ["192.169.0.0", "just above private class C"],
+    ["100.63.255.255", "just below CGNAT"],
+    ["100.128.0.0", "just above CGNAT"],
+    // --- IPv6 ---
+    ["2606:4700:4700::1111", "Cloudflare public IPv6"],
+    ["2001:4860:4860::8888", "Google public IPv6"],
+    ["fec0::1", "IPv6 site-local just above fe80::/10 (not blocked here)"],
+    // --- IPv4-mapped public ---
+    ["::ffff:8.8.8.8", "IPv4-mapped public (dotted)"],
   ])("returns false for %s (%s)", (ip) => {
     expect(isSsrfBlocked(ip)).toBe(false);
+  });
+});
+
+describe("firstBlockedAddress（IP ピン留め検査・#129）", () => {
+  // 仕様: docs/spec/features/proxy.md §DNS リバインディング / TOCTOU 対策（IP ピン留め）
+  test("全アドレスが公開なら null（接続許可）", () => {
+    expect(
+      firstBlockedAddress([
+        { address: "93.184.216.34" },
+        { address: "2606:4700:4700::1111" },
+      ])
+    ).toBeNull();
+  });
+
+  test("1 つでもブロック対象（dual-stack の AAAA が ::1）なら、その IP を返す", () => {
+    expect(
+      firstBlockedAddress([
+        { address: "93.184.216.34" }, // 公開 A
+        { address: "::1" }, // 危険な AAAA
+      ])
+    ).toBe("::1");
+  });
+
+  test("IPv4 がプライベートなら、その IP を返す", () => {
+    expect(firstBlockedAddress([{ address: "127.0.0.1" }])).toBe("127.0.0.1");
+  });
+
+  test("空配列は null（呼び出し側が解決失敗として扱う）", () => {
+    expect(firstBlockedAddress([])).toBeNull();
+  });
+});
+
+describe("decideSsrfLookup（connect.lookup ピン留め判定・#129）", () => {
+  // 仕様: docs/spec/features/proxy.md §DNS リバインディング / TOCTOU 対策（IP ピン留め）
+  // connect.lookup は接続時に呼ばれる。ここで解決された IP がブロック対象なら、
+  // 事前検査を通過していても（= リバインディングで応答 IP がすり替わっても）遮断する。
+
+  test("リバインディング: 接続時の解決がループバックなら blocked（事前検査が公開でも遮断）", () => {
+    // 事前検査時は公開 IP だったホストが、接続時の再解決で 127.0.0.1 を返すケース。
+    expect(
+      decideSsrfLookup([{ address: "127.0.0.1", family: 4 }], true)
+    ).toEqual({ kind: "blocked", address: "127.0.0.1" });
+  });
+
+  test("dual-stack で AAAA が ::1 なら blocked（全件検査）", () => {
+    expect(
+      decideSsrfLookup(
+        [
+          { address: "93.184.216.34", family: 4 },
+          { address: "::1", family: 6 },
+        ],
+        true
+      )
+    ).toEqual({ kind: "blocked", address: "::1" });
+  });
+
+  test("all=true: 全件が公開なら検査済み配列をそのまま返す（再解決せず接続＝ピン留め）", () => {
+    const addrs = [
+      { address: "93.184.216.34", family: 4 },
+      { address: "2606:4700:4700::1111", family: 6 },
+    ];
+    expect(decideSsrfLookup(addrs, true)).toEqual({
+      kind: "all",
+      addresses: addrs,
+    });
+  });
+
+  test("all=false: 全件が公開なら先頭アドレスを単一形式で返す", () => {
+    expect(
+      decideSsrfLookup([{ address: "93.184.216.34", family: 4 }], false)
+    ).toEqual({ kind: "single", address: "93.184.216.34", family: 4 });
+  });
+
+  test("空配列は empty（解決失敗）", () => {
+    expect(decideSsrfLookup([], true)).toEqual({ kind: "empty" });
+  });
+});
+
+describe("findSsrfCause（403 伝播・#129）", () => {
+  // undici は connect.lookup の例外を TypeError の cause に包むため、ネスト cause から
+  // SsrfBlockedError を取り出せること（→ 呼び出し側が 403 にマップ）を検証する。
+  test("ネストした cause 連鎖から SsrfBlockedError を取り出す", () => {
+    const ssrf = new SsrfBlockedError("127.0.0.1");
+    const wrapped = Object.assign(new TypeError("fetch failed"), {
+      cause: Object.assign(new Error("connect"), { cause: ssrf }),
+    });
+    expect(findSsrfCause(wrapped)).toBe(ssrf);
+  });
+
+  test("SSRF 由来でないエラーは null（502 経路へ）", () => {
+    const other = Object.assign(new TypeError("fetch failed"), {
+      cause: new Error("ECONNREFUSED"),
+    });
+    expect(findSsrfCause(other)).toBeNull();
+  });
+
+  test("直接 SsrfBlockedError でも取り出せる", () => {
+    const ssrf = new SsrfBlockedError("::1");
+    expect(findSsrfCause(ssrf)).toBe(ssrf);
   });
 });
 
