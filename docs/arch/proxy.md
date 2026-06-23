@@ -32,6 +32,8 @@ src/
 │       ├── headers.ts        # レスポンスヘッダー処理
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
+│       ├── targetPolicy.ts   # 中継対象スキーム・ポート制限（オープンプロキシ乱用対策・#133）
+│       ├── concurrency.ts    # 同時接続数の制限（グローバル/IP 単位・#133）
 │       ├── loopGuard.ts      # ナビゲーションループ検出（enablejs 自己再ナビ対策）
 │       ├── promotion.ts      # ヒューリスティック自動ティア昇格（崩れ/チャレンジ検出・再昇格抑止）
 │       └── response.ts       # nullBodyStatus 判定・相対リダイレクト生成ユーティリティ
@@ -63,9 +65,13 @@ public/
 ```
 1. （[...slug]）targetFromBrowsePath(nextUrl.pathname, nextUrl.search) でターゲット復元 → 復元不能なら 400
 2. （旧ルート GET）url が null → 案内ページ(200)。あればパス反映 URL へ 307 リダイレクト
-3. pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
-3b. navigationLoopGuard.check(ip, url) → ループ検出なら静的案内ページ(200) を返して打ち切り
+3. browseGuards(req, parsed): pageRateLimiter.check(getClientIp(headers)) → 超過なら 429
+3b. isAllowedTarget(parsed, allowedPortsFromEnv()) → スキーム非 http(s)・許可外ポートなら 403
+   （[機能仕様 §中継対象スキーム・ポートの制限](../spec/features/proxy.md#中継対象スキームポートの制限133)）
+3c. navigationLoopGuard.check(ip, url) → ループ検出なら静的案内ページ(200) を返して打ち切り
    （host+path 単位の短時間連続遷移を検出。[機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策)）
+3d. relayBrowse 入口で relayConcurrencyLimiter.acquire(ip) → グローバル上限超過なら 503・IP 上限超過なら 429。
+   取得したスロットはレスポンス構築後に finally で解放（[機能仕様 §同時接続数の制限](../spec/features/proxy.md#同時接続数の制限133)）
 4. ティア判定 shouldUseBrowser(url, browserTierConfigFromEnv()) で中継先を選ぶ
    - 既定（中継ティア）: { response, finalUrl } = proxyFetch(url, { headers: forwardableRequestHeaders(req.headers) })
    - ブラウザティア（allowlist 一致）: browserFetch(url, …)。失敗（SSRF 以外）は proxyFetch へフォールバック
@@ -126,6 +132,10 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 1. targetHref を URL として解析（不正なら 400）
 2. （路 route 側で targetHref を決定: パス反映復元 or ?url=）
 3. assetRateLimiter.check(getClientIp(headers)) → 超過なら 429
+3b. isAllowedTarget(parsed, allowedPortsFromEnv()) → スキーム非 http(s)・許可外ポートなら 403
+   （[機能仕様 §中継対象スキーム・ポートの制限](../spec/features/proxy.md#中継対象スキームポートの制限133)）
+3c. relayConcurrencyLimiter.acquire(ip) → グローバル上限超過なら 503・IP 上限超過なら 429。
+   スロットはレスポンス構築後に finally で解放（[機能仕様 §同時接続数の制限](../spec/features/proxy.md#同時接続数の制限133)）
 4. ヘッダー方針をメソッドで分岐:
    - GET/HEAD: forwardableRequestHeaders（許可リスト＝Cookie/Authorization、既存挙動）
    - 非 GET   : relayRequestHeaders（拒否リスト方式で広めに転送）＋ body を転送
@@ -593,6 +603,44 @@ export const assetRateLimiter = new RateLimiter(600); // /api/proxy 用
 
 - Node.js runtime のインメモリのみ。プロセス再起動でリセットされる。
 - 複数 Next.js インスタンスをまたいだ共有は非対応（v2 以降）。
+
+---
+
+## `src/lib/proxy/targetPolicy.ts`（中継対象スキーム・ポート制限・#133）
+
+**役割**: オープンプロキシ乱用対策として、中継先 URL のスキーム・ポートを許可リスト方式で検証する純粋関数群。中継本体（`relayAsset` / `browseGuards`）が上流取得の前に呼ぶ。仕様は [機能仕様 §中継対象スキーム・ポートの制限](../spec/features/proxy.md#中継対象スキームポートの制限133)。
+
+- **`isAllowedTarget(parsed: URL, allowedPorts: Set<number>): boolean`**: スキームが `http:` / `https:` で、かつポート（明示なしはスキーム既定 80 / 443 を補完）が `allowedPorts` に含まれれば `true`。許可外は中継せず呼び出し側が `403` を返す。
+- **`allowedPortsFromEnv(env = process.env): Set<number>`**: 既定の `{80, 443}` に、`PROXY_ALLOWED_PORTS`（カンマ区切り）の `1`〜`65535` の整数を追加した集合を返す。不正値は無視。既定の 80 / 443 は常に含まれ env で外せない。
+
+`targetFromBrowsePath` / `targetFromProxyPath` は元から非対応スキームを `null`（→ 400）にするが、後方互換 `?url=` ルートやアセット入口を含む**全経路**でスキーム・ポートを揃えて検証するため本モジュールを共有する。
+
+---
+
+## `src/lib/proxy/concurrency.ts`（同時接続数の制限・#133）
+
+**役割**: インメモリで「同時に処理中の中継数」をグローバル・IP 単位で制限する。レート制限（件数 / 分）と直交し、短時間の大量同時接続による資源枯渇・踏み台化を抑止する。仕様は [機能仕様 §同時接続数の制限](../spec/features/proxy.md#同時接続数の制限133)。
+
+### データ構造
+
+```ts
+private global = 0;                       // グローバル同時処理数
+private perIp = new Map<string, number>(); // IP 単位の同時処理数
+```
+
+### `ConcurrencyLimiter`（上限を設定可能）
+
+`ConcurrencyLimiter(maxGlobal, maxPerIp)` をコンストラクタ引数で受け取る。`acquire(ip): () => void` の挙動:
+
+- グローバルが `maxGlobal` 以上なら `ConcurrencyLimitExceededError("global")` を throw（→ 呼び出し側 `503`）。
+- IP 単位が `maxPerIp` 以上なら `ConcurrencyLimitExceededError("ip")` を throw（→ 呼び出し側 `429`）。
+- いずれにも達していなければ両カウンタを +1 し、**冪等な解放関数**を返す（複数回呼んでも 1 回だけ減算。`finally` での二重解放に耐える）。IP 単位が 0 になったエントリは `delete` してメモリ肥大を防ぐ。
+
+環境から上限を読む純粋関数 **`concurrencyConfigFromEnv(env = process.env)`**（`PROXY_MAX_CONCURRENT` 既定 512 / `PROXY_MAX_CONCURRENT_PER_IP` 既定 64。正の整数以外・未設定は既定）を用い、シングルトン `relayConcurrencyLimiter` をモジュール読込時に生成する。中継本体は上流取得の直前に `acquire`、レスポンス構築後の `finally` で解放する（ストリーム透過本文の転送中は計上しない）。
+
+### 制約
+
+- インメモリ・単一プロセスのみ（`rateLimit.ts` と同様）。複数インスタンス構成では全体上限がインスタンス数倍になる。永続化・分散は v2 以降。
 
 ---
 
