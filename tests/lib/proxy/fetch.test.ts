@@ -14,6 +14,9 @@ import {
   sameOrigin,
   stripCredentialHeaders,
   nextRedirectMethod,
+  maxBufferBytesFromEnv,
+  readTextWithLimit,
+  BodyTooLargeError,
 } from "@/lib/proxy/fetch";
 
 describe("isSsrfBlocked", () => {
@@ -374,5 +377,83 @@ describe("リダイレクト追従のヘルパー（#26）", () => {
         ).toEqual({ method: expMethod, sendBody: expSend });
       }
     );
+  });
+});
+
+// #134: 中継本文のサイズ上限（メモリ枯渇 DoS 対策）
+describe("maxBufferBytesFromEnv", () => {
+  const DEFAULT = 10 * 1024 * 1024;
+
+  test("未設定なら既定 10 MiB", () => {
+    expect(maxBufferBytesFromEnv({})).toBe(DEFAULT);
+  });
+
+  test("正の整数を設定するとその値", () => {
+    expect(maxBufferBytesFromEnv({ PROXY_MAX_BUFFER_BYTES: "1048576" })).toBe(
+      1048576
+    );
+  });
+
+  test.each([["0"], ["-5"], ["abc"], ["1.5"], [""], ["  "]])(
+    "不正値 %s は既定値にフォールバックする",
+    (raw) => {
+      expect(maxBufferBytesFromEnv({ PROXY_MAX_BUFFER_BYTES: raw })).toBe(
+        DEFAULT
+      );
+    }
+  );
+});
+
+describe("readTextWithLimit（#134）", () => {
+  // 指定バイト数を 1 チャンクで流す ReadableStream の Response（Content-Length 無し）。
+  const streamResponse = (text: string): Response => {
+    const bytes = new TextEncoder().encode(text);
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(bytes);
+        c.close();
+      },
+    });
+    return new Response(stream);
+  };
+
+  test("上限内の本文はそのまま文字列で返す", async () => {
+    await expect(
+      readTextWithLimit(streamResponse("hello"), 1024)
+    ).resolves.toBe("hello");
+  });
+
+  test("マルチバイト文字も正しく UTF-8 デコードする", async () => {
+    await expect(
+      readTextWithLimit(streamResponse("こんにちは"), 1024)
+    ).resolves.toBe("こんにちは");
+  });
+
+  test("本文が無ければ空文字を返す", async () => {
+    await expect(readTextWithLimit(new Response(null), 1024)).resolves.toBe("");
+  });
+
+  test("実バイト数が上限を超えたら BodyTooLargeError（Content-Length 無し）", async () => {
+    // 100 バイトの本文を上限 10 バイトで読む。
+    await expect(
+      readTextWithLimit(streamResponse("x".repeat(100)), 10)
+    ).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+
+  test("Content-Length が上限超過を宣言していれば読む前に BodyTooLargeError", async () => {
+    // body を読まずに早期判定されることを、過大申告した Content-Length で確認する。
+    const res = {
+      headers: new Headers({ "content-length": "999999" }),
+      body: null,
+    } as unknown as Response;
+    await expect(readTextWithLimit(res, 1024)).rejects.toBeInstanceOf(
+      BodyTooLargeError
+    );
+  });
+
+  test("ちょうど上限サイズは通過する（境界）", async () => {
+    await expect(
+      readTextWithLimit(streamResponse("x".repeat(10)), 10)
+    ).resolves.toBe("x".repeat(10));
   });
 });
