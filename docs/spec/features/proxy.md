@@ -424,6 +424,7 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 ### `browserFetch` の振る舞い
 
 - `proxyFetch` と同じ `{ response, finalUrl }` 契約を満たす。`page.content()` の settled DOM を本文（`text/html`）に、`page.url()` を `finalUrl` に用いる。以降は中継ティアと同じ `rewriteHtml` / `sanitizeHeaders` が適用される。
+- **CSSOM スタイルの実体化（[#120](https://github.com/f8924919/web-proxy/issues/120)）**: `page.content()` は DOM のテキストノードのみをシリアライズし、CSSOM（`CSSStyleSheet.insertRule()`）で注入された CSS を出力しない。CSS-in-JS（emotion/styled-components 等の本番 "speedy" モード）を使うサイト（例 news.yahoo.co.jp）はクライアントで CSS を CSSOM に直接注入し `<style>` のテキストを空にするため、そのまま取得するとサイト全体の CSS が欠落しレイアウトが崩れる。これを防ぐため、`page.content()` の**直前**に各 `<style>` の `sheet.cssRules` を `<style>` テキストへ書き戻し、`document.adoptedStyleSheets`（構築済みスタイルシート）の内容も `<style>` 要素として `<head>` へ出力してから DOM を取得する。書き戻しはブラウザティアでは常時行う（CSS 欠落は常に不利益のため env フラグは設けない）。cross-origin 等で `cssRules` が読めないシートは安全にスキップし全損させない。既存テキストより CSSOM ルールが多い場合のみ書き戻す（冪等）。
 - **待機戦略**: `page.goto` の `waitUntil` / `timeout` と、追加の idle 待ち（settle）を env で調整可能（`debug-browser.mjs` と同じ検証・ベストエフォート方針、[#39](https://github.com/f8924919/web-proxy/issues/39)）。タイムアウト・読み込み失敗でも収集済み DOM をベストエフォートで返す。
 - **既定 User-Agent / 認証情報**: 中継ティアと同じ既定 UA（`PROXY_USER_AGENT` で上書き可）をブラウザコンテキストに適用し、受信リクエストの `Cookie` / `Authorization`（現ターゲット origin にスコープされた分）を初回ナビゲーションへ引き継ぐ。
 
