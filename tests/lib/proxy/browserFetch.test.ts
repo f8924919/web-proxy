@@ -11,6 +11,7 @@ import {
   browserProxyFromEnv,
   STEALTH_LAUNCH_ARGS,
   STEALTH_INIT_SCRIPT,
+  inlineCssomStyles,
 } from "@/lib/proxy/browserFetch";
 
 describe("parseBrowserHosts", () => {
@@ -248,5 +249,143 @@ describe("stealth 定数（#73）", () => {
 
   test("init script は navigator.webdriver を隠す", () => {
     expect(STEALTH_INIT_SCRIPT).toMatch(/webdriver/);
+  });
+});
+
+// inlineCssomStyles（#120）。page.content() が CSSOM 注入 CSS / adoptedStyleSheets を
+// シリアライズしない問題を補うため、取得直前に DOM へ実体化する DOM 操作関数。
+// 実ブラウザ（page.evaluate）配線はテスト対象外（テスト方針）のため、document 互換の
+// フェイクオブジェクトで分岐を検証する。
+describe("inlineCssomStyles（#120）", () => {
+  const rule = (cssText: string) => ({ cssText });
+
+  type FakeStyle = {
+    textContent: string;
+    sheet: { readonly cssRules: { cssText: string }[] } | null;
+  };
+
+  function fakeStyle(opts: {
+    text?: string;
+    rules?: { cssText: string }[];
+    throwOnRules?: boolean;
+    noSheet?: boolean;
+  }): FakeStyle {
+    const {
+      text = "",
+      rules = [],
+      throwOnRules = false,
+      noSheet = false,
+    } = opts;
+    return {
+      textContent: text,
+      sheet: noSheet
+        ? null
+        : {
+            get cssRules() {
+              if (throwOnRules) throw new Error("SecurityError: cross-origin");
+              return rules;
+            },
+          },
+    };
+  }
+
+  function fakeDoc(opts: {
+    styles?: FakeStyle[];
+    adopted?: { readonly cssRules: { cssText: string }[] }[];
+  }) {
+    const { styles = [], adopted = [] } = opts;
+    const appended: {
+      attrs: Record<string, string>;
+      textContent: string;
+    }[] = [];
+    return {
+      doc: {
+        querySelectorAll: (sel: string) => (sel === "style" ? styles : []),
+        adoptedStyleSheets: adopted,
+        createElement: () => ({
+          attrs: {} as Record<string, string>,
+          textContent: "",
+          setAttribute(k: string, v: string) {
+            this.attrs[k] = v;
+          },
+        }),
+        head: {
+          appendChild: (node: {
+            attrs: Record<string, string>;
+            textContent: string;
+          }) => appended.push(node),
+        },
+      },
+      appended,
+    };
+  }
+
+  test("空 <style> を CSSOM ルールで実体化する", () => {
+    const style = fakeStyle({
+      text: "",
+      rules: [rule(".a{color:red}"), rule(".b{color:blue}")],
+    });
+    const { doc } = fakeDoc({ styles: [style] });
+    inlineCssomStyles(doc as never);
+    expect(style.textContent).toBe(".a{color:red}.b{color:blue}");
+  });
+
+  test("既存テキストが CSSOM ルールより長い <style> は書き換えない（冪等）", () => {
+    const existing = "X".repeat(100);
+    const style = fakeStyle({ text: existing, rules: [rule(".a{}")] });
+    const { doc } = fakeDoc({ styles: [style] });
+    inlineCssomStyles(doc as never);
+    expect(style.textContent).toBe(existing);
+  });
+
+  test("cssRules 読取りで例外を投げる <style> はスキップし、他は処理する（全損しない）", () => {
+    const bad = fakeStyle({ text: "", throwOnRules: true });
+    const good = fakeStyle({ text: "", rules: [rule(".g{}")] });
+    const { doc } = fakeDoc({ styles: [bad, good] });
+    expect(() => inlineCssomStyles(doc as never)).not.toThrow();
+    expect(bad.textContent).toBe("");
+    expect(good.textContent).toBe(".g{}");
+  });
+
+  test("sheet が無い（未パース）<style> はスキップする", () => {
+    const style = fakeStyle({ text: "", noSheet: true });
+    const { doc } = fakeDoc({ styles: [style] });
+    inlineCssomStyles(doc as never);
+    expect(style.textContent).toBe("");
+  });
+
+  test("adoptedStyleSheets を <style data-proxy-adopted> として head へ出力する", () => {
+    const { doc, appended } = fakeDoc({
+      adopted: [
+        {
+          get cssRules() {
+            return [rule(":root{--x:1}")];
+          },
+        },
+      ],
+    });
+    inlineCssomStyles(doc as never);
+    expect(appended).toHaveLength(1);
+    expect(appended[0].attrs["data-proxy-adopted"]).toBe("");
+    expect(appended[0].textContent).toBe(":root{--x:1}");
+  });
+
+  test("空 / 読取り不能な adoptedStyleSheet は出力しない", () => {
+    const { doc, appended } = fakeDoc({
+      adopted: [
+        {
+          get cssRules() {
+            return [];
+          },
+        },
+        {
+          get cssRules(): { cssText: string }[] {
+            throw new Error("blocked");
+          },
+        },
+      ],
+    });
+    expect(() => inlineCssomStyles(doc as never)).not.toThrow();
+    expect(appended).toHaveLength(0);
   });
 });

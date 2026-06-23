@@ -221,6 +221,19 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | `resolveBrowserWaitConfig(env)` | `PROXY_BROWSER_WAIT_UNTIL` / `PROXY_BROWSER_TIMEOUT_MS` / `PROXY_BROWSER_SETTLE_MS` を検証して `{ waitUntil, timeoutMs, settleMs }` を返す（不正値は既定へフォールバック。`debug-browser.mjs` と同方針、#39） |
 | `cookieToSetCookie(cookie)`     | Playwright の cookie オブジェクトを `Set-Cookie` 文字列へ変換する。`Domain` は付けず（`sanitizeSetCookie` がスコープ化）、`Path` / `Secure` / `HttpOnly` / `SameSite` / 永続 cookie の `Expires` を反映する   |
 
+### CSSOM スタイルの実体化（DOM 操作関数・#120）
+
+> 関連仕様: [プロキシ機能仕様 §browserFetch の振る舞い](../spec/features/proxy.md#browserfetch-の振る舞い)。対応 Issue: [#120](https://github.com/f8924919/web-proxy/issues/120)。
+
+`page.content()` は DOM テキストのみをシリアライズし、CSSOM（`insertRule`）注入の CSS や `adoptedStyleSheets` を出力しない。CSS-in-JS サイト（例 news.yahoo.co.jp）はクライアントで CSS を CSSOM に直接注入し `<style>` を空にするため、取得 DOM から CSS が欠落しレイアウトが崩れる。これを防ぐため、`page.content()` の直前に DOM を実体化する。
+
+| 関数                     | 役割                                                                                                                                                                                                                                                                                                                     |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `inlineCssomStyles(doc)` | 各 `<style>` の `sheet.cssRules` を結合して `<style>` テキストへ書き戻す（テキストが CSSOM ルールより短い場合のみ＝冪等）。`doc.adoptedStyleSheets` の各シートのルールを `<style data-proxy-adopted>` として `<head>` へ出力する。`cssRules` を読めないシート（cross-origin 等）は例外を握り潰してスキップし全損させない |
+
+- **配線**: `browserFetch` で `page.content()` を呼ぶ直前に `page.evaluate(inlineCssomStyles)` を実行する。`inlineCssomStyles` は外部参照を持たず DOM グローバルのみで完結させる（`page.evaluate` がブラウザ context で実行するため。`doc` 引数の既定値はブラウザの `document`）。ブラウザティアでは常時実行（env フラグなし）。
+- **テスト**: `inlineCssomStyles` を `document` 互換オブジェクトに対する単体テストで検証する。`page.evaluate` の I/O 配線は[テスト方針](../testing/policy.md)によりテスト対象外。
+
 ### ブラウザ実行基盤の差し替え（純粋関数 + `getBrowser`・#71）
 
 > 関連仕様: [プロキシ機能仕様 §ブラウザ実行基盤](../spec/features/proxy.md#ブラウザ実行基盤バックエンドの差し替え71)。比較・デプロイは [setup.md §9](../setup.md#9-本番デプロイブラウザ実行基盤71)。
