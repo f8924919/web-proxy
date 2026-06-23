@@ -501,17 +501,23 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 受信 `Cookie` ヘッダー値から、`targetOrigin` のスコープ鍵に一致する `__pxy.<鍵>.` 接頭辞を持つ Cookie だけを抽出し、接頭辞を外して元の名前で連結する純粋関数。別 origin にスコープされた Cookie・非スコープの Cookie（プロキシ自身のインフラ認証 cookie 等）は除外される。残る Cookie が無ければ空文字を返し、呼び出し側は `Cookie` ヘッダーを付けない。`forwardableRequestHeaders` / `relayRequestHeaders` の両方が往路 `Cookie` の処理に用いる。
 
+### `authorizationAllowed(incoming, targetOrigin)` / `originFromProxiedReferer(referer)`
+
+> 関連仕様: [プロキシ機能仕様 §Authorization のオリジンスコープ](../spec/features/proxy.md#authorization-のオリジンスコープ136)
+
+`Authorization` を宛先ターゲット origin へスコープするための判定ヘルパー（#136）。`originFromProxiedReferer(referer)` は受信 `Referer` 文字列を `URL` としてパースし、その `pathname` / `search` から `targetFromBrowsePath` → `targetFromProxyPath` → 後方互換 `?url=` の順で中継元ターゲット絶対 URL を復元し、その `origin` を返す純粋関数（復元不能なら `null`）。`authorizationAllowed(incoming, targetOrigin)` は `originFromProxiedReferer(incoming.get("referer"))` が `targetOrigin` と**完全一致**する場合のみ `true` を返す（`Referer` 欠落・パース不能・不一致はすべて `false` ＝ fail-closed）。`forwardableRequestHeaders` / `relayRequestHeaders` の両方が往路 `Authorization` の転送可否に用いる。
+
 ### `forwardableRequestHeaders(incoming, targetOrigin)`
 
 > 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)
 
-受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。`GET` 中継（`/browse` GET / `/api/proxy` GET）が `proxyFetch` の `options.headers` へ渡す（`/browse` POST は `content-type` も併せて渡す）。`Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。
+受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。`GET` 中継（`/browse` GET / `/api/proxy` GET）が `proxyFetch` の `options.headers` へ渡す（`/browse` POST は `content-type` も併せて渡す）。`Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。`Authorization` は `authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。
 
 ### `relayRequestHeaders(incoming, targetOrigin)`
 
 > 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
 
-SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`）に加え、プロキシ自身の文脈を漏らす `origin` / `referer` を除外し（#27）、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。残す `Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。`Authorization` はサーバー側のスコープ機構が無く、クライアントが当該リクエストに設定した値をそのまま転送する。
+SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`）に加え、プロキシ自身の文脈を漏らす `origin` / `referer` を除外し（#27）、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。残す `Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。`Authorization` はサーバー側のスコープ機構が無いため、`authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。
 
 ### `allowedCorsOrigin(origin, host)`
 
