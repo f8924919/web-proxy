@@ -1,4 +1,7 @@
 import dns from "dns/promises";
+import { lookup as dnsLookup } from "node:dns";
+import net from "node:net";
+import { Agent } from "undici";
 
 export class SsrfBlockedError extends Error {
   constructor(ip: string) {
@@ -21,13 +24,16 @@ export class TooManyRedirectsError extends Error {
   }
 }
 
-const PRIVATE_RANGES: [number, number][] = [
-  [ipToInt("127.0.0.0"), ipToInt("127.255.255.255")],
-  [ipToInt("10.0.0.0"), ipToInt("10.255.255.255")],
-  [ipToInt("172.16.0.0"), ipToInt("172.31.255.255")],
-  [ipToInt("192.168.0.0"), ipToInt("192.168.255.255")],
-  [ipToInt("169.254.0.0"), ipToInt("169.254.255.255")],
-  [ipToInt("0.0.0.0"), ipToInt("0.255.255.255")],
+// SSRF ブロック対象の IPv4 レンジ（[下限, 上限] の閉区間・32bit 整数）。
+// 仕様: docs/spec/features/proxy.md §SSRF 対策
+const PRIVATE_RANGES_V4: [number, number][] = [
+  [ipToInt("127.0.0.0"), ipToInt("127.255.255.255")], // ループバック
+  [ipToInt("10.0.0.0"), ipToInt("10.255.255.255")], // RFC1918 class A
+  [ipToInt("172.16.0.0"), ipToInt("172.31.255.255")], // RFC1918 class B
+  [ipToInt("192.168.0.0"), ipToInt("192.168.255.255")], // RFC1918 class C
+  [ipToInt("169.254.0.0"), ipToInt("169.254.255.255")], // リンクローカル（メタデータ含む）
+  [ipToInt("100.64.0.0"), ipToInt("100.127.255.255")], // CGNAT 100.64.0.0/10（#130）
+  [ipToInt("0.0.0.0"), ipToInt("0.255.255.255")], // 未指定
 ];
 
 function ipToInt(ip: string): number {
@@ -38,9 +44,54 @@ function ipToInt(ip: string): number {
   );
 }
 
-export function isSsrfBlocked(ip: string): boolean {
+function isBlockedV4(ip: string): boolean {
   const n = ipToInt(ip);
-  return PRIVATE_RANGES.some(([lo, hi]) => n >= lo && n <= hi);
+  return PRIVATE_RANGES_V4.some(([lo, hi]) => n >= lo && n <= hi);
+}
+
+// IPv6 のブロック判定（#130）。IPv4-mapped（::ffff:a.b.c.d / ::ffff:hi:lo）は対応する
+// IPv4 として委譲する。ループバック `::1`・未指定 `::`・ULA `fc00::/7`・リンクローカル
+// `fe80::/10` を遮断する。入力は net.isIP===6 を満たす正規化済み文字列を想定。
+function isBlockedV6(ip: string): boolean {
+  const n = ip.toLowerCase();
+
+  // IPv4-mapped（ドット記法）: ::ffff:127.0.0.1
+  const dotted = n.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotted) return isBlockedV4(dotted[1]);
+  // IPv4-mapped（16進記法）: ::ffff:7f00:1
+  const hex = n.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hex) {
+    const hi = parseInt(hex[1], 16);
+    const lo = parseInt(hex[2], 16);
+    const v4 = `${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`;
+    return isBlockedV4(v4);
+  }
+
+  if (n === "::1" || n === "::") return true; // ループバック / 未指定
+  if (n.startsWith("fc") || n.startsWith("fd")) return true; // ULA fc00::/7
+  if (/^fe[89ab]/.test(n)) return true; // リンクローカル fe80::/10（fe80–febf）
+  return false;
+}
+
+// 解決後 IP（IPv4 / IPv6）が SSRF ブロック対象か判定する純粋関数（#130）。
+// net.isIP で系統を判定し、解析不能な文字列は安全側で遮断する。
+export function isSsrfBlocked(ip: string): boolean {
+  const v = net.isIP(ip);
+  if (v === 4) return isBlockedV4(ip);
+  if (v === 6) return isBlockedV6(ip);
+  return true; // 解析不能は安全側で遮断
+}
+
+// 解決済みアドレス配列のうち、最初にブロック対象となる IP を返す純粋関数（#129）。
+// 1 つでもブロック対象があれば（dual-stack の AAAA など）それを返し、無ければ null。
+// connect.lookup フック（IP ピン留め）と DNS 全件検査（assertSsrfAllowed）で共有する。
+export function firstBlockedAddress(
+  addresses: { address: string }[]
+): string | null {
+  for (const a of addresses) {
+    if (isSsrfBlocked(a.address)) return a.address;
+  }
+  return null;
 }
 
 export interface ProxyRequestOptions {
@@ -200,14 +251,88 @@ export function nextRedirectMethod(
 
 // URL を DNS 解決し、SSRF ブロック対象なら SsrfBlockedError を throw する。
 // 初回・リダイレクト追従先の双方から呼ぶ（#26）。browserFetch のサブリクエスト
-// 傍受からも再利用するため公開する（#69）。
+// 傍受からも再利用するため公開する（#69）。解決しうる全アドレス（A / AAAA）を
+// 検査し、1 つでもブロック対象なら遮断する（#130）。
 export async function assertSsrfAllowed(url: string): Promise<void> {
   const parsed = new URL(url);
-  // IPv4 に固定して解決する（IPv6 の SSRF 判定は v2 以降）
-  const { address } = await dns.lookup(parsed.hostname, { family: 4 });
-  if (isSsrfBlocked(address)) {
-    throw new SsrfBlockedError(address);
+  const addresses = await dns.lookup(parsed.hostname, {
+    all: true,
+    verbatim: true,
+  });
+  const blocked = firstBlockedAddress(addresses);
+  if (blocked) {
+    throw new SsrfBlockedError(blocked);
   }
+}
+
+// connect.lookup の判定中心部（純粋関数・#129）。接続時に解決されたアドレス配列と、
+// Node/undici が要求する形式（Happy Eyeblls の all フラグ）から、コールバックへ渡すべき
+// 結果を決める。1 つでもブロック対象があれば blocked を返す（事前検査を通過していても、
+// リバインディングで応答 IP がすり替わればここで遮断される）。空配列は解決失敗。
+export type SsrfLookupDecision =
+  | { kind: "blocked"; address: string }
+  | { kind: "empty" }
+  | { kind: "all"; addresses: { address: string; family: number }[] }
+  | { kind: "single"; address: string; family: number };
+
+export function decideSsrfLookup(
+  addresses: { address: string; family: number }[],
+  wantsAll: boolean
+): SsrfLookupDecision {
+  const blocked = firstBlockedAddress(addresses);
+  if (blocked) return { kind: "blocked", address: blocked };
+  if (addresses.length === 0) return { kind: "empty" };
+  if (wantsAll) return { kind: "all", addresses };
+  const first = addresses[0];
+  return { kind: "single", address: first.address, family: first.family };
+}
+
+// DNS リバインディング / TOCTOU 対策の dispatcher（#129）。
+// connect.lookup フックで名前解決を 1 回に統一し、解決した全アドレスを検査したうえで、
+// 検査に通ったアドレスだけを接続候補として返す（ピン留め）。これにより「検査した IP」と
+// 「接続する IP」が必ず一致し、検査後に応答 IP を変えるリバインディングが成立しない。
+// TLS の servername（SNI）は元のホスト名が使われるため証明書検証は維持される。
+// Node の net/tls は Happy Eyeballs で lookup に `all: true` を渡し、コールバックへ
+// `{ address, family }[]` の配列を要求する。その場合は検査済み全件を返し（全件が安全）、
+// `all` 無し時のみ単一アドレス形式で返す。1 つでもブロック対象なら接続前に遮断する。
+// 仕様: docs/spec/features/proxy.md §DNS リバインディング / TOCTOU 対策（IP ピン留め）
+const ssrfSafeAgent = new Agent({
+  connect: {
+    lookup: (hostname, options, callback) => {
+      dnsLookup(hostname, { all: true, verbatim: true }, (err, addresses) => {
+        if (err) return callback(err, "", 0);
+        const list = addresses as { address: string; family: number }[];
+        const wantsAll = !!(options && (options as { all?: boolean }).all);
+        const decision = decideSsrfLookup(list, wantsAll);
+        switch (decision.kind) {
+          case "blocked":
+            return callback(new SsrfBlockedError(decision.address), "", 0);
+          case "empty":
+            return callback(new Error("ENOTFOUND"), "", 0);
+          case "all":
+            // 検査済みアドレスをそのまま接続に使う（再解決しない）＝ピン留め。
+            return (callback as (e: unknown, a: typeof list) => void)(
+              null,
+              decision.addresses
+            );
+          case "single":
+            return callback(null, decision.address, decision.family);
+        }
+      });
+    },
+  },
+});
+
+// fetch 失敗の cause 連鎖から SsrfBlockedError を取り出す（#129）。
+// undici は connect.lookup の例外を TypeError("fetch failed") の cause に包むため、
+// 数段たどってピン留め検査由来の SSRF ブロックを 403 として識別できるようにする。
+export function findSsrfCause(err: unknown): SsrfBlockedError | null {
+  let cur: unknown = err;
+  for (let i = 0; i < 5 && cur; i++) {
+    if (cur instanceof SsrfBlockedError) return cur;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return null;
 }
 
 export interface ProxyFetchResult {
@@ -243,15 +368,22 @@ export async function proxyFetch(
 
     let res: Response;
     try {
-      res = await fetch(currentUrl, {
+      // dispatcher は undici の Agent（connect.lookup で IP ピン留め・#129）。
+      // Node の fetch 型に dispatcher が無いため init を拡張型でキャストする。
+      const init = {
         method,
         headers,
         body: body as BodyInit | undefined,
         ...(duplex ? { duplex } : {}),
-        redirect: "manual",
+        redirect: "manual" as const,
         signal,
-      });
-    } catch {
+        dispatcher: ssrfSafeAgent,
+      };
+      res = await fetch(currentUrl, init as unknown as RequestInit);
+    } catch (err) {
+      // ピン留め検査由来の SSRF ブロックは 403 として扱うため伝播させる（#129）。
+      const ssrf = findSsrfCause(err);
+      if (ssrf) throw ssrf;
       throw new FetchTimeoutError();
     }
 
