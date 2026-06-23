@@ -10,6 +10,7 @@ import {
   browseGuards,
   htmlResponse,
 } from "@/lib/proxy/browseRelay";
+import { getClientIp } from "@/lib/proxy/clientIp";
 
 // ページ遷移のパス反映ルート（/browse/<scheme>/<host>/<path>・正本。#115）。
 // percent-encoding を保つため、デコード済みの catch-all params ではなく生の
@@ -37,7 +38,8 @@ export function GET(req: NextRequest) {
     parsed,
     { headers: forwardableRequestHeaders(req.headers, parsed.origin) },
     useBrowser,
-    true
+    true,
+    getClientIp(req.headers)
   );
 }
 
@@ -64,9 +66,15 @@ export async function POST(req: NextRequest) {
   const contentType = req.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
 
-  return relayBrowse(parsed, {
-    method: "POST",
-    body: req.body,
-    headers,
-  });
+  return relayBrowse(
+    parsed,
+    {
+      method: "POST",
+      body: req.body,
+      headers,
+    },
+    false,
+    false,
+    getClientIp(req.headers)
+  );
 }

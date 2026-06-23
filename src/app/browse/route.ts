@@ -7,6 +7,7 @@ import {
   browseGuards,
   htmlResponse,
 } from "@/lib/proxy/browseRelay";
+import { getClientIp } from "@/lib/proxy/clientIp";
 
 // 後方互換ルート（?url= クエリ方式）。パス反映ナビ形式（/browse/<scheme>/<host>/<path>・#115）が
 // 正本だが、外部リンク・ブックマーク・アドレスバー入力経由の ?url= も受理する。
@@ -79,9 +80,15 @@ export async function POST(req: NextRequest) {
   const contentType = req.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
 
-  return relayBrowse(parsed, {
-    method: "POST",
-    body: req.body,
-    headers,
-  });
+  return relayBrowse(
+    parsed,
+    {
+      method: "POST",
+      body: req.body,
+      headers,
+    },
+    false,
+    false,
+    getClientIp(req.headers)
+  );
 }

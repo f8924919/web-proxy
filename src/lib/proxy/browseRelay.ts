@@ -17,6 +17,11 @@ import { rewriteHtml } from "@/lib/proxy/rewrite";
 import { sanitizeHeaders } from "@/lib/proxy/headers";
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
+import { isAllowedTarget, allowedPortsFromEnv } from "@/lib/proxy/targetPolicy";
+import {
+  relayConcurrencyLimiter,
+  ConcurrencyLimitExceededError,
+} from "@/lib/proxy/concurrency";
 import { navigationLoopGuard, loopGuidanceHtml } from "@/lib/proxy/loopGuard";
 import { getClientIp } from "@/lib/proxy/clientIp";
 import { logError } from "@/lib/logger";
@@ -54,6 +59,11 @@ export function browseGuards(req: NextRequest, parsed: URL): Response | null {
   } catch {
     return new Response("Too Many Requests", { status: 429 });
   }
+  // 中継先スキーム・ポートの制限（オープンプロキシ乱用対策・#133）。非 http(s)・許可外
+  // ポート（既定 80/443・PROXY_ALLOWED_PORTS で追加）は中継せず 403 を返す。
+  if (!isAllowedTarget(parsed, allowedPortsFromEnv())) {
+    return htmlResponse("このアドレスへのアクセスは許可されていません。", 403);
+  }
   // enablejs 等の自己再ナビゲーション無限ループを検出したら、ループを駆動する中継 HTML では
   // なく自動遷移を含まない案内ページを返して打ち切る（429 に達する前に発火）。
   if (navigationLoopGuard.check(ip, parsed)) {
@@ -89,85 +99,114 @@ export async function relayBrowse(
   parsed: URL,
   fetchOptions?: Parameters<typeof proxyFetch>[1],
   useBrowser = false,
-  allowAutoPromote = false
+  allowAutoPromote = false,
+  ip = "unknown"
 ): Promise<Response> {
-  let res: Response;
-  let finalUrl: string;
+  // 同時接続数の制限（#133）。スロットを確保し、レスポンス構築後に finally で解放する
+  // （ストリーム透過本文の転送中は計上しない）。ip は呼び出し元（route）が getClientIp で解決して渡す。
+  let release: () => void;
   try {
-    ({ response: res, finalUrl } = await fetchTarget(
-      parsed.href,
-      fetchOptions,
-      useBrowser
-    ));
+    release = relayConcurrencyLimiter.acquire(ip);
   } catch (err) {
-    if (err instanceof SsrfBlockedError) {
-      return htmlResponse("アクセスできない URL です。", 403);
+    if (err instanceof ConcurrencyLimitExceededError) {
+      return err.scope === "global"
+        ? htmlResponse(
+            "現在アクセスが集中しています。時間をおいて再度お試しください。",
+            503
+          )
+        : htmlResponse(
+            "リクエストが多すぎます。時間をおいて再度お試しください。",
+            429
+          );
     }
-    if (err instanceof FetchTimeoutError) {
-      return htmlResponse("サイトに接続できませんでした。", 502);
-    }
-    // DNS 解決失敗など、その他の予期しないエラー
-    logError("[proxy/browse]", err);
-    return htmlResponse("サイトへの接続に失敗しました。", 502);
+    throw err;
   }
 
-  const contentType = res.headers.get("content-type") ?? "";
-  // Set-Cookie のスコープ鍵にはリダイレクト追従後の最終 URL の origin を用いる
-  // （書き換え基準 baseUrl と揃える。#42）。
-  let outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
-
   try {
-    // 204/304 などボディを持てないステータスはボディを null にして中継する
-    // （ボディ付きで Response を構築すると例外になり 500 クラッシュするため）。
-    if (isNullBodyStatus(res.status)) {
-      return new Response(null, { status: res.status, headers: outHeaders });
+    let res: Response;
+    let finalUrl: string;
+    try {
+      ({ response: res, finalUrl } = await fetchTarget(
+        parsed.href,
+        fetchOptions,
+        useBrowser
+      ));
+    } catch (err) {
+      if (err instanceof SsrfBlockedError) {
+        return htmlResponse("アクセスできない URL です。", 403);
+      }
+      if (err instanceof FetchTimeoutError) {
+        return htmlResponse("サイトに接続できませんでした。", 502);
+      }
+      // DNS 解決失敗など、その他の予期しないエラー
+      logError("[proxy/browse]", err);
+      return htmlResponse("サイトへの接続に失敗しました。", 502);
     }
 
-    if (!contentType.includes("text/html")) {
-      return new Response(res.body, {
+    const contentType = res.headers.get("content-type") ?? "";
+    // Set-Cookie のスコープ鍵にはリダイレクト追従後の最終 URL の origin を用いる
+    // （書き換え基準 baseUrl と揃える。#42）。
+    let outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
+
+    try {
+      // 204/304 などボディを持てないステータスはボディを null にして中継する
+      // （ボディ付きで Response を構築すると例外になり 500 クラッシュするため）。
+      if (isNullBodyStatus(res.status)) {
+        return new Response(null, { status: res.status, headers: outHeaders });
+      }
+
+      if (!contentType.includes("text/html")) {
+        return new Response(res.body, {
+          status: res.status,
+          headers: outHeaders,
+        });
+      }
+
+      // 書き換えのため HTML を全量バッファするが、巨大レスポンスによる OOM を防ぐためサイズ
+      // 上限を課す（超過は BodyTooLargeError → 413。#134）。
+      const maxBytes = maxBufferBytesFromEnv();
+      let html = await readTextWithLimit(res, maxBytes);
+
+      // 自動ティア昇格（#70）: 中継ティアの結果が崩れ/チャレンジなら browserFetch で再取得する。
+      // allowlist で既にブラウザティア（useBrowser）の場合・POST（allowAutoPromote=false）は対象外。
+      // 同一 host+path の再昇格は promotionGuard が抑止し、二重取得コストの無限ループを防ぐ。
+      if (
+        allowAutoPromote &&
+        !useBrowser &&
+        autoPromoteEnabledFromEnv() &&
+        shouldPromoteToBrowser(html, res.status, contentType) &&
+        promotionGuard.tryPromote(parsed)
+      ) {
+        try {
+          const promoted = await browserFetch(parsed.href, fetchOptions);
+          res = promoted.response;
+          finalUrl = promoted.finalUrl;
+          outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
+          html = await readTextWithLimit(res, maxBytes);
+        } catch (err) {
+          // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。
+          logError("[proxy/auto-promote]", err);
+        }
+      }
+
+      // baseUrl はリダイレクト追従後の最終 URL を用いる（#42）。
+      const rewritten = rewriteHtml(html, finalUrl);
+      outHeaders.set("Content-Type", "text/html; charset=utf-8");
+      return new Response(rewritten, {
         status: res.status,
         headers: outHeaders,
       });
-    }
-
-    // 書き換えのため HTML を全量バッファするが、巨大レスポンスによる OOM を防ぐためサイズ
-    // 上限を課す（超過は BodyTooLargeError → 413。#134）。
-    const maxBytes = maxBufferBytesFromEnv();
-    let html = await readTextWithLimit(res, maxBytes);
-
-    // 自動ティア昇格（#70）: 中継ティアの結果が崩れ/チャレンジなら browserFetch で再取得する。
-    // allowlist で既にブラウザティア（useBrowser）の場合・POST（allowAutoPromote=false）は対象外。
-    // 同一 host+path の再昇格は promotionGuard が抑止し、二重取得コストの無限ループを防ぐ。
-    if (
-      allowAutoPromote &&
-      !useBrowser &&
-      autoPromoteEnabledFromEnv() &&
-      shouldPromoteToBrowser(html, res.status, contentType) &&
-      promotionGuard.tryPromote(parsed)
-    ) {
-      try {
-        const promoted = await browserFetch(parsed.href, fetchOptions);
-        res = promoted.response;
-        finalUrl = promoted.finalUrl;
-        outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
-        html = await readTextWithLimit(res, maxBytes);
-      } catch (err) {
-        // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。
-        logError("[proxy/auto-promote]", err);
+    } catch (err) {
+      // 本文が上限超過なら 413（メモリ枯渇 DoS 対策。#134）。
+      if (err instanceof BodyTooLargeError) {
+        return htmlResponse("ページのサイズが大きすぎます。", 413);
       }
+      // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
+      logError("[proxy/browse-render]", err);
+      return htmlResponse("サイトの読み込みに失敗しました。", 502);
     }
-
-    // baseUrl はリダイレクト追従後の最終 URL を用いる（#42）。
-    const rewritten = rewriteHtml(html, finalUrl);
-    outHeaders.set("Content-Type", "text/html; charset=utf-8");
-    return new Response(rewritten, { status: res.status, headers: outHeaders });
-  } catch (err) {
-    // 本文が上限超過なら 413（メモリ枯渇 DoS 対策。#134）。
-    if (err instanceof BodyTooLargeError) {
-      return htmlResponse("ページのサイズが大きすぎます。", 413);
-    }
-    // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
-    logError("[proxy/browse-render]", err);
-    return htmlResponse("サイトの読み込みに失敗しました。", 502);
+  } finally {
+    // 上流取得〜レスポンス構築までを 1 スロットとして計上し、ここで解放する（#133）。
+    release();
   }
 }
