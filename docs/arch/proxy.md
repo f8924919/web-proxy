@@ -634,6 +634,21 @@ const store = new Map<string, number[]>();
 
 ---
 
+## `src/lib/logger.ts`（共通ロガー・#138）
+
+> 関連仕様: [プロキシ機能仕様 §エラーログとプライバシー](../spec/features/proxy.md#エラーログとプライバシー機微-url-のマスキング138)
+
+**役割**: 中継処理の異常系ログを 1 か所に集約する横断ユーティリティ。閲覧先 URL・ホスト・IP は機微情報になり得る（OWASP A09:2021 / CWE-532）ため、出力前に**機微トークンを redact** し、**`PROXY_LOG_LEVEL` でレベル制御**する。`src/lib/proxy/` 配下ではなくクロスカッティングな `src/lib/` 直下に置く。
+
+- `logLevelFromEnv(env = process.env)`: `PROXY_LOG_LEVEL` を読み、`silent` / `error` / `warn` / `info` / `debug` のいずれかを返す純粋関数（`*FromEnv` パターン）。未知値・未設定は既定 **`error`**。
+- `maskSensitive(text)`: 任意文字列から **URL（`scheme://…`）・IPv4 / IPv6・素のホスト名（ドメイン）** を正規表現で検出し、`[redacted-url]` / `[redacted-ip]` / `[redacted-host]` へ置換する純粋関数。閲覧先ホスト自体が機微なため**全面 redact**（origin やパスを残さない）。安全側に倒すため過剰一致（例: メッセージ中の `foo.bar` 風トークン）は許容する。
+- `formatError(err, includeStack = false)`: `Error` を `name: maskSensitive(message)` へ整形する。`name`（エラークラス名）は機微でないため残し、`message` と `cause`（ネイティブ fetch 失敗は `cause` にホストを含む）は redact する。`includeStack` 時のみスタックを redact 付きで添える。
+- `logError(label, err)`: `logLevelFromEnv()` が `error` 以上のときだけ `console.error(label, formatError(err, level === "debug"))` を出力する。`silent` では何も出さない。スタックは `debug` のみ。
+
+中継の 5 箇所の `console.error("[proxy/…]", err)`（`browseRelay.ts` の `browser-fallback` / `browse` / `auto-promote` / `browse-render`、`relayAsset.ts` の `asset`）はすべて `logError("[proxy/…]", err)` に置き換える。これにより、本番では既定で**機微 URL/ホストを伏せたエラーログのみ**が出力され、`PROXY_LOG_LEVEL=silent` で抑止・`=debug` でスタック付き診断ができる。
+
+---
+
 ## リバースプロキシ下でのパスプレフィックス
 
 code-server のポート転送（`/proxy/3000/`）など、リバースプロキシがパスプレフィックスを付与する環境向けの設定。

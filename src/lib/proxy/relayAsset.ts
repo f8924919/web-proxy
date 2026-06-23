@@ -17,6 +17,7 @@ import {
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { assetRateLimiter } from "@/lib/proxy/rateLimit";
 import { getClientIp } from "@/lib/proxy/clientIp";
+import { logError } from "@/lib/logger";
 
 // アセット中継の共通処理。両 route（パス反映形式の [...slug] と後方互換の ?url=）が
 // ターゲット絶対 URL を決定したうえで本関数へ委譲する。
@@ -107,7 +108,7 @@ export async function relayAsset(
       return new Response("Payload Too Large", { status: 413 });
     }
     // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
-    console.error("[proxy/asset]", err);
+    logError("[proxy/asset]", err);
     return new Response("Bad Gateway", { status: 502 });
   }
 }

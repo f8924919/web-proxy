@@ -11,6 +11,8 @@
 複数モジュールで共通する制約（例: スレッド間通信は Signal/Slot 経由、エラーは結果型で返す、ロガーは DI 経由など）がある場合はここに簡潔に記述する。各モジュール固有のルールは個別の `arch/{name}.md` に書く。
 -->
 
+- **エラーログ**: 中継処理の異常系ログは共通ロガー `src/lib/logger.ts`（`logError`）経由で出力する。閲覧先 URL・ホスト・IP は出力前に redact し、`PROXY_LOG_LEVEL` でレベル制御する（#138。詳細は [proxy.md §src/lib/logger.ts](proxy.md#srclibloggerts共通ロガー138)）。
+
 ## モジュール一覧
 
 | ドキュメント         | モジュール                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              | 関連仕様                                                                                      |
