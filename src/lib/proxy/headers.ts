@@ -1,3 +1,6 @@
+import { targetFromBrowsePath } from "@/lib/proxy/browsePath";
+import { targetFromProxyPath } from "@/lib/proxy/proxyPath";
+
 const BLOCKED_HEADERS = new Set([
   "content-security-policy",
   "x-frame-options",
@@ -88,6 +91,59 @@ export function scopedCookieHeader(
     .join("; ");
 }
 
+// 受信 Referer（プロキシ origin の URL）から中継元ページのターゲット origin を復元する
+// 純粋関数。Referer のパスにはターゲットが反映されている（パス反映ナビ /browse/<scheme>/<host>/…
+// ・パス反映アセット /api/proxy/<scheme>/<host>/… ・後方互換 /browse?url=<絶対URL>）。
+// いずれの形式でも復元できなければ（Referer 欠落・パース不能・マーカー無し等）null を返す。
+// 仕様: docs/spec/features/proxy.md §Authorization のオリジンスコープ（#136）
+function originFromProxiedReferer(referer: string | null): string | null {
+  if (!referer) return null;
+  let ref: URL;
+  try {
+    ref = new URL(referer);
+  } catch {
+    return null;
+  }
+  const target =
+    targetFromBrowsePath(ref.pathname, ref.search) ??
+    targetFromProxyPath(ref.pathname, ref.search) ??
+    legacyUrlParam(ref);
+  if (!target) return null;
+  try {
+    return new URL(target).origin;
+  } catch {
+    return null;
+  }
+}
+
+// 後方互換 ?url= 形式の Referer（/browse?url=<絶対URL>）からターゲット絶対 URL を取り出す。
+// http(s) 以外・欠落・不正値は null。パス反映形式が先に一致するため、これが効くのは
+// パス反映マーカーを持たない素の /browse パスの場合に限られる。
+function legacyUrlParam(ref: URL): string | null {
+  const url = ref.searchParams.get("url");
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.href;
+  } catch {
+    return null;
+  }
+}
+
+// Authorization をターゲットへ転送してよいかを判定する純粋関数。中継元ページの origin
+// （受信 Referer から復元）が宛先ターゲット origin と完全一致する場合のみ true。Cookie の
+// ようなスコープ鍵を値へ埋め込めないため、中継元シグナル（Referer）で振り向け先一致を
+// 検証する。Referer 欠落・パース不能・不一致はすべて false（fail-closed）。
+// 仕様: docs/spec/features/proxy.md §Authorization のオリジンスコープ（#136）
+function authorizationAllowed(
+  incoming: Headers,
+  targetOrigin: string
+): boolean {
+  const source = originFromProxiedReferer(incoming.get("referer"));
+  return source !== null && source === targetOrigin;
+}
+
 // ターゲットへ転送してよいリクエスト認証ヘッダーの許可リスト。
 // 全ヘッダー素通しを避け、明示的に限定する。
 const FORWARD_REQUEST_HEADERS = ["cookie", "authorization"] as const;
@@ -107,6 +163,9 @@ export function forwardableRequestHeaders(
     if (name === "cookie") {
       const scoped = scopedCookieHeader(value, targetOrigin);
       if (scoped) result[name] = scoped;
+    } else if (name === "authorization") {
+      // Authorization は中継元 origin が宛先と一致する場合のみ転送する（#136）。
+      if (authorizationAllowed(incoming, targetOrigin)) result[name] = value;
     } else {
       result[name] = value;
     }
@@ -138,9 +197,9 @@ const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
 // SW が /api/proxy へ振り向けた非 GET 中継向けに、リクエストヘッダーを
 // 拒否リスト方式で広めに転送する純粋関数。Content-Type / Authorization /
 // Cookie / X-* などカスタムヘッダーを保持し、ターゲットの API を動かす。
-// Authorization はサーバー側のスコープ機構が無く、クライアントが当該リクエストに
-// 設定した値をそのまま転送する（#27）。
-// 仕様: docs/spec/features/proxy.md §CORS プリフライト対応
+// Authorization は中継元 origin（Referer から復元）が宛先 targetOrigin と一致する
+// 場合のみ転送する（authorizationAllowed。#136）。
+// 仕様: docs/spec/features/proxy.md §CORS プリフライト対応 / §Authorization のオリジンスコープ
 export function relayRequestHeaders(
   incoming: Headers,
   targetOrigin: string
@@ -152,6 +211,11 @@ export function relayRequestHeaders(
     if (lower === "cookie") {
       const scoped = scopedCookieHeader(value, targetOrigin);
       if (scoped) result[name] = scoped;
+      return;
+    }
+    if (lower === "authorization") {
+      // Authorization は中継元 origin が宛先と一致する場合のみ転送する（#136）。
+      if (authorizationAllowed(incoming, targetOrigin)) result[name] = value;
       return;
     }
     result[name] = value;
