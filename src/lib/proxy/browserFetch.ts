@@ -189,6 +189,59 @@ export function cookieToSetCookie(cookie: BrowserCookie): string {
   return parts.join("; ");
 }
 
+// page.content() は DOM のテキストノードのみをシリアライズし、CSSOM（insertRule）で注入された
+// CSS や adoptedStyleSheets を出力しない。CSS-in-JS（emotion/styled-components 等の本番 "speedy"
+// モード）を使うサイト（例 news.yahoo.co.jp）はクライアントで CSS を CSSOM に直接注入し <style> の
+// テキストを空にするため、そのまま取得するとサイト全体の CSS が欠落しレイアウトが崩れる（#120）。
+// これを防ぐため、page.content() の直前にブラウザ context で本関数を実行し、CSSOM 上の CSS を
+// DOM テキストへ実体化する。page.evaluate がシリアライズして実行するため、外部参照を持たず DOM
+// グローバルのみで完結させる（doc 引数の既定値はブラウザの document）。
+// 仕様: docs/spec/features/proxy.md §browserFetch の振る舞い（CSSOM スタイルの実体化）
+export function inlineCssomStyles(doc: Document = document): void {
+  // 1) 空テキストだが CSSOM ルールを持つ <style> を実体化する。
+  for (const el of Array.from(doc.querySelectorAll("style"))) {
+    let sheet: CSSStyleSheet | null;
+    try {
+      sheet = el.sheet;
+    } catch {
+      sheet = null;
+    }
+    if (!sheet) continue;
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules; // cross-origin 等は SecurityError を投げる
+    } catch {
+      continue;
+    }
+    if (rules.length === 0) continue;
+    const text = Array.from(rules)
+      .map((r) => r.cssText)
+      .join("");
+    // 既存テキストより CSSOM ルールが多い場合のみ書き戻す（冪等）。
+    if (text.length > el.textContent.length) el.textContent = text;
+  }
+
+  // 2) adoptedStyleSheets（構築済みスタイルシート）を <style> として <head> へ出力する。
+  const adopted = doc.adoptedStyleSheets ?? [];
+  for (const sheet of adopted) {
+    let rules: CSSRuleList;
+    try {
+      rules = sheet.cssRules;
+    } catch {
+      continue;
+    }
+    if (rules.length === 0) continue;
+    const text = Array.from(rules)
+      .map((r) => r.cssText)
+      .join("");
+    if (!text) continue;
+    const s = doc.createElement("style");
+    s.setAttribute("data-proxy-adopted", "");
+    s.textContent = text;
+    (doc.head ?? doc.documentElement).appendChild(s);
+  }
+}
+
 // ===== ランタイム配線（I/O・テスト対象外） =====
 
 // プロセス内で 1 つのブラウザを再利用する（起動コスト削減）。
@@ -318,6 +371,12 @@ export async function browserFetch(
     await page.waitForTimeout(settleMs).catch(() => {});
 
     const finalUrl = page.url();
+    // page.content() の前に CSSOM 注入 CSS / adoptedStyleSheets を DOM へ実体化する（#120）。
+    // CSS-in-JS サイトで CSS が欠落しレイアウトが崩れるのを防ぐ。失敗しても DOM 取得は続行する。
+    // page.evaluate は関数ソースをシリアライズしてブラウザ context で実行するため、自己完結した
+    // inlineCssomStyles の参照を直接渡す（ラッパー () => inlineCssomStyles() は閉包参照を解決できず
+    // ブラウザ側で ReferenceError になる）。引数なし呼び出しで doc は既定の document を使う。
+    await page.evaluate(inlineCssomStyles as () => void).catch(() => {});
     const html = await page.content();
 
     // ブラウザの cookie jar をスコープ化のため Set-Cookie 化して返す。
