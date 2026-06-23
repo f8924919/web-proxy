@@ -7,7 +7,7 @@
 import type { Browser, BrowserContext } from "playwright";
 import {
   assertSsrfAllowed,
-  isSsrfBlocked,
+  firstBlockedAddress,
   DEFAULT_USER_AGENT,
   type ProxyFetchResult,
   type ProxyRequestOptions,
@@ -320,8 +320,14 @@ async function installSsrfGuard(context: BrowserContext): Promise<void> {
     }
     try {
       const dns = await import("dns/promises");
-      const { address } = await dns.lookup(hostname, { family: 4 });
-      if (isSsrfBlocked(address)) {
+      // 解決しうる全アドレス（A / AAAA）を検査する（IPv4 / IPv6 両対応・#130）。
+      // ただし Chromium は接続時に自前で再解決するため IP ピン留めはできず、
+      // リバインディングの残存窓がある（#129。docs/spec/features/proxy.md §SSRF（不弱化））。
+      const addresses = await dns.lookup(hostname, {
+        all: true,
+        verbatim: true,
+      });
+      if (firstBlockedAddress(addresses)) {
         await route.abort();
         return;
       }
