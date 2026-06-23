@@ -30,6 +30,7 @@
 | [111-special-path-encoding.md](111-special-path-encoding.md)               | `%2F`・非 ASCII 特殊パスの percent-encoding 保持を回帰テストで固定し spec を整合（実機検証で挙動は正しいと確認・防御と docs 整合のみ）Issue #111 / PR #112                    | 2026-06-22 |
 | [114-spa-query-relative-nav.md](114-spa-query-relative-nav.md)             | SPA のクエリ相対リンク(?q=…)クリックで url= が落ちプロキシが外れる不具合を修正（DDG「Searches related to」。素通し判定に url= 有無を追加）Issue #114 / PR #116                | 2026-06-22 |
 | [115-nav-path-reflection.md](115-nav-path-reflection.md)                   | ページ遷移を ?url= からパス反映 /browse/<scheme>/<host>/<path> へ移行し SPA のパラメータ名衝突（DDG ナビタブ）を解消。?url= は 307 互換・SW/横取りも対応 Issue #115 / PR #118 | 2026-06-22 |
+| [120-browser-mode-cssom-inline.md](120-browser-mode-cssom-inline.md)       | ブラウザモードで page.content() が CSSOM 注入 CSS / adoptedStyleSheets を欠落させ CSS-in-JS サイト(news.yahoo.co.jp 等)の表示が崩れる不具合を、取得前の CSSOM 実体化で解消 Issue #120 / PR #121 | 2026-06-23 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
