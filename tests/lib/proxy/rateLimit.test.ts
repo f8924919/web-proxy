@@ -54,6 +54,29 @@ describe("RateLimiter", () => {
     }).not.toThrow();
     expect(() => limiter.check("1.2.3.4")).toThrow(RateLimitExceededError);
   });
+
+  // #132: 偽装 IP 等で多数の異なるキーが流入しても、ウィンドウ外になった空エントリは
+  // 削除され store が肥大しないこと（windowMs ごとに間引いて走査）。
+  test("ウィンドウ経過後の空エントリは eviction され store が肥大しない", () => {
+    const limiter = new RateLimiter(60, 60_000);
+    for (let i = 0; i < 100; i++) limiter.check(`10.0.0.${i}`);
+    expect(limiter.size).toBe(100);
+
+    // ウィンドウを超えて時間を進め、別 IP で check すると eviction が走る。
+    jest.advanceTimersByTime(61_000);
+    limiter.check("9.9.9.9");
+
+    // 旧 100 エントリは全タイムスタンプがウィンドウ外となり削除され、新規 1 件のみ残る。
+    expect(limiter.size).toBe(1);
+  });
+
+  test("ウィンドウ内にアクセスのあるエントリは eviction されない", () => {
+    const limiter = new RateLimiter(60, 60_000);
+    limiter.check("1.1.1.1");
+    jest.advanceTimersByTime(61_000);
+    limiter.check("1.1.1.1"); // 同一 IP を再アクセス（eviction も走る）
+    expect(limiter.size).toBe(1);
+  });
 });
 
 describe("用途別レートリミッタ", () => {

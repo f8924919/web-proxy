@@ -559,7 +559,9 @@ export const assetRateLimiter = new RateLimiter(600); // /api/proxy 用
 - `maxRequests` 件以上なら `RateLimitExceededError` を throw
 - 現在時刻を追記
 
-> 上限値の根拠・分離の理由は [機能仕様 §レート制限](../spec/features/proxy.md#レート制限) を参照。
+**eviction（#132）**: `check` 冒頭で、前回 eviction から `windowMs` 以上経過していれば `store` を走査し、全タイムスタンプがウィンドウ外（空）になったエントリを `delete` する。走査は `windowMs` ごとに間引くため毎リクエストの全走査は発生しない。テスト用に現在のエントリ数を返す `size` ゲッターを公開する。`ip` には `getClientIp` の解決値（信頼ヘッダー未設定時は定数 `"unknown"`）が渡る。
+
+> 上限値の根拠・分離の理由は [機能仕様 §レート制限](../spec/features/proxy.md#レート制限)、IP 解決・eviction は [§クライアント IP の特定](../spec/features/proxy.md#クライアント-ip-の特定信頼ヘッダーの明示設定132) / [§store の eviction](../spec/features/proxy.md#store-の-evictionメモリ肥大対策132) を参照。
 
 ### 制約
 
@@ -589,6 +591,7 @@ const store = new Map<string, number[]>();
 - 現在時刻から `windowMs` 以内のタイムスタンプのみ残し、現在時刻を追記する。
 - 残存件数が閾値を超えたら `true`（ループ）を返す。それ以外は `false`。
 - レート制限（60 req/分）に達する前に発火するよう、閾値はそれより十分小さく取る（既定 6 回 / 10 秒）。
+- **eviction（#132）**: `RateLimiter` と同方式で、`check` 冒頭に `windowMs` ごとに間引いた空エントリ削除を行い、`size` ゲッターを公開する。キーの `ip` 部は `getClientIp` の解決値（未設定時は定数 `"unknown"`）。
 
 `/browse`（GET / POST）は `pageRateLimiter.check` の後にこれを呼び、`true` なら中継 HTML を返さず**自動遷移を含まない静的案内ページ**（HTTP 200）を返してループを停止させる。上限値・誤検知・限界の根拠は [機能仕様 §ナビゲーションループの検出](../spec/features/proxy.md#ナビゲーションループの検出enablejs-対策) を参照。
 
@@ -600,9 +603,13 @@ const store = new Map<string, number[]>();
 
 ## `src/lib/proxy/clientIp.ts`
 
-**役割**: リクエストヘッダーからレート制限のバケットキーに使うクライアント IP を解決する純粋関数 `getClientIp(headers: Headers): string`。
+**役割**: リクエストヘッダーからレート制限・ループ検出のバケットキーに使うクライアント IP を解決する純粋関数 `getClientIp(headers, config?)` と、env から信頼ヘッダー設定を読む `clientIpConfigFromEnv(env?)`（#132）。
 
-優先順は `cf-connecting-ip` → `x-forwarded-for`（先頭の値）→ `x-real-ip` → `"unknown"`。`/browse` と `/api/proxy` の両 Route Handler から共通利用する（解決ロジックの重複を排除）。詳細は [機能仕様 §クライアント IP の特定](../spec/features/proxy.md#クライアント-ip-の特定)。
+- `clientIpConfigFromEnv(env = process.env)`: `PROXY_TRUSTED_IP_HEADER`（小文字化）を `{ trustedHeader: string | null }` として返す純粋関数（`browserFetch.ts` の `*FromEnv` パターンに倣う）。未設定なら `trustedHeader: null`。
+- `getClientIp(headers, config = clientIpConfigFromEnv())`: `config.trustedHeader` が設定されていればそのヘッダー値を採用し、未設定・値欠落なら定数 `"unknown"`（fail-safe グローバルバケット）を返す。`x-forwarded-for` 指定時は詐称可能な最左ではなく**最右の値**を採る。クライアント詐称ヘッダーの無条件信頼を避け、バケットキー詐称による全ガード回避を防ぐ（OWASP A04 / CWE-348）。
+- `/browse`（`browseGuards`）と `/api/proxy`（`relayAsset`）の両 Route Handler から共通利用する。既定引数で env を解決するため呼び出し側は `getClientIp(req.headers)` のまま。
+
+詳細は [機能仕様 §クライアント IP の特定](../spec/features/proxy.md#クライアント-ip-の特定信頼ヘッダーの明示設定132)。
 
 ---
 
