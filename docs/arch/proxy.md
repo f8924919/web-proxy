@@ -178,14 +178,23 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 - **メソッド / ボディ**: `301/302/303` は `GET`・ボディなしへ降格。`307/308` はメソッド保持だが、`ReadableStream` ボディ（再送不可）は安全側で `GET`・ボディなしに降格。
 - **タイムアウト**: 全ホップで 1 つの `AbortSignal.timeout(10_000)` を共有（合計 10 秒）。
 
-### SSRF チェック（`assertSsrfAllowed(url)`）
+### SSRF チェック（`assertSsrfAllowed(url)` / `isSsrfBlocked(ip)`）
 
 初回・追従先の双方から呼ぶ非同期ヘルパーに集約する。
 
 1. `URL` でパース（失敗なら例外）
-2. `dns.promises.lookup(hostname, { family: 4 })` で IPv4 解決
-3. 解決した IP を CIDR ブロックリストと照合（[プロキシ機能仕様 §SSRF 対策](../spec/features/proxy.md) 参照）
-4. ブロック対象なら `SsrfBlockedError` を throw
+2. `dns.promises.lookup(hostname, { all: true, verbatim: true })` で**全アドレス（A / AAAA）**を解決
+3. 解決した**各 IP** を `isSsrfBlocked` でブロックリスト照合する（[プロキシ機能仕様 §SSRF 対策](../spec/features/proxy.md#ssrf-対策) 参照）。1 つでも一致すれば `SsrfBlockedError` を throw
+
+`isSsrfBlocked(ip)` は `net.isIP` で IPv4 / IPv6 を判定し、それぞれのブロックリスト（IPv4: ループバック / RFC1918 / リンクローカル / CGNAT `100.64.0.0/10` / 未指定。IPv6: `::1` / `fc00::/7` / `fe80::/10` / `::`。IPv4-mapped `::ffff:a.b.c.d` は対応 IPv4 として判定）と照合する純粋関数（[#129](https://github.com/f8924919/web-proxy/issues/129) / [#130](https://github.com/f8924919/web-proxy/issues/130)）。
+
+#### DNS リバインディング / TOCTOU 対策（IP ピン留め・undici `Agent`）
+
+> 関連仕様: [プロキシ機能仕様 §DNS リバインディング / TOCTOU 対策（IP ピン留め）](../spec/features/proxy.md#dns-リバインディング--toctou-対策ip-ピン留め)
+
+`assertSsrfAllowed` の事前検査だけでは、`fetch` が接続時に独立して再解決するため、検査と接続の間に応答 IP を変えるリバインディングを防げない（[#129](https://github.com/f8924919/web-proxy/issues/129)）。`proxyFetch` は **undici の `Agent` を `dispatcher` として渡し、`connect.lookup` フックで名前解決を 1 回に統一**する。フック内で全アドレスを `isSsrfBlocked` 照合し、通過した IP を `callback` でそのまま返して接続に固定する（ピン留め）。`connect.lookup` のロジック中心部（アドレス配列 → 採用 IP / 遮断判定）は純粋関数に切り出してテスト対象にする（[テスト方針](../testing/policy.md)）。
+
+> **ブラウザバック中継の残存制約**: Chromium は接続時に自前再解決するため同様のピン留めができない。`installSsrfGuard` の `context.route` 照合までで、リバインディングの窓は残る（[機能仕様 §SSRF（不弱化）](../spec/features/proxy.md#ssrf不弱化)）。
 
 ### エラー型
 
@@ -268,7 +277,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 ### `browserFetch(url, options?)`（ランタイム配線・I/O）
 
 - **Playwright は遅延ロード**（`await import("playwright")`）。ティアが使われない限り読み込まない（バンドル肥大・常時ロードを避ける）。バックエンドは `getBrowser()` が `browserBackendFromEnv()` に従い launch / CDP を選ぶ（#71）。
-- **SSRF**: 初回ナビゲーション URL に `assertSsrfAllowed`（`fetch.ts` から公開）を適用し、ブラウザの**全サブリクエスト**にも `context.route` 傍受で解決後 IP のブロックリスト照合を適用する（ブロックは中断）。
+- **SSRF**: 初回ナビゲーション URL に `assertSsrfAllowed`（`fetch.ts` から公開）を適用し、ブラウザの**全サブリクエスト**にも `context.route` 傍受で**全アドレス（A / AAAA）**のブロックリスト照合（IPv4 / IPv6 両対応）を適用する（1 つでもブロック対象なら中断）。ただし Chromium の接続時再解決のため IP ピン留めはできず、リバインディングの残存窓がある（[機能仕様 §SSRF（不弱化）](../spec/features/proxy.md#ssrf不弱化)）。
 - **コンテキスト**: 既定 UA（`PROXY_USER_AGENT` で上書き可、`fetch.ts` の `DEFAULT_USER_AGENT`）と `options.headers`（`Cookie` / `Authorization` 等）を `extraHTTPHeaders` として適用し、リクエストごとに新規 context を作って分離する。
 - **取得**: `page.goto`（`resolveBrowserWaitConfig` の待機）→ settle 待ち → `page.content()`（本文）/ `page.url()`（finalUrl）。失敗時もベストエフォートで収集して返す。
 - **Cookie ウォーミング**: `context.cookies()` を `cookieToSetCookie` で `Set-Cookie` 化し、`text/html` の `Response` ヘッダーへ載せる。以降は `relayBrowse` の `sanitizeHeaders` が既存どおりスコープ化する。
