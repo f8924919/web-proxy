@@ -19,6 +19,7 @@ import { isNullBodyStatus } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
 import { navigationLoopGuard, loopGuidanceHtml } from "@/lib/proxy/loopGuard";
 import { getClientIp } from "@/lib/proxy/clientIp";
+import { logError } from "@/lib/logger";
 
 // ページ遷移（/browse）の中継処理。パス反映形式（/browse/<scheme>/<host>/<path>・#115）と
 // 後方互換の ?url= 形式の両ルートが、ターゲット絶対 URL を決定したうえで本モジュールへ委譲する。
@@ -74,7 +75,7 @@ async function fetchTarget(
   } catch (err) {
     // SSRF ブロックは 403 として扱うため伝播させる。
     if (err instanceof SsrfBlockedError) throw err;
-    console.error("[proxy/browser-fallback]", err);
+    logError("[proxy/browser-fallback]", err);
     return proxyFetch(url, fetchOptions);
   }
 }
@@ -106,7 +107,7 @@ export async function relayBrowse(
       return htmlResponse("サイトに接続できませんでした。", 502);
     }
     // DNS 解決失敗など、その他の予期しないエラー
-    console.error("[proxy/browse]", err);
+    logError("[proxy/browse]", err);
     return htmlResponse("サイトへの接続に失敗しました。", 502);
   }
 
@@ -152,7 +153,7 @@ export async function relayBrowse(
         html = await readTextWithLimit(res, maxBytes);
       } catch (err) {
         // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。
-        console.error("[proxy/auto-promote]", err);
+        logError("[proxy/auto-promote]", err);
       }
     }
 
@@ -166,7 +167,7 @@ export async function relayBrowse(
       return htmlResponse("ページのサイズが大きすぎます。", 413);
     }
     // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
-    console.error("[proxy/browse-render]", err);
+    logError("[proxy/browse-render]", err);
     return htmlResponse("サイトの読み込みに失敗しました。", 502);
   }
 }
