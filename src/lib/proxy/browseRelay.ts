@@ -3,6 +3,9 @@ import {
   proxyFetch,
   SsrfBlockedError,
   FetchTimeoutError,
+  BodyTooLargeError,
+  readTextWithLimit,
+  maxBufferBytesFromEnv,
 } from "@/lib/proxy/fetch";
 import { browserFetch } from "@/lib/proxy/browserFetch";
 import {
@@ -126,7 +129,10 @@ export async function relayBrowse(
       });
     }
 
-    let html = await res.text();
+    // 書き換えのため HTML を全量バッファするが、巨大レスポンスによる OOM を防ぐためサイズ
+    // 上限を課す（超過は BodyTooLargeError → 413。#134）。
+    const maxBytes = maxBufferBytesFromEnv();
+    let html = await readTextWithLimit(res, maxBytes);
 
     // 自動ティア昇格（#70）: 中継ティアの結果が崩れ/チャレンジなら browserFetch で再取得する。
     // allowlist で既にブラウザティア（useBrowser）の場合・POST（allowAutoPromote=false）は対象外。
@@ -143,7 +149,7 @@ export async function relayBrowse(
         res = promoted.response;
         finalUrl = promoted.finalUrl;
         outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
-        html = await res.text();
+        html = await readTextWithLimit(res, maxBytes);
       } catch (err) {
         // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。
         console.error("[proxy/auto-promote]", err);
@@ -155,6 +161,10 @@ export async function relayBrowse(
     outHeaders.set("Content-Type", "text/html; charset=utf-8");
     return new Response(rewritten, { status: res.status, headers: outHeaders });
   } catch (err) {
+    // 本文が上限超過なら 413（メモリ枯渇 DoS 対策。#134）。
+    if (err instanceof BodyTooLargeError) {
+      return htmlResponse("ページのサイズが大きすぎます。", 413);
+    }
     // ボディ読取り・変換・Response 構築中の予期しない例外は 500 ではなく 502 で返す
     console.error("[proxy/browse-render]", err);
     return htmlResponse("サイトの読み込みに失敗しました。", 502);

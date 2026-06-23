@@ -24,6 +24,71 @@ export class TooManyRedirectsError extends Error {
   }
 }
 
+// 中継本文が許容サイズ上限を超えた（呼び出し側は 413 を返す）。#134
+export class BodyTooLargeError extends Error {
+  constructor() {
+    super("Relay body exceeds the size limit");
+    this.name = "BodyTooLargeError";
+  }
+}
+
+// HTML / CSS の全量バッファ上限の既定値（10 MiB）。仕様: docs/spec/features/proxy.md
+// §中継本文のサイズ上限（メモリ枯渇 DoS 対策・#134）
+const DEFAULT_MAX_BUFFER_BYTES = 10 * 1024 * 1024;
+
+// env から全量バッファ上限（バイト）を読む純粋関数。PROXY_MAX_BUFFER_BYTES が正の整数なら
+// それを、未設定・不正値（非整数・0 以下）なら既定 10 MiB を返す（browserFetch の *FromEnv 同様）。
+export function maxBufferBytesFromEnv(
+  env: Record<string, string | undefined> = process.env
+): number {
+  const raw = env.PROXY_MAX_BUFFER_BYTES?.trim();
+  if (!raw) return DEFAULT_MAX_BUFFER_BYTES;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : DEFAULT_MAX_BUFFER_BYTES;
+}
+
+// res.text() の代替。書き換えのため全量バッファする HTML / CSS 本文にサイズ上限を課す純粋関数。
+// ① Content-Length が maxBytes 超過を宣言していれば、本文を読む前に BodyTooLargeError を投げる。
+// ② res.body をチャンク読みし、累積バイト数が maxBytes を超えたらストリームを cancel して投げる。
+// 上限内なら UTF-8 デコードした文字列を返す（res.body が無ければ空文字）。
+// 仕様: docs/spec/features/proxy.md §中継本文のサイズ上限（メモリ枯渇 DoS 対策・#134）
+export async function readTextWithLimit(
+  res: Response,
+  maxBytes: number
+): Promise<string> {
+  const declared = Number(res.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    throw new BodyTooLargeError();
+  }
+  if (!res.body) return "";
+
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new BodyTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return new TextDecoder().decode(merged);
+}
+
 // SSRF ブロック対象の IPv4 レンジ（[下限, 上限] の閉区間・32bit 整数）。
 // 仕様: docs/spec/features/proxy.md §SSRF 対策
 const PRIVATE_RANGES_V4: [number, number][] = [
