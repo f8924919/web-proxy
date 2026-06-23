@@ -11,6 +11,9 @@ import {
   extractBrowseTarget,
   buildBrowseDest,
   noUrlBrowseHtml,
+  isProxyOwnPath,
+  buildRequestInterceptUrl,
+  fetchInputUrl,
 } from "@/lib/proxy/rewrite";
 
 const BASE = "https://example.com";
@@ -612,5 +615,164 @@ describe("noUrlBrowseHtml", () => {
     expect(noUrlBrowseHtml().toLowerCase()).not.toContain(
       'http-equiv="refresh"'
     );
+  });
+});
+
+// 実行時リクエスト横取りシム（SW 非依存・#124）の純粋関数。
+// 振り向け規則は public/sw.js の rewriteRequestUrl / isProxyOwnPath と対の関係。
+describe("isProxyOwnPath（#124）", () => {
+  test.each([
+    ["/", true, "ホーム"],
+    ["", true, "空"],
+    ["/sw.js", true, "SW"],
+    ["/favicon.ico", true, "favicon"],
+    ["/browse", true, "browse 完全一致"],
+    ["/browse/https/x.com/y", true, "browse 配下"],
+    ["/api/proxy", true, "api/proxy 完全一致"],
+    ["/api/proxy/https/x.com/y", true, "api/proxy 配下"],
+    ["/_next/static/chunk.js", true, "_next static"],
+    ["/_next/image", false, "_next/image 例外"],
+    ["/_next/image/x", false, "_next/image 配下例外"],
+    ["/api/personalized-articles", false, "ターゲット API"],
+    ["/cb_pc.gif", false, "ターゲット相対画像"],
+    ["/images/x.png", false, "ターゲット画像"],
+    ["/browser", false, "browse 境界（誤判定しない）"],
+    ["/api/proxyData", false, "api/proxy 境界（誤判定しない）"],
+  ])("%p -> %p (%s)", (pathname, expected) => {
+    expect(isProxyOwnPath(pathname, "")).toBe(expected);
+  });
+
+  test("basePath を取り除いて判定する", () => {
+    expect(isProxyOwnPath("/proxy/3000/api/proxy/https/x", "/proxy/3000")).toBe(
+      true
+    );
+    expect(isProxyOwnPath("/proxy/3000/", "/proxy/3000")).toBe(true);
+    expect(
+      isProxyOwnPath("/proxy/3000/api/personalized-articles", "/proxy/3000")
+    ).toBe(false);
+  });
+});
+
+describe("buildRequestInterceptUrl（#124）", () => {
+  const ORIGIN = "https://proxy.test";
+  const PAGE = `${ORIGIN}/browse/https/news.yahoo.co.jp/`;
+  // /api/proxy オラクル（basePath 付き）。
+  const proxy = (absolute: string, bp = ""): string => {
+    const u = new URL(absolute);
+    return `${bp}/api/proxy/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
+  };
+
+  test("クロスオリジン絶対 URL はそのまま /api/proxy へ", () => {
+    const dest = buildRequestInterceptUrl(
+      "https://mhd.yahoo.co.jp/v1/mhdinfo?x=1",
+      PAGE,
+      ORIGIN,
+      ""
+    );
+    expect(dest).toBe(proxy("https://mhd.yahoo.co.jp/v1/mhdinfo?x=1"));
+  });
+
+  test("同一オリジンのルート絶対パスはターゲット origin に解決して /api/proxy へ", () => {
+    const dest = buildRequestInterceptUrl(
+      `${ORIGIN}/api/personalized-articles?results=50`,
+      PAGE,
+      ORIGIN,
+      ""
+    );
+    expect(dest).toBe(
+      proxy("https://news.yahoo.co.jp/api/personalized-articles?results=50")
+    );
+  });
+
+  test("相対パス（pageUrl 基準で解決）も振り向ける", () => {
+    expect(buildRequestInterceptUrl("/cb_pc.gif?all=1", PAGE, ORIGIN, "")).toBe(
+      proxy("https://news.yahoo.co.jp/cb_pc.gif?all=1")
+    );
+  });
+
+  test("自前ルート（/api/proxy・/browse）は素通し（null）", () => {
+    expect(
+      buildRequestInterceptUrl(
+        `${ORIGIN}/api/proxy/https/x.com/y.js`,
+        PAGE,
+        ORIGIN,
+        ""
+      )
+    ).toBeNull();
+    expect(
+      buildRequestInterceptUrl(`${ORIGIN}/browse/https/x.com/y`, PAGE, ORIGIN, "")
+    ).toBeNull();
+  });
+
+  test("非 http(s)（data: / blob:）は素通し（null）", () => {
+    expect(
+      buildRequestInterceptUrl("data:image/png;base64,AAAA", PAGE, ORIGIN, "")
+    ).toBeNull();
+    expect(
+      buildRequestInterceptUrl(`blob:${ORIGIN}/uuid`, PAGE, ORIGIN, "")
+    ).toBeNull();
+  });
+
+  test("ターゲット復元不能なページ（url 無し）は素通し（null）", () => {
+    expect(
+      buildRequestInterceptUrl(`${ORIGIN}/api/x`, `${ORIGIN}/`, ORIGIN, "")
+    ).toBeNull();
+  });
+
+  test("_next/image はターゲット origin の最適化エンドポイントへ（#102 同様）", () => {
+    const dest = buildRequestInterceptUrl(
+      `${ORIGIN}/_next/image?url=https%3A%2F%2Fext%2Fa.png&w=64`,
+      PAGE,
+      ORIGIN,
+      ""
+    );
+    expect(dest).toBe(
+      proxy(
+        "https://news.yahoo.co.jp/_next/image?url=https%3A%2F%2Fext%2Fa.png&w=64"
+      )
+    );
+  });
+
+  test("basePath を保持して振り向ける（同一オリジン相対・クロスオリジン）", () => {
+    const bp = "/proxy/3000";
+    const page = `${ORIGIN}${bp}/browse/https/news.yahoo.co.jp/`;
+    expect(
+      buildRequestInterceptUrl(`${ORIGIN}${bp}/api/x?a=1`, page, ORIGIN, bp)
+    ).toBe(proxy("https://news.yahoo.co.jp/api/x?a=1", bp));
+    expect(
+      buildRequestInterceptUrl("https://cdn.ext/lib.js", page, ORIGIN, bp)
+    ).toBe(proxy("https://cdn.ext/lib.js", bp));
+  });
+
+  test("不正な URL は素通し（null）", () => {
+    expect(
+      buildRequestInterceptUrl("http://[bad", PAGE, ORIGIN, "")
+    ).toBeNull();
+  });
+});
+
+describe("fetchInputUrl（#124）", () => {
+  test("文字列はそのまま返す", () => {
+    expect(fetchInputUrl("https://x.test/a?b=1")).toBe("https://x.test/a?b=1");
+    expect(fetchInputUrl("/rel/path")).toBe("/rel/path");
+  });
+
+  test("URL オブジェクトは href を返す（.url は存在しないため）", () => {
+    expect(fetchInputUrl(new URL("https://x.test/a"))).toBe(
+      "https://x.test/a"
+    );
+  });
+
+  test("Request 風オブジェクト（.url 文字列）は url を返す", () => {
+    expect(fetchInputUrl({ url: "https://x.test/api" })).toBe(
+      "https://x.test/api"
+    );
+  });
+
+  test("取り出せない入力は null", () => {
+    expect(fetchInputUrl(null)).toBeNull();
+    expect(fetchInputUrl(undefined)).toBeNull();
+    expect(fetchInputUrl(123)).toBeNull();
+    expect(fetchInputUrl({})).toBeNull();
   });
 });

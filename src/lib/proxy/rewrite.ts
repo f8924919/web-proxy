@@ -355,6 +355,106 @@ export function buildClickNavDestination(
   return buildBrowseDest(dest.href, prefix);
 }
 
+// 横取りしてはいけないプロキシ自前ルートか判定する（BASE_PATH を取り除いた上で判定）。
+// public/sw.js の同名関数と対の規則（SW は importScripts 不可のためロジック共有できず、
+// 両ファイルに同等実装を持つ。差分が出ないよう対で保守する）。
+// 仕様: docs/spec/features/proxy.md §実行時リクエスト横取りシム（SW 非依存・#124）
+export function isProxyOwnPath(pathname: string, basePath: string): boolean {
+  let p = pathname;
+  if (basePath && p.startsWith(basePath)) {
+    p = p.slice(basePath.length) || "/";
+  }
+  if (p === "" || p === "/") return true; // ホーム
+  if (p === "/sw.js") return true;
+  // 完全一致＋パス境界で判定（ターゲット側の /browser や /api/proxyData を誤判定しない）
+  if (p === "/browse" || p.startsWith("/browse/")) return true;
+  if (p === "/api/proxy" || p.startsWith("/api/proxy/")) return true;
+  if (p.startsWith("/_next/")) {
+    // /_next/image はターゲット（Next.js 製サイト）の最適化エンドポイント（#102）。
+    // 自前ルートから除外し、ターゲット origin の /_next/image へ振り向ける。
+    if (p === "/_next/image" || p.startsWith("/_next/image/")) return false;
+    return true;
+  }
+  if (p === "/favicon.ico") return true;
+  return false;
+}
+
+// 実行時リクエスト（fetch / XHR）の URL を /api/proxy/<scheme>/<host>/<path> 形式の
+// 振り向け先へ書き換える。SW の rewriteRequestUrl（public/sw.js）と同一規則。
+// クロスオリジン絶対 URL はそのまま中継、同一オリジンの非自前パスは閲覧ページから
+// ターゲット origin を復元して解決、自前ルート・非 http(s)・復元不能は null（素通し）。
+// 注入スクリプトはこの関数と isProxyOwnPath / extractBrowseTarget を toString() で
+// 埋め込むため、外部参照を持たず URL のみで完結させる。
+// 仕様: docs/spec/features/proxy.md §実行時リクエスト横取りシム（SW 非依存・#124）
+export function buildRequestInterceptUrl(
+  requestUrl: string,
+  pageUrl: string,
+  swOrigin: string,
+  basePath: string
+): string | null {
+  let req: URL;
+  try {
+    req = new URL(requestUrl, pageUrl);
+  } catch {
+    return null;
+  }
+  // http(s) 以外（data:/blob:/javascript: 等）は素通し。
+  if (req.protocol !== "http:" && req.protocol !== "https:") return null;
+
+  const toProxy = (u: URL): string =>
+    basePath +
+    "/api/proxy/" +
+    u.protocol.replace(/:$/, "") +
+    "/" +
+    u.host +
+    u.pathname +
+    u.search +
+    u.hash;
+
+  // クロスオリジンの絶対 URL → そのまま中継
+  if (req.origin !== swOrigin) return toProxy(req);
+
+  // 同一オリジン: 自前ルートは横取りしない
+  if (isProxyOwnPath(req.pathname, basePath)) return null;
+
+  // 同一オリジンの非自前パス（ルート絶対パス等）→ ターゲット origin に解決
+  const target = extractBrowseTarget(pageUrl);
+  if (!target) return null;
+  let targetOrigin: string;
+  try {
+    targetOrigin = new URL(target).origin;
+  } catch {
+    return null;
+  }
+  let path = req.pathname;
+  if (basePath && path.startsWith(basePath)) {
+    path = path.slice(basePath.length) || "/";
+  }
+  let resolved: URL;
+  try {
+    resolved = new URL(path + req.search + req.hash, targetOrigin);
+  } catch {
+    return null;
+  }
+  return toProxy(resolved);
+}
+
+// fetch の input（string / URL / Request）から URL 文字列を取り出す。取り出せなければ null。
+// URL オブジェクトは .url を持たない（.href を使う）ため、Request の .url と区別して扱う。
+// 注入スクリプトに toString() で埋め込むため、外部参照を持たず URL のみで完結させる。
+// 仕様: docs/spec/features/proxy.md §実行時リクエスト横取りシム（SW 非依存・#124）
+export function fetchInputUrl(input: unknown): string | null {
+  if (typeof input === "string") return input;
+  if (typeof URL !== "undefined" && input instanceof URL) return input.href;
+  if (
+    input &&
+    typeof (input as { url?: unknown }).url === "string"
+  ) {
+    return (input as { url: string }).url;
+  }
+  return null;
+}
+
 // <a> クリックによるナビゲーションを横取りする注入スクリプト。
 // 純粋ロジック（buildClickNavDestination）を toString() で埋め込み、document への
 // click イベント委任（capture）で動的描画リンクも含めて捕捉する。capture は SPA（React 等）の
@@ -375,6 +475,37 @@ const CLICK_NAV_INTERCEPT_HTML =
   `var dest=build(a.getAttribute('href')||'',location.href);` +
   `if(dest){e.preventDefault();e.stopImmediatePropagation();location.href=dest;}` +
   `},true);` +
+  `})()</script>`;
+
+// 実行時リクエスト横取りシム（SW 非依存・#124）。window.fetch / XMLHttpRequest.prototype.open を
+// 上書きし、リクエスト URL を SW と同一規則で /api/proxy へ振り向ける。SW は初回ロードで
+// clients.claim() 確立前のサブリソース要求を横取りできないため、そのギャップを埋める。
+// ページ内スクリプトより先に実行させるため <head> 最先頭へ注入する。
+// 純粋ロジック（isProxyOwnPath / extractBrowseTarget / buildRequestInterceptUrl）を toString() で
+// 埋め込み、ブラウザでは fetch / XHR を上書きする。書き換え先（同一オリジンの /api/proxy）は SW が
+// 自前ルートと判定して素通しするため二重書き換えにならない。
+// 仕様: docs/spec/features/proxy.md §実行時リクエスト横取りシム（SW 非依存・#124）
+const REQUEST_INTERCEPT_HTML =
+  `<script>(function(){` +
+  `var bp=${JSON.stringify(BASE_PATH)};` +
+  `var origin=location.origin;` +
+  `var isProxyOwnPath=${isProxyOwnPath.toString()};` +
+  `var extractBrowseTarget=${extractBrowseTarget.toString()};` +
+  `var fetchInputUrl=${fetchInputUrl.toString()};` +
+  `var build=${buildRequestInterceptUrl.toString()};` +
+  // fetch 上書き（input は string / URL / Request を許容）。
+  `var _fetch=window.fetch;` +
+  `if(_fetch){window.fetch=function(input,init){try{` +
+  `var url=fetchInputUrl(input);` +
+  `if(url!=null){var dest=build(url,location.href,origin,bp);if(dest){` +
+  `if(typeof input==='string'||(typeof URL!=='undefined'&&input instanceof URL)){return _fetch(dest,init);}` +
+  `return _fetch(new Request(dest,input),init);` +
+  `}}}catch(e){}return _fetch(input,init);};}` +
+  // XMLHttpRequest.open 上書き（第 2 引数 url を書き換える）。
+  `var _open=XMLHttpRequest.prototype.open;` +
+  `XMLHttpRequest.prototype.open=function(method,url){try{` +
+  `var dest=build(url,location.href,origin,bp);if(dest){arguments[1]=dest;}` +
+  `}catch(e){}return _open.apply(this,arguments);};` +
   `})()</script>`;
 
 // 実行時リクエスト横取り Service Worker（public/sw.js）の登録スニペット。
@@ -509,9 +640,13 @@ export function rewriteHtml(html: string, baseUrl: string): string {
     `$1${bar}${GET_FORM_INTERCEPT_HTML}${CLICK_NAV_INTERCEPT_HTML}${SW_REGISTER_HTML}`
   );
 
+  // <head> 最先頭へのシム注入（ページ内スクリプトより先に実行させる）。
+  // 実行時リクエスト横取りシム（#124）は常に注入し、document.domain シム（#69）は
+  // ターゲットのホスト名が判明する場合のみ注入する。
   const hostname = targetHostname(baseUrl);
-  if (!hostname) return withBody;
-  return injectAtHeadStart(withBody, DOMAIN_SHIM_HTML(hostname));
+  const headInjection =
+    REQUEST_INTERCEPT_HTML + (hostname ? DOMAIN_SHIM_HTML(hostname) : "");
+  return injectAtHeadStart(withBody, headInjection);
 }
 
 export function rewriteCss(css: string, baseUrl: string): string {
