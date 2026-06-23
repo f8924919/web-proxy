@@ -108,12 +108,25 @@ ${BASE_PATH}/browse/<scheme>/<host>/<targetPath><?targetQuery>
 | ---------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
 | `<a href>`                         | `/browse/<scheme>/<host>/<path>`（パス反映）    | リンク先もブラウズ画面で開く（#115）                       |
 | `<form action>`                    | `/browse/<scheme>/<host>/<path>`（パス反映）    | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）   |
+| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（パス反映）    | 埋め込みページもブラウズ画面で開く（枠外離脱防止・#135）   |
 | `<img src>`                        | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継（UI 不要）                                        |
+| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | メディアの透過中継（#135）                                 |
+| `<source src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | `<picture>`／`<video>`／`<audio>` 内ソースの透過中継       |
 | `<img srcset>` / `<source srcset>` | 各候補 URL をパス反映形式                       | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照） |
 | `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                   |
 | `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                   |
 
 > パス反映形式の組み立て・`%2F`／非 ASCII の percent-encoding 保持は上記 §プロキシ URL スキーム（パス反映）を参照。
+
+### `<base href>` の処理（枠外離脱防止・#135）
+
+中継先 HTML 内の `<base href>` は相対 URL 解決の基点を変える。残したままにすると、書き換えで取りこぼした属性や実行時に生成される相対 URL がブラウザによって `<base href>` 基準で解決され、`<base href="https://evil/">` のような指定でプロキシ枠を外れた実サイトへ直アクセスし得る（OWASP A03:2021 周辺 / CWE-79 周辺）。注入シム（実行時 fetch/XHR 横取り・SW）は `location.href`（現ページ URL）を基準点とするため `<base href>` を参照せず、`<base>` はシムより前に効く。
+
+このため `rewriteHtml` は次の方針で `<base href>` を処理する。
+
+- **再ベース**: 文書内の最初の `<base href>`（HTML 仕様上、有効なのは最初の 1 つ）を `baseUrl` 基準で解決し、http(s) に解決できる場合はその値を以降の全書き換えの**実効解決基点（effectiveBase）**として用いる。これにより `<base>` 指定サイトでも相対 URL を著者の意図どおりに解決する。
+- **除去**: 解決基点を取り込んだうえで、すべての `<base>` 要素から `href` 属性を除去する。除去後はブラウザが文書 URL（= プロキシの `/browse/...`）を基準に解決するため枠内に留まる。`target` 等の他属性は保持する。
+- **http(s) 以外**: `<base href>` が http(s) に解決できない場合は effectiveBase に採用せず `baseUrl` を用いる（`href` 除去は行う）。
 
 ### srcset の書き換え
 

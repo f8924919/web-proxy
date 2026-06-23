@@ -343,11 +343,14 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 | ---------------------------------- | --------------------------------------------------------------- |
 | `<a href>`                         | `/browse/<scheme>/<host>/<path>`                                |
 | `<form action>`                    | `/browse/<scheme>/<host>/<path>`                                |
+| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（#135）                        |
 | `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                             |
+| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（#135）                     |
 | `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持） |
 | `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`                             |
 | `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                             |
 | `<meta http-equiv=refresh>`        | `/browse/<scheme>/<host>/<path>`                                |
+| `<base href>`                      | 解決基点へ取り込み後に `href` を除去（#135）                    |
 
 > アセット系（`<img>`/`<link>`/`<script>`/`srcset`/CSS）は `assetUrl()` → `proxyPath.ts` の `buildProxyPath()`（`/api/proxy/...`・#100）、ナビゲーション系（`<a>`/`<form>`/meta refresh）は `browseUrl()` → `browsePath.ts` の `buildBrowsePath()`（`/browse/...`・#115）でパス反映形式に組み立てる（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)）。両者は同形のスキームで、`%2F`/非 ASCII の percent-encoding を保持する（#111）。
 
@@ -356,6 +359,8 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 `<img>` / `<source>` の `srcset` は純粋関数 `rewriteSrcset(value, baseUrl)` で各候補に分解し、URL 部のみ `assetUrl()` で書き換え記述子を保持して再結合する。WHATWG srcset 解析に準じ URL 部を空白以外の連続文字として取り出すため `data:` URL 内のカンマで誤分割しない（[機能仕様 §srcset の書き換え](../spec/features/proxy.md#srcset-の書き換え)）。Next.js 製サイトの `<Image>` が出力する `/_next/image?url=…` をプロキシ origin 直下の最適化エンドポイントへ解決させず（400 回避）、上流の最適化 URL を中継する（#98）。
 
 `src` を書き換える `<script>` からは `integrity` / `crossorigin` 属性を除去する。書換後は `/api/proxy` 経由の中継レスポンスとなり SRI ハッシュが一致せずブロックされるため（[機能仕様 §SRI 属性の除去](../spec/features/proxy.md#サブリソース整合性sri属性の除去)）。あわせて inline の `<meta http-equiv="Content-Security-Policy">`（enforce のみ。`...-Report-Only` は残す）を除去し、注入スクリプト・書換 src が CSP でブロックされるのを防ぐ（[機能仕様 §inline CSP（meta）の除去](../spec/features/proxy.md#inline-cspmetaの除去)）。
+
+`<base href>` は書き換えの最初に処理する。文書内の最初の `<base href>` を `baseUrl` 基準で解決し、http(s) に解決できればそれを以降の全書き換えの実効解決基点（`effectiveBase`）として用いてから、すべての `<base>` 要素の `href` を除去する。残すと取りこぼし属性・実行時生成の相対 URL がブラウザによって `<base href>` 基準で解決され、プロキシ枠を外れた実サイト直アクセスを誘発し得るため（注入シムは `location.href` 基準で `<base>` を参照しない。[機能仕様 §`<base href>` の処理](../spec/features/proxy.md#base-href-の処理枠外離脱防止135)）。`<iframe src>` は `<a href>` と同じ `browseUrl()`（埋め込みページもブラウズ画面で開く）、`<video src>` / `<audio src>` は `<img src>` と同じ `assetUrl()` で書き換える（#135）。
 
 ### CSS 書き換え
 

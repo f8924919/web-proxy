@@ -155,6 +155,83 @@ describe("rewriteHtml", () => {
     });
   });
 
+  describe("<iframe src> → /browse（#135）", () => {
+    // 仕様: docs/spec/features/proxy.md §書き換えルール（iframe・#135）
+    test("絶対 URL の iframe src をパス反映ナビ形式に書き換える", () => {
+      const result = rewriteHtml(
+        `<iframe src="https://example.com/embed"></iframe>`,
+        BASE
+      );
+      expect(result).toContain(`src="${nav("https://example.com/embed")}"`);
+    });
+
+    test("相対パスの iframe src をベース URL で解決して書き換える", () => {
+      const result = rewriteHtml(`<iframe src="/embed"></iframe>`, BASE);
+      expect(result).toContain(`src="${nav("/embed")}"`);
+    });
+  });
+
+  describe("メディア要素 → /api/proxy（#135）", () => {
+    // 仕様: docs/spec/features/proxy.md §書き換えルール（video / audio / source・#135）
+    test("<video src> を /api/proxy に書き換える", () => {
+      const result = rewriteHtml(`<video src="/movie.mp4"></video>`, BASE);
+      expect(result).toContain(`src="${asset("/movie.mp4")}"`);
+    });
+
+    test("<audio src> を /api/proxy に書き換える", () => {
+      const result = rewriteHtml(`<audio src="/sound.mp3"></audio>`, BASE);
+      expect(result).toContain(`src="${asset("/sound.mp3")}"`);
+    });
+
+    test("<video> 内の <source src> も /api/proxy に書き換える", () => {
+      const result = rewriteHtml(
+        `<video><source src="/movie.webm"></video>`,
+        BASE
+      );
+      expect(result).toContain(`src="${asset("/movie.webm")}"`);
+    });
+  });
+
+  describe("<base href> の処理（枠外離脱防止・#135）", () => {
+    // 仕様: docs/spec/features/proxy.md §<base href> の処理（枠外離脱防止・#135）
+    test("絶対 base href を解決基点に取り込み相対 URL を再ベースする", () => {
+      const html = `<base href="https://cdn.example.com/v2/"><img src="logo.png">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `src="${asset("https://cdn.example.com/v2/logo.png")}"`
+      );
+    });
+
+    test("相対値の base href も baseUrl で解決して再ベースする", () => {
+      const html = `<base href="/assets/"><img src="logo.png">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`src="${asset("/assets/logo.png")}"`);
+    });
+
+    test("処理後に base の href を除去し、相対リンクはプロキシ経由へ再ベースする", () => {
+      const html = `<base href="https://other.example/app/"><a href="x">l</a>`;
+      const result = rewriteHtml(html, BASE);
+      // <base href> は除去する（ブラウザ直接解決による枠外離脱を防ぐ）
+      expect(result).not.toMatch(/<base[^>]*\shref=/i);
+      // 相対リンクは effectiveBase 基準で解決されプロキシ経由になる
+      expect(result).toContain(`href="${nav("https://other.example/app/x")}"`);
+    });
+
+    test("base の target など href 以外の属性は保持する", () => {
+      const html = `<base target="_blank" href="https://cdn.example.com/">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`target="_blank"`);
+      expect(result).not.toMatch(/<base[^>]*\shref=/i);
+    });
+
+    test("http(s) に解決できない base href は基点に採用せず baseUrl を用いる", () => {
+      const html = `<base href="about:blank"><img src="/x.png">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`src="${asset("/x.png")}"`);
+      expect(result).not.toMatch(/<base[^>]*\shref=/i);
+    });
+  });
+
   describe("SRI 属性の除去（A1）", () => {
     // 仕様: docs/spec/features/proxy.md §サブリソース整合性（SRI）属性の除去
     test("src を書き換える script から integrity / crossorigin を除去する", () => {
