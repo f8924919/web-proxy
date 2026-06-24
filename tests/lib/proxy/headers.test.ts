@@ -3,9 +3,6 @@
 
 import {
   sanitizeHeaders,
-  sanitizeSetCookie,
-  cookieScopeKey,
-  scopedCookieHeader,
   forwardableRequestHeaders,
   relayRequestHeaders,
   buildCorsPreflightHeaders,
@@ -15,10 +12,6 @@ import {
 
 const ORIGIN_A = "https://a.example";
 const ORIGIN_B = "https://b.example";
-
-// テスト用: ある origin にスコープされた Cookie 文字列（name=value）を組み立てる。
-const scoped = (origin: string, name: string, value: string): string =>
-  `__pxy.${cookieScopeKey(origin)}.${name}=${value}`;
 
 // テスト用: 中継元ページのオリジン origin を反映したプロキシ origin 上の Referer を
 // 組み立てる（#136 の Authorization オリジンスコープ判定の入力）。
@@ -30,26 +23,6 @@ const proxyRef = (
   const u = new URL(origin);
   return `https://proxy.example/${scheme}/${u.protocol.replace(/:$/, "")}/${u.host}${path}`;
 };
-
-describe("cookieScopeKey", () => {
-  test("URL セーフ文字（base64url）のみ・パディング無しで返す", () => {
-    expect(cookieScopeKey(ORIGIN_A)).toMatch(/^[A-Za-z0-9_-]+$/);
-  });
-
-  test("同じ origin には同じ鍵を返す（決定的）", () => {
-    expect(cookieScopeKey(ORIGIN_A)).toBe(cookieScopeKey(ORIGIN_A));
-  });
-
-  test("異なる origin には異なる鍵を返す", () => {
-    expect(cookieScopeKey(ORIGIN_A)).not.toBe(cookieScopeKey(ORIGIN_B));
-  });
-
-  test("鍵は origin の base64url であり復元できる", () => {
-    const key = cookieScopeKey(ORIGIN_A);
-    const decoded = atob(key.replace(/-/g, "+").replace(/_/g, "/"));
-    expect(decoded).toBe(ORIGIN_A);
-  });
-});
 
 describe("sanitizeHeaders", () => {
   const BLOCKED = [
@@ -66,7 +39,7 @@ describe("sanitizeHeaders", () => {
       [name]: "some-value",
       "content-type": "text/html",
     });
-    const result = sanitizeHeaders(headers, ORIGIN_A);
+    const result = sanitizeHeaders(headers);
     expect(result.has(name)).toBe(false);
   });
 
@@ -79,7 +52,7 @@ describe("sanitizeHeaders", () => {
       "content-length": "114",
       "content-type": "text/javascript",
     });
-    const result = sanitizeHeaders(headers, ORIGIN_A);
+    const result = sanitizeHeaders(headers);
     expect(result.has("content-encoding")).toBe(false);
     expect(result.has("content-length")).toBe(false);
     expect(result.get("content-type")).toBe("text/javascript");
@@ -87,7 +60,7 @@ describe("sanitizeHeaders", () => {
 
   test("content-type はそのまま維持する", () => {
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
-    const result = sanitizeHeaders(headers, ORIGIN_A);
+    const result = sanitizeHeaders(headers);
     expect(result.get("content-type")).toBe("text/html; charset=utf-8");
   });
 
@@ -95,23 +68,23 @@ describe("sanitizeHeaders", () => {
   // （iframe 埋め込み中継を壊さないため）。X-Frame-Options はむしろ除去される。
   test("中継レスポンスに X-Frame-Options を付与しない（#131）", () => {
     const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
-    const result = sanitizeHeaders(headers, ORIGIN_A);
+    const result = sanitizeHeaders(headers);
     expect(result.has("x-frame-options")).toBe(false);
   });
 
   test("cache-control はそのまま維持する", () => {
     const headers = new Headers({ "cache-control": "max-age=3600" });
-    const result = sanitizeHeaders(headers, ORIGIN_A);
+    const result = sanitizeHeaders(headers);
     expect(result.get("cache-control")).toBe("max-age=3600");
   });
 
-  test("Set-Cookie をターゲット origin でスコープ化する", () => {
+  // #151 Phase 1: 中継 Cookie はブラウザへ返さず（document.cookie 露出の遮断）、
+  // 保持は cookieJar が担うため Set-Cookie は除去する。
+  test("Set-Cookie をブラウザへ返さない（除去する。#151 Phase 1）", () => {
     const headers = new Headers();
     headers.append("set-cookie", "session=abc; Path=/; Domain=example.com");
-    const result = sanitizeHeaders(headers, ORIGIN_A);
-    expect(result.get("set-cookie")).toBe(
-      `${scoped(ORIGIN_A, "session", "abc")}; Path=/`
-    );
+    const result = sanitizeHeaders(headers);
+    expect(result.has("set-cookie")).toBe(false);
   });
 });
 
@@ -125,161 +98,51 @@ describe("htmlUiHeaders（#131）", () => {
   });
 });
 
-describe("sanitizeSetCookie", () => {
-  test("Domain 除去に加え Cookie 名をスコープ化する", () => {
-    const value = "session=abc; Path=/; Domain=example.com; HttpOnly";
-    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
-      `${scoped(ORIGIN_A, "session", "abc")}; Path=/; HttpOnly`
-    );
-  });
-
-  test("Domain が無くてもスコープ化する", () => {
-    const value = "session=abc; Path=/; HttpOnly";
-    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
-      `${scoped(ORIGIN_A, "session", "abc")}; Path=/; HttpOnly`
-    );
-  });
-
-  test("Secure / SameSite / Path は維持する", () => {
-    const value =
-      "token=xyz; Path=/; Domain=example.com; Secure; SameSite=Strict";
-    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
-      `${scoped(ORIGIN_A, "token", "xyz")}; Path=/; Secure; SameSite=Strict`
-    );
-  });
-
-  test("origin が異なれば異なるスコープ名になる", () => {
-    const value = "session=abc; Path=/";
-    expect(sanitizeSetCookie(value, ORIGIN_A)).not.toBe(
-      sanitizeSetCookie(value, ORIGIN_B)
-    );
-  });
-
-  test("値に = を含んでも値はそのまま維持する", () => {
-    const value = "t=YWJj==; Path=/";
-    expect(sanitizeSetCookie(value, ORIGIN_A)).toBe(
-      `${scoped(ORIGIN_A, "t", "YWJj==")}; Path=/`
-    );
-  });
-});
-
-describe("scopedCookieHeader", () => {
-  test("現ターゲット origin にスコープされた Cookie だけを接頭辞無しで返す", () => {
-    const header = [
-      scoped(ORIGIN_A, "sid", "aaa"),
-      scoped(ORIGIN_B, "sid", "bbb"),
-    ].join("; ");
-    expect(scopedCookieHeader(header, ORIGIN_B)).toBe("sid=bbb");
-    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("sid=aaa");
-  });
-
-  test("別 origin にスコープされた Cookie は含めない", () => {
-    const header = scoped(ORIGIN_B, "sid", "bbb");
-    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("");
-  });
-
-  test("非スコープ Cookie（インフラ認証・レガシー）は除外する", () => {
-    const header = `CF_Authorization=jwt; theme=dark; ${scoped(ORIGIN_A, "sid", "aaa")}`;
-    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("sid=aaa");
-  });
-
-  test("一致する Cookie が無ければ空文字を返す", () => {
-    expect(
-      scopedCookieHeader("CF_Authorization=jwt; theme=dark", ORIGIN_A)
-    ).toBe("");
-  });
-
-  test("元の名前に . を含んでも正しく復元する", () => {
-    const header = scoped(ORIGIN_A, "app.sid", "aaa");
-    expect(scopedCookieHeader(header, ORIGIN_A)).toBe("app.sid=aaa");
-  });
-});
-
 describe("forwardableRequestHeaders", () => {
-  test("Cookie は現ターゲット origin 分だけを抽出し Authorization は中継元一致時に転送する", () => {
+  // #151 Phase 1: 往路 Cookie はブラウザ受信分を使わず、呼び出し側が jar から
+  // 復元した値（第 3 引数 jarCookie）だけを載せる。
+  test("jar 由来の Cookie を載せ、Authorization は中継元一致時に転送する", () => {
     const headers = new Headers({
-      cookie: [
-        scoped(ORIGIN_A, "sid", "aaa"),
-        scoped(ORIGIN_B, "sid", "bbb"),
-      ].join("; "),
       authorization: "Bearer xyz",
       referer: proxyRef(ORIGIN_B),
     });
-    expect(forwardableRequestHeaders(headers, ORIGIN_B)).toEqual({
+    expect(forwardableRequestHeaders(headers, ORIGIN_B, "sid=bbb")).toEqual({
       cookie: "sid=bbb",
       authorization: "Bearer xyz",
     });
   });
 
-  test("あるターゲットの Cookie が別ターゲットの転送に乗らない", () => {
-    const headers = new Headers({ cookie: scoped(ORIGIN_A, "sid", "aaa") });
-    expect(forwardableRequestHeaders(headers, ORIGIN_B)).toEqual({});
+  test("ブラウザ受信の Cookie ヘッダーは上流へ転送しない（jar 由来のみ）", () => {
+    const headers = new Headers({ cookie: "__pxy_sid=s1; __pxy_auth=tok" });
+    expect(forwardableRequestHeaders(headers, ORIGIN_A, "")).toEqual({});
   });
 
-  test("存在しない認証ヘッダーは含めない（無ければ空オブジェクト）", () => {
+  test("jar が空なら Cookie ヘッダーを付けない", () => {
     const headers = new Headers({ "user-agent": "test" });
-    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({});
+    expect(forwardableRequestHeaders(headers, ORIGIN_A, "")).toEqual({});
   });
 
   test("許可リスト外のヘッダーは転送しない", () => {
     const headers = new Headers({
-      cookie: scoped(ORIGIN_A, "sid", "aaa"),
       "x-secret": "leak",
       "user-agent": "test",
     });
-    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({
+    expect(forwardableRequestHeaders(headers, ORIGIN_A, "sid=aaa")).toEqual({
       cookie: "sid=aaa",
-    });
-  });
-
-  test("非スコープのインフラ認証 cookie は転送しない", () => {
-    const headers = new Headers({
-      cookie: `CF_Authorization=jwt; ${scoped(ORIGIN_A, "sid", "aaa")}`,
-      authorization: "Bearer xyz",
-      referer: proxyRef(ORIGIN_A),
-    });
-    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({
-      cookie: "sid=aaa",
-      authorization: "Bearer xyz",
-    });
-  });
-
-  test("スコープ一致 Cookie が残らなければ Cookie ヘッダーを付けない", () => {
-    const headers = new Headers({ cookie: "CF_Authorization=jwt" });
-    expect(forwardableRequestHeaders(headers, ORIGIN_A)).toEqual({});
-  });
-
-  // #28: credentials: "include" 相当のクロスオリジン XHR。SW が同一オリジンの
-  // /api/proxy へ credentials: "same-origin" で振り向けるとプロキシ origin の
-  // Cookie jar（他サイト分＋インフラ cookie 混在）が丸ごと届くが、現ターゲット
-  // origin にスコープされた Cookie だけを上流へ転送する。
-  test("クロスオリジン XHR: 混在 Cookie jar から現ターゲット分だけ転送する（#28）", () => {
-    const headers = new Headers({
-      cookie: [
-        "CF_Authorization=jwt",
-        scoped(ORIGIN_A, "sid", "aaa"),
-        scoped(ORIGIN_B, "sid", "bbb"),
-      ].join("; "),
-    });
-    expect(forwardableRequestHeaders(headers, ORIGIN_B)).toEqual({
-      cookie: "sid=bbb",
     });
   });
 });
 
 describe("relayRequestHeaders", () => {
-  test("Cookie は現ターゲット origin 分だけに限定し他は広めに転送する", () => {
+  test("jar 由来の Cookie に限定し、他のヘッダーは広めに転送する", () => {
     const headers = new Headers({
       "content-type": "application/json",
       authorization: "Bearer xyz",
       referer: proxyRef(ORIGIN_B, { scheme: "api/proxy" }),
-      cookie: [
-        scoped(ORIGIN_A, "sid", "aaa"),
-        scoped(ORIGIN_B, "sid", "bbb"),
-      ].join("; "),
+      cookie: "__pxy_sid=s1",
       "x-csrf-token": "tok",
     });
-    expect(relayRequestHeaders(headers, ORIGIN_B)).toEqual({
+    expect(relayRequestHeaders(headers, ORIGIN_B, "sid=bbb")).toEqual({
       "content-type": "application/json",
       authorization: "Bearer xyz",
       cookie: "sid=bbb",
@@ -287,12 +150,12 @@ describe("relayRequestHeaders", () => {
     });
   });
 
-  test("あるターゲットの Cookie が別ターゲットの非 GET 転送に乗らない", () => {
+  test("ブラウザ受信の Cookie は転送せず、jar が空なら Cookie を付けない", () => {
     const headers = new Headers({
-      cookie: scoped(ORIGIN_A, "sid", "aaa"),
+      cookie: "__pxy_sid=s1; __pxy_auth=tok",
       "content-type": "application/json",
     });
-    const result = relayRequestHeaders(headers, ORIGIN_B);
+    const result = relayRequestHeaders(headers, ORIGIN_B, "");
     expect(result.cookie).toBeUndefined();
     expect(result["content-type"]).toBe("application/json");
   });
@@ -303,9 +166,10 @@ describe("relayRequestHeaders", () => {
     ["content-length", "10"],
     ["transfer-encoding", "chunked"],
     ["accept-encoding", "gzip"],
-  ])("hop-by-hop・インフラ系の %s は転送しない", (name, value) => {
+    ["cookie", "__pxy_sid=s1"],
+  ])("hop-by-hop・インフラ系・ブラウザ Cookie の %s は素通ししない", (name, value) => {
     const headers = new Headers({ [name]: value, "x-keep": "1" });
-    const result = relayRequestHeaders(headers, ORIGIN_A);
+    const result = relayRequestHeaders(headers, ORIGIN_A, "");
     expect(result[name]).toBeUndefined();
     expect(result["x-keep"]).toBe("1");
   });
@@ -316,50 +180,9 @@ describe("relayRequestHeaders", () => {
       referer: "https://proxy.example/browse?url=https%3A%2F%2Fa.example",
       "content-type": "application/json",
     });
-    const result = relayRequestHeaders(headers, ORIGIN_A);
+    const result = relayRequestHeaders(headers, ORIGIN_A, "");
     expect(result.origin).toBeUndefined();
     expect(result.referer).toBeUndefined();
-    expect(result["content-type"]).toBe("application/json");
-  });
-
-  test("Authorization は中継元 origin が宛先一致時のみ転送する（#136）", () => {
-    const headers = new Headers({
-      authorization: "Bearer xyz",
-      referer: proxyRef(ORIGIN_A, { scheme: "api/proxy" }),
-    });
-    expect(relayRequestHeaders(headers, ORIGIN_A).authorization).toBe(
-      "Bearer xyz"
-    );
-  });
-
-  test("中継元 origin が宛先と異なれば Authorization を転送しない（#136）", () => {
-    const headers = new Headers({
-      authorization: "Bearer xyz",
-      referer: proxyRef(ORIGIN_A, { scheme: "api/proxy" }),
-      "content-type": "application/json",
-    });
-    const result = relayRequestHeaders(headers, ORIGIN_B);
-    expect(result.authorization).toBeUndefined();
-    expect(result["content-type"]).toBe("application/json");
-  });
-
-  test("非スコープのインフラ認証 cookie は転送しない", () => {
-    const headers = new Headers({
-      cookie: `CF_Authorization=jwt; ${scoped(ORIGIN_A, "sid", "aaa")}`,
-      "content-type": "application/json",
-    });
-    const result = relayRequestHeaders(headers, ORIGIN_A);
-    expect(result.cookie).toBe("sid=aaa");
-    expect(result["content-type"]).toBe("application/json");
-  });
-
-  test("スコープ一致 Cookie が残らなければ Cookie ヘッダーを付けない", () => {
-    const headers = new Headers({
-      cookie: "CF_Authorization=jwt",
-      "content-type": "application/json",
-    });
-    const result = relayRequestHeaders(headers, ORIGIN_A);
-    expect(result.cookie).toBeUndefined();
     expect(result["content-type"]).toBe("application/json");
   });
 });
@@ -376,7 +199,7 @@ describe("Authorization のオリジンスコープ（#136）", () => {
         authorization: "Bearer xyz",
         referer: proxyRef(ORIGIN_A, { path: "/page?q=1", scheme: "browse" }),
       });
-      expect(fn(headers, ORIGIN_A).authorization).toBe("Bearer xyz");
+      expect(fn(headers, ORIGIN_A, "").authorization).toBe("Bearer xyz");
     });
 
     test("中継元 origin が宛先と一致すれば転送する（パス反映アセット Referer）", () => {
@@ -384,7 +207,7 @@ describe("Authorization のオリジンスコープ（#136）", () => {
         authorization: "Bearer xyz",
         referer: proxyRef(ORIGIN_A, { scheme: "api/proxy" }),
       });
-      expect(fn(headers, ORIGIN_A).authorization).toBe("Bearer xyz");
+      expect(fn(headers, ORIGIN_A, "").authorization).toBe("Bearer xyz");
     });
 
     test("中継元 origin が宛先と一致すれば転送する（後方互換 ?url= Referer）", () => {
@@ -394,7 +217,7 @@ describe("Authorization のオリジンスコープ（#136）", () => {
           `${ORIGIN_A}/page`
         )}`,
       });
-      expect(fn(headers, ORIGIN_A).authorization).toBe("Bearer xyz");
+      expect(fn(headers, ORIGIN_A, "").authorization).toBe("Bearer xyz");
     });
 
     test("中継元 origin が宛先と異なれば転送しない", () => {
@@ -402,7 +225,7 @@ describe("Authorization のオリジンスコープ（#136）", () => {
         authorization: "Bearer xyz",
         referer: proxyRef(ORIGIN_A),
       });
-      expect(fn(headers, ORIGIN_B).authorization).toBeUndefined();
+      expect(fn(headers, ORIGIN_B, "").authorization).toBeUndefined();
     });
 
     test("サブドメイン違いは不一致として転送しない", () => {
@@ -410,12 +233,12 @@ describe("Authorization のオリジンスコープ（#136）", () => {
         authorization: "Bearer xyz",
         referer: proxyRef("https://sub.a.example"),
       });
-      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+      expect(fn(headers, ORIGIN_A, "").authorization).toBeUndefined();
     });
 
     test("Referer 欠落は fail-closed で転送しない", () => {
       const headers = new Headers({ authorization: "Bearer xyz" });
-      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+      expect(fn(headers, ORIGIN_A, "").authorization).toBeUndefined();
     });
 
     test("中継元ターゲットを復元できない Referer は転送しない", () => {
@@ -423,7 +246,7 @@ describe("Authorization のオリジンスコープ（#136）", () => {
         authorization: "Bearer xyz",
         referer: "https://proxy.example/about",
       });
-      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+      expect(fn(headers, ORIGIN_A, "").authorization).toBeUndefined();
     });
 
     test("パース不能な Referer は転送しない", () => {
@@ -431,7 +254,7 @@ describe("Authorization のオリジンスコープ（#136）", () => {
         authorization: "Bearer xyz",
         referer: "::not a url::",
       });
-      expect(fn(headers, ORIGIN_A).authorization).toBeUndefined();
+      expect(fn(headers, ORIGIN_A, "").authorization).toBeUndefined();
     });
   });
 });

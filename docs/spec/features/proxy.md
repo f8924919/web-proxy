@@ -359,13 +359,13 @@ SW が振り向けた非 GET リクエストは、ターゲットの API が要�
 - **拒否（転送しない）**: hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`〔`proxyFetch` が `identity` 固定のため〕）に加え、**プロキシ自身の文脈を漏らす `origin` / `referer`**（プロキシ origin・`/browse?url=…` 閲覧 URL のターゲットへの漏えい防止。サーバー間中継のため `Origin` 無し＝同一オリジン扱いとなり多くの API でむしろ整合する。#27）。
 - **転送する**: 上記以外（`Content-Type`・`Authorization`・`Cookie`・`X-*` 等）。
 - `GET` 中継は従来どおり許可リスト（`forwardableRequestHeaders`＝`Cookie` / `Authorization`）を維持する（既存挙動の回帰を避けるため）。
-- **`Cookie` のサイト別スコープ抽出**: 転送する `Cookie` は、`forwardableRequestHeaders` / `relayRequestHeaders` の両方で**現ターゲット origin にスコープされた Cookie だけ**を抽出・復元する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）はスコープ化されていないため自動的に除外される。抽出後に Cookie が残らなければ `Cookie` ヘッダー自体を付けない。
+- **`Cookie` はサーバー側 jar から復元**: 転送する `Cookie` は、`forwardableRequestHeaders` / `relayRequestHeaders` の両方で**ブラウザ受信分を使わず**、`__pxy_sid` セッション × 現ターゲット origin で jar から復元した分だけを載せる（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。ブラウザの `Cookie`（`__pxy_sid` / `__pxy_auth` 等プロキシ自身の Cookie）は上流へ転送しないため、インフラ認証 cookie（`CF_Authorization` 等）も漏れない。jar に保持分が無ければ `Cookie` ヘッダー自体を付けない。
 
 ### セキュリティ上の制約
 
-- **転送ヘッダーのハードニング（#27 対応済み）**: 非 GET 中継は拒否リスト方式で広めに転送するが、`Cookie` は現ターゲット origin にスコープされた分のみへ限定し（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）、プロキシ自身の文脈を漏らす `origin` / `referer` は除外する。`Authorization` は `Set-Cookie` のようなサーバー側往復機構が無くスコープ鍵を付与できないため、**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（[§Authorization のオリジンスコープ](#authorization-のオリジンスコープ136)。#136）。
+- **転送ヘッダーのハードニング（#27 対応済み）**: 非 GET 中継は拒否リスト方式で広めに転送するが、`Cookie` はブラウザ受信分を転送せず jar から現ターゲット origin 分のみを復元し（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）、プロキシ自身の文脈を漏らす `origin` / `referer` は除外する。`Authorization` は `Set-Cookie` のようなサーバー側往復機構が無くスコープ鍵を付与できないため、**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（[§Authorization のオリジンスコープ](#authorization-のオリジンスコープ136)。#136）。
 - **CORS 許可オリジンの制限（#27 対応済み）**: `OPTIONS` 応答・中継レスポンスの `Access-Control-Allow-Origin` は、要求 `Origin` がリクエスト自身の Host と同一オリジンの場合のみエコーする（純粋関数 `allowedCorsOrigin`）。第三者クロスオリジンへ無検証エコー＋`Allow-Credentials` を返さない。SW の同一オリジン化により正当なクライアントは常に自プロキシ origin であり、回帰は無い。
-- **`credentials` の扱い**: SW は振り向け時に `credentials: "same-origin"` を用いる（振り向け先は常に同一オリジンの `/api/proxy`）。これにより、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でも、プロキシ origin の認証 cookie（`CF_Authorization` 等）が `/api/proxy` へ届き、プロキシ自身の認証を通過できる（`omit` だと未認証とみなされログインページへ 302 され CORS で失敗していた）。届いたプロキシ origin の cookie はスコープ化されていないため、上流転送のスコープ抽出で除外される（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。
+- **`credentials` の扱い**: SW は振り向け時に `credentials: "same-origin"` を用いる（振り向け先は常に同一オリジンの `/api/proxy`）。これにより、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でも、プロキシ origin の認証 cookie（`CF_Authorization` 等）と `__pxy_sid` が `/api/proxy` へ届き、プロキシ自身の認証通過と jar 参照が成立する（`omit` だと未認証とみなされログインページへ 302 され CORS で失敗していた）。届いたブラウザ Cookie 自体は上流へは転送しない（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。
 
 ---
 
@@ -388,34 +388,38 @@ SW が振り向けた非 GET リクエストは、ターゲットの API が要�
 
 | 方向                  | 処理                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| ブラウザ → ターゲット | `Cookie` / `Authorization` を**許可リスト方式**で転送する（`headers.ts` の純粋関数 `forwardableRequestHeaders` で抽出）。`Cookie` は**現ターゲット origin にスコープされたものだけ**を抽出・復元して転送する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。`Authorization` は**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（[§Authorization のオリジンスコープ](#authorization-のオリジンスコープ136)）。全リクエストヘッダーの素通しはしない |
-| ターゲット → ブラウザ | `Set-Cookie` の `Domain` 属性を除去し、**Cookie 名をターゲット origin でスコープ化**して返す。`Secure` / `SameSite` / `Path` はそのまま維持                                                                                                                                                                                                                                                                                                                                                               |
+| ブラウザ → ターゲット | `Cookie` は**サーバー側 jar から復元**して転送する（ブラウザの `Cookie` ヘッダーは上流へ転送しない）。`__pxy_sid` セッション × 現ターゲット origin で jar を引き、保持中の中継 Cookie だけを送る（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。`Authorization` は**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（[§Authorization のオリジンスコープ](#authorization-のオリジンスコープ136)）。全リクエストヘッダーの素通しはしない |
+| ターゲット → ブラウザ | `Set-Cookie` は**ブラウザへ返さず**、`Domain` を無視してサーバー側 jar へ origin 別に格納する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。クライアントへ返すプロキシ Cookie は不透明なセッション ID `__pxy_sid` のみ                                                                                                                                                                                                                                              |
 
 - **対象ハンドラ**: `/browse`（`GET` / `POST`）と `/api/proxy`（`GET`）の両方で転送する。認証が要る画像・CSS・JS（アセット）も取得できるようにするため、アセット中継にも付与する。
-- **往復の成立**: `Set-Cookie` の `Domain` を除去することで Cookie はプロキシ origin に保存され、以降のリクエストでブラウザがプロキシ origin 宛に送る `Cookie` のうち**当該 origin にスコープされた分**を本転送でターゲットへ戻す。これにより認証セッションが維持される。
+- **往復の成立**: 上流の `Set-Cookie` はサーバー側 jar に保持され、以降のリクエストでは `__pxy_sid` セッション × ターゲット origin に一致する分を jar から復元してターゲットへ戻す。これにより認証セッションが維持される。Cookie はクライアントへ返さないため `document.cookie` に中継先の Cookie が現れない（#151 Phase 1）。
 
 ### サイト間 Cookie アイソレーション
 
-URL 書き換え方式のため、すべての中継先は**単一のプロキシ origin** から配信される。素朴に Cookie を中継すると、プロキシ origin に集約された Cookie が中継先を問わず送出され、あるサイトの Cookie が別サイトの中継リクエストに乗る（クレデンシャル混在・漏えい）。これを防ぐため、**Cookie 名にターゲット origin のスコープ鍵を付与**して保持し、往路では現ターゲット origin に一致する Cookie だけを復元して転送する（サーバー側 Cookie ストアは持たない＝ステートレス）。
+URL 書き換え方式のため、すべての中継先は**単一のプロキシ origin** から配信される。素朴に Cookie を中継すると、プロキシ origin に集約された Cookie が中継先を問わず送出され、あるサイトの Cookie が別サイトの中継リクエストに乗る（クレデンシャル混在・漏えい）。さらに Cookie をブラウザへそのまま返すと、`document.cookie` から中継先サイトの Cookie が読み取れてしまう（[§サイト間アイソレーションの構造的制約](#サイト間アイソレーションの構造的制約131) の脅威 (a)）。これを防ぐため、**中継 Cookie をクライアントへ返さず、サーバー側の Cookie jar（インメモリ）へ origin 別に保持**する（#151 Phase 1）。
 
-- **スコープ鍵**: `cookieScopeKey(origin)` = `base64url(origin)`。`origin` は `scheme://host[:port]`（`URL.origin`、IDN は punycode 化されるため ASCII）。粒度は origin 単位で、[§リダイレクト追従](#リダイレクト追従) の同一オリジン判定と揃える。
-- **スコープ名の形式**: `__pxy.<スコープ鍵>.<元の Cookie 名>`。区切り `.` は base64url が使わない文字なので、復元時に最初の `.` でスコープ鍵と元の名前を一意に分離できる。
-- **復路（Set-Cookie）**: `Domain` 除去に加えて Cookie 名を上記形式へ書き換える。スコープ鍵には**リダイレクト追従後の最終 URL の origin**を用いる（書き換え基準 `baseUrl` と揃える。#42）。`Path` / `Secure` / `SameSite` は維持する。
-- **往路（Cookie）**: 受信 `Cookie` から「現ターゲット origin のスコープ鍵に一致する `__pxy.<鍵>.` 接頭辞を持つ Cookie」だけを抽出し、接頭辞を外して元の名前で転送する。別 origin にスコープされた Cookie・スコープされていない Cookie（プロキシ自身のインフラ認証 cookie 等）は転送しない。これにより上流へ送る Cookie が現ターゲット分に限定され、サイト間の Cookie 混在が起きない。
-- **インフラ認証 cookie**: プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に付与される cookie（`CF_Authorization` 等）はスコープ化されていないため、往路のスコープ抽出で**自動的に除外**される（専用の除去処理は不要）。
-- **既知の制約**: 元 Cookie の `Path` を維持するため、`Path=/` 以外のパス限定 Cookie はプロキシパス（`/browse` / `/api/proxy`）に送り返されない（既存の限界。本機能の対象外）。また本機能の導入前に保存された非スコープ Cookie は転送対象外となるため、再ログインが必要になる。
+- **セッション識別**: jar を引くためのセッション ID Cookie `__pxy_sid`（`HttpOnly; SameSite=Lax; Path=<BASE_PATH || "/">`、値は `crypto.randomUUID()`）を 1 つだけクライアントへ発行する。これはプロキシ自身の Cookie であり中継先へは転送しない。中継先 Cookie のブラウザ保存物がこの不透明なセッション ID だけになるため、`document.cookie` から中継先の Cookie 名・値は読めない。
+- **復路（Set-Cookie）**: 上流レスポンスの `Set-Cookie` はブラウザへ返さず（握り潰し）、`__pxy_sid` のセッション × **リダイレクト追従後の最終 URL の origin**（書き換え基準 `baseUrl` と揃える。#42）をキーに jar へ格納する。`Domain` は無視し、`Max-Age` / `Expires` は jar 内エントリの有効期限として解釈する（`Max-Age=0` 等の削除指示も反映）。
+- **往路（Cookie）**: ブラウザから届く `Cookie`（`__pxy_sid` / `__pxy_auth` などプロキシ自身の Cookie のみ）は上流へ転送しない。代わりに `__pxy_sid` のセッション × 現ターゲット origin で jar を引き、保持中の中継 Cookie を `name=value` で組み立てて転送する。別 origin の Cookie は jar のキーが異なるため混在しない。
+- **jar のライフサイクル**: インメモリ `Map`（`rateLimit.ts` 等と同じステートレス・単一プロセス前提）。セッションは最終アクセスからの TTL で失効し、上限超過・期限切れは GC で回収する。**プロセス再起動・複数インスタンス間では共有されない**ため、再起動・別インスタンス振り分け時はセッション喪失（中継先の再ログイン）が起こり得る。永続化・共有ストアはスケール時の将来課題。
+- **インフラ認証 cookie**: プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合に付与される cookie（`CF_Authorization` 等）は、往路でブラウザ `Cookie` を一切上流へ転送しないため**自動的に漏れない**（専用の除去処理は不要）。
+- **既知の制約**:
+  - **client-only Cookie は対象外**: 中継先 JS が `document.cookie` で直接設定する Cookie は HTTP `Set-Cookie` を経由しないため jar に入らず、従来どおりプロキシ origin の `document.cookie` に保存される（脅威 (a) の一部が残存）。サーバー発行の `Set-Cookie`（認証セッションの主経路）のみが本機能の対象。横取りシムによる回収は将来課題（[#151 スパイク](../../task/151-cross-site-isolation-spike.md)）。
+  - 往路は origin 粒度で保持分を一律転送し、元 Cookie の `Path` による絞り込みは行わない。
+  - 本機能の導入前にブラウザへ保存された旧 `__pxy.<鍵>.` 形式の Cookie は往路で上流へ転送しないため不活性化し、自然失効に任せる（明示削除はしない）。再ログインが必要になる場合がある。
 
 ### サイト間アイソレーションの構造的制約（#131）
 
-上記の Cookie スコープ化は **`Cookie` ヘッダーの上流転送をサイト別に限定する**ものであり、**ブラウザ内のサイト間分離を保証するものではない**。すべての中継先が単一のプロキシ origin 上で実行されるため、次の構造的制約が残る（OWASP A01 / A05 / CWE-346）。
+すべての中継先が単一のプロキシ origin 上で実行されるため、ブラウザのオリジン境界によるサイト間分離が効かない構造的制約が残る（OWASP A01 / A05 / CWE-346）。脅威は 2 系統あり、現状の到達点は以下のとおり。
 
-- **`document.cookie` は同一オリジンで共有される**: スコープ鍵は Cookie *名*の接頭辞にすぎず、ブラウザのオリジン境界ではない。中継した悪性サイト（または XSS を受けた中継サイト）の JS は、`document.cookie` から**全サイトのスコープ化 Cookie を読み取れ**、`fetch('/api/proxy/https/victim/…')` で被害サイトのセッションを使った操作まで行える。`HttpOnly` Cookie は JS から読めないが、同一オリジンゆえ被害サイト宛リクエストには自動付与される。
-- **緩和策（本 #131 のスコープ）**: プロキシ自身の UI レスポンスに `X-Frame-Options: DENY` を付与してクリックジャッキングを防ぐ（[§プロキシ UI レスポンスのクリックジャッキング防止](#プロキシ-ui-レスポンスのクリックジャッキング防止131)）。これは UI の枠外埋め込みを塞ぐ最小緩和であり、サイト間分離そのものは解決しない。
-- **運用上の前提**: **本サービスは中継サイト間を分離しない。信頼できないサイトと、認証セッションを持つサイトを同一タブ（同一プロキシ origin）で併用しないこと。** 本質的な解決の方針は #151 で決定済み（**両者併用の段階導入**）。Phase 1 はサーバー側 `HttpOnly` Cookie jar で `document.cookie` 露出を塞ぎ（全デプロイ共通）、Phase 2 はサブドメイン origin 分離（ワイルドカード証明書・feature-flag）で同一オリジン fetch のセッション乗っ取りまで解消する。比較・方針の詳細とロードマップは [docs/task/151-cross-site-isolation-spike.md](../../task/151-cross-site-isolation-spike.md)（実装は Phase 別の別 Issue で進行）。
+- **脅威 (a) `document.cookie` 露出**: 中継した悪性サイト（または XSS を受けた中継サイト）の JS が `document.cookie` から他サイトの中継 Cookie を読み取る経路。**サーバー発行の `Set-Cookie` は #151 Phase 1（サーバー側 jar・[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）で塞いだ**（クライアントへ返さないため `document.cookie` に現れない）。ただし中継先 JS が `document.cookie` で直接書く **client-only Cookie は対象外**で、これらは引き続き同一オリジンの `document.cookie` で共有される（横取りシムによる回収は将来課題）。
+- **脅威 (b) 同一オリジン fetch のセッション乗っ取り**: 同一プロキシ origin ゆえ、悪性サイト JS が `fetch('/api/proxy/https/victim/…')` を発行でき、被害サイト宛リクエストには jar の Cookie がサーバー側で自動付与される（`HttpOnly` でも起こる）。jar はリクエストの発行元サイトを識別できないため、**jar 化では解消されない**。これは #151 Phase 2（サブドメイン origin 分離）で構造的に解消する。
+- **緩和策（#131 のスコープ）**: プロキシ自身の UI レスポンスに `X-Frame-Options: DENY` を付与してクリックジャッキングを防ぐ（[§プロキシ UI レスポンスのクリックジャッキング防止](#プロキシ-ui-レスポンスのクリックジャッキング防止131)）。これは UI の枠外埋め込みを塞ぐ最小緩和であり、サイト間分離そのものは解決しない。
+- **運用上の前提**: Phase 1 で server-set Cookie の `document.cookie` 露出は塞いだが、脅威 (b)（および client-only Cookie 経由の (a)）は Phase 2 完了まで残る。**信頼できないサイトと、認証セッションを持つサイトを同一タブ（同一プロキシ origin）で併用しないこと。** 本質的な解決の方針は #151 で決定済み（**両者併用の段階導入**）。Phase 2 はサブドメイン origin 分離（ワイルドカード証明書・feature-flag）で同一オリジン fetch のセッション乗っ取りまで解消する。比較・方針の詳細とロードマップは [docs/task/151-cross-site-isolation-spike.md](../../task/151-cross-site-isolation-spike.md)（実装は Phase 別の別 Issue で進行）。
 
 ### Authorization のオリジンスコープ（#136）
 
-`Cookie` と異なり `Authorization` には `Set-Cookie` のようなサーバー側往復機構が無く、ヘッダー値そのものへスコープ鍵を埋め込めない。そのため Cookie と同方式のスコープ化はできないが、同一プロキシ origin 集約（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）のもとでは、ある中継サイトの JS が付与した `Authorization` が振り向け先次第で**別ターゲットへ流れる**経路になり得る（OWASP A01 / CWE-200）。これを塞ぐため、`Authorization` は**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（条件付き転送）。
+`Cookie` と異なり `Authorization` には `Set-Cookie` のようなサーバー側往復機構が無く、サーバー側 jar でターゲット別に保持することができない。そのため Cookie と同方式の origin スコープ化はできないが、同一プロキシ origin 集約（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）のもとでは、ある中継サイトの JS が付与した `Authorization` が振り向け先次第で**別ターゲットへ流れる**経路になり得る（OWASP A01 / CWE-200）。これを塞ぐため、`Authorization` は**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（条件付き転送）。
 
 - **中継元オリジンの判定**: 受信リクエストの `Referer` を中継元シグナルとして用いる。`Referer` はプロキシ origin の URL で、そのパスにターゲットが反映されている（`/browse/<scheme>/<host>/…` または `/api/proxy/<scheme>/<host>/…`、後方互換の `/browse?url=…`）。ここから中継元ターゲットの絶対 URL を復元し、その `origin` を中継元オリジンとする。
 - **一致判定**: 復元した中継元 origin が宛先ターゲット `origin`（`URL.origin` = `scheme://host[:port]`）と**完全一致**する場合のみ `Authorization` を転送する。スキーム・ホスト・ポートのいずれかが異なれば（サブドメイン違いを含む）転送しない。
@@ -427,8 +431,8 @@ URL 書き換え方式のため、すべての中継先は**単一のプロキ�
 ### セキュリティ上の制約
 
 - **リダイレクト追従時の漏えい（#26 で対応済み）**: かつて `proxyFetch` は `redirect: "follow"` 固定で、クロスオリジンへのリダイレクト時に `Authorization` / `Cookie` を追従先へそのまま送っていた。現在は `redirect: "manual"` 化して自前で追従し、**追従先が元リクエストと別オリジンなら `Authorization` / `Cookie` を除去**する（[§リダイレクト追従](#リダイレクト追従) 参照）。
-- **`credentials` 付きクロスオリジン XHR（#28 対応済み）**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向け（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "same-origin"` を用いる。振り向け先が同一オリジンのため**プロキシ origin に保存されたターゲットのスコープ Cookie が `/api/proxy` まで届き**、往路のスコープ抽出（`scopedCookieHeader`）で**現ターゲット origin 分だけが上流へ転送される**。これにより `fetch(target, { credentials: "include" })` 相当の Cookie ベース・クロスオリジン XHR が、プロキシ経由で保存・スコープ化された Cookie について成立する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）は非スコープのため上流へは転送されない。
-- **`credentials` 付き XHR の既知の制約**: SW は元リクエストの `credentials` モード（`omit` / `same-origin` / `include`）を区別せず一律 `same-origin` で振り向けるため、`credentials: "omit"` の XHR でも**当該ターゲット自身のスコープ Cookie が送られ得る**。ただし送信先は常に現ターゲット origin 分のみで、サイト間の Cookie 混在・漏えいは起きない（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。また対象はプロキシ経由で保存・スコープ化された Cookie に限り、プロキシ外で取得した Cookie は対象外。
+- **`credentials` 付きクロスオリジン XHR（#28 対応済み）**: SW は非 GET 含むサブリソースを同一オリジンの `/api/proxy` へ振り向け（[§CORS プリフライト対応](#cors-プリフライト対応)）、振り向け `fetch` は `credentials: "same-origin"` を用いる。振り向け先が同一オリジンのため**`__pxy_sid` セッション Cookie が `/api/proxy` まで届き**、サーバー側 jar から**現ターゲット origin 分だけが復元されて上流へ転送される**。これにより `fetch(target, { credentials: "include" })` 相当の Cookie ベース・クロスオリジン XHR が、jar に保持された Cookie について成立する（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。ブラウザの `Cookie` 自体は転送しないため、プロキシ自身のインフラ認証 cookie（`CF_Authorization` 等）は上流へは漏れない。
+- **`credentials` 付き XHR の既知の制約**: SW は元リクエストの `credentials` モード（`omit` / `same-origin` / `include`）を区別せず一律 `same-origin` で振り向けるため、`credentials: "omit"` の XHR でも**当該ターゲット自身の jar 保持 Cookie が送られ得る**。ただし送信先は常に現ターゲット origin 分のみで、サイト間の Cookie 混在・漏えいは起きない（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。また対象は jar に保持された Cookie に限り、プロキシ外で取得した Cookie は対象外。
 
 ---
 
@@ -503,7 +507,7 @@ HTML / CSS は URL 書き換え（`rewriteHtml` / `rewriteCss`）のために本
 - **方式**: 単一の共有シークレットトークン。運用者がトークンを利用者へ配布する想定。利用者ごとの識別・個別失効は対象外（必要なら別 Issue）。IP 許可リスト方式は採らない（`getClientIp` は `PROXY_TRUSTED_IP_HEADER` 未設定だと `"unknown"` に縮退し、詐称耐性も信頼ヘッダー設定が前提のため、共有トークンの方が運用前提が少なく堅実）。
 - **適用範囲**: **全中継経路**（ページ遷移 `/browse`・`/browse/<...>` とアセット中継 `/api/proxy`・`/api/proxy/<...>`）。プロキシ自身のホーム UI（`/`）と解錠ページ（`/unlock`）はトークン入力の入口のため認証対象外。
 - **トークンの受け渡し**: 中継経路の各リクエストで次のいずれかを検証する。**ヘッダーを Cookie より優先**する。
-  - **Cookie `__pxy_auth`**（主経路）: ブラウザ閲覧ではページ内リンク・アセット取得にカスタムヘッダーを付けられないため Cookie を用いる。`HttpOnly` / `SameSite=Lax` で発行し、ブラウザが全中継リクエストに自動送出する。Cookie 名は中継先へ転送する Cookie のスコープ接頭辞（`__pxy.`）と一致しないため、ターゲットへは**転送されない**（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。
+  - **Cookie `__pxy_auth`**（主経路）: ブラウザ閲覧ではページ内リンク・アセット取得にカスタムヘッダーを付けられないため Cookie を用いる。`HttpOnly` / `SameSite=Lax` で発行し、ブラウザが全中継リクエストに自動送出する。これはプロキシ自身の Cookie で、往路はブラウザ受信の `Cookie` を一切上流へ転送せず jar から復元した分だけを載せるため、ターゲットへは**転送されない**（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。
   - **ヘッダー `X-Proxy-Token`**（補助）: API / CLI / リバースプロキシ前段からの利用向け。
 - **解錠 UX（401 → フォーム POST → Cookie 発行）**: 認証有効時に未認証で**ページ遷移経路**へアクセスすると、トークン入力フォーム付きの **401 ページ**を返す（自動遷移なし。`X-Frame-Options: DENY`）。フォームは `POST {BASE_PATH}/unlock` でトークンを送信し、サーバーが**定数時間比較**で検証する。一致すれば `HttpOnly` Cookie を発行し、元の閲覧 URL（アプリ相対・オープンリダイレクト防止のため検証済み）へ `303` リダイレクトする。不一致なら `401` でフォームを再表示する。トークンを URL・サーバーログ・ブラウザ履歴に残さないため、クエリパラメータ方式は採らない。
 - **アセット中継の未認証応答**: アセット（画像・JS 等）への未認証アクセスは HTML フォームではなく `401`（プレーン）を返す。通常はページ自体が先に 401 で止まるため、アセットだけが未認証になるのは Cookie 欠落時に限られる。
@@ -548,11 +552,11 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 
 ### Cookie セッションウォーミング
 
-ブラウザがナビゲーション中に取得した Cookie（チャレンジ通過後のセッション等）を、**スコープ化して返す**ことで以降の中継へ引き継ぐ。
+ブラウザがナビゲーション中に取得した Cookie（チャレンジ通過後のセッション等）を、**サーバー側 jar へ取り込む**ことで以降の中継へ引き継ぐ。
 
 - ブラウザの cookie jar（`context.cookies()`）を `Set-Cookie` 相当へ変換する（`Domain` は付けない）。
-- 変換した `Set-Cookie` は既存の[サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)（`sanitizeSetCookie`）でスコープ化されてブラウザへ返る。
-- 以降、ブラウザが送り返す `Cookie` のうち現ターゲット origin 分を `scopedCookieHeader` が抽出して上流（`/api/proxy` 等）へ転送する。これにより**ブラウザで温めたセッションを軽量な中継ティアへ引き継ぐ**。
+- 変換した `Set-Cookie` は既存の[サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)の経路でサーバー側 jar に取り込まれる（ブラウザへは返さない）。
+- 以降、`__pxy_sid` セッション × 現ターゲット origin で jar から復元された Cookie が上流（`/api/proxy` 等）へ転送される。これにより**ブラウザで温めたセッションを軽量な中継ティアへ引き継ぐ**。
 
 ### SSRF（不弱化）
 

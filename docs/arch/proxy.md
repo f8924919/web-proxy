@@ -29,7 +29,8 @@ src/
 │       ├── browsePath.ts     # ブラウズ URL スキーム（パス反映）の組み立て・復元（純粋関数。#115）
 │       ├── relayAsset.ts     # アセット中継の共通処理（両 route が共有。中継・CORS・OPTIONS）
 │       ├── browseRelay.ts    # ブラウズ中継の共通処理（両 route が共有。ティア選択・ループ検出・HTML 書き換え）
-│       ├── headers.ts        # レスポンスヘッダー処理
+│       ├── headers.ts        # レスポンスヘッダー処理・認証ヘッダー転送
+│       ├── cookieJar.ts      # サーバー側 Cookie jar（中継 Cookie をクライアントへ返さず origin 別保持・#151 Phase 1）
 │       ├── clientIp.ts       # クライアント IP 解決（レート制限のキー）
 │       ├── rateLimit.ts      # インメモリ レート制限（ページ/アセット別バケット）
 │       ├── targetPolicy.ts   # 中継対象スキーム・ポート制限（オープンプロキシ乱用対策・#133）
@@ -241,7 +242,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 > 関連仕様: [プロキシ機能仕様 §ブラウザバック中継](../spec/features/proxy.md#ブラウザバック中継browser-backed-fetch)
 
-**役割**: 特定サイトの `/browse` GET について、初回ナビゲーションをヘッドレスブラウザ（インプロセス Playwright）で実行し、JS 解決後の DOM を `proxyFetch` と同じ `{ response, finalUrl }` 契約で返す。あわせてブラウザが取得した Cookie をスコープ化のため `Set-Cookie` 化して返す（セッションウォーミング）。
+**役割**: 特定サイトの `/browse` GET について、初回ナビゲーションをヘッドレスブラウザ（インプロセス Playwright）で実行し、JS 解決後の DOM を `proxyFetch` と同じ `{ response, finalUrl }` 契約で返す。あわせてブラウザが取得した Cookie を `Set-Cookie` 化して返し、呼び出し側が jar へ取り込む（セッションウォーミング）。
 
 ### ティア判定（純粋関数）
 
@@ -259,7 +260,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | 純粋関数                        | 役割                                                                                                                                                                                                          |
 | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `resolveBrowserWaitConfig(env)` | `PROXY_BROWSER_WAIT_UNTIL` / `PROXY_BROWSER_TIMEOUT_MS` / `PROXY_BROWSER_SETTLE_MS` を検証して `{ waitUntil, timeoutMs, settleMs }` を返す（不正値は既定へフォールバック。`debug-browser.mjs` と同方針、#39） |
-| `cookieToSetCookie(cookie)`     | Playwright の cookie オブジェクトを `Set-Cookie` 文字列へ変換する。`Domain` は付けず（`sanitizeSetCookie` がスコープ化）、`Path` / `Secure` / `HttpOnly` / `SameSite` / 永続 cookie の `Expires` を反映する   |
+| `cookieToSetCookie(cookie)`     | Playwright の cookie オブジェクトを `Set-Cookie` 文字列へ変換する。`Domain` は付けず（`cookieJar.store` が origin 別に保持）、`Path` / `Secure` / `HttpOnly` / `SameSite` / 永続 cookie の `Expires` を反映する   |
 
 ### CSSOM スタイルの実体化（DOM 操作関数・#120）
 
@@ -326,7 +327,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 - **SSRF**: 初回ナビゲーション URL に `assertSsrfAllowed`（`fetch.ts` から公開）を適用し、ブラウザの**全サブリクエスト**にも `context.route` 傍受で**全アドレス（A / AAAA）**のブロックリスト照合（IPv4 / IPv6 両対応）を適用する（1 つでもブロック対象なら中断）。ただし Chromium の接続時再解決のため IP ピン留めはできず、リバインディングの残存窓がある（[機能仕様 §SSRF（不弱化）](../spec/features/proxy.md#ssrf不弱化)）。
 - **コンテキスト**: 既定 UA（`PROXY_USER_AGENT` で上書き可、`fetch.ts` の `DEFAULT_USER_AGENT`）と `options.headers`（`Cookie` / `Authorization` 等）を `extraHTTPHeaders` として適用し、リクエストごとに新規 context を作って分離する。
 - **取得**: `page.goto`（`resolveBrowserWaitConfig` の待機）→ settle 待ち → `inlineCssomStyles` 実体化 → **DOM サイズ概算（`measureDomByteLength`）で上限超過なら打ち切り（#144）** → `page.content()`（本文）/ `page.url()`（finalUrl）。失敗時もベストエフォートで収集して返す。
-- **Cookie ウォーミング**: `context.cookies()` を `cookieToSetCookie` で `Set-Cookie` 化し、`text/html` の `Response` ヘッダーへ載せる。以降は `relayBrowse` の `sanitizeHeaders` が既存どおりスコープ化する。
+- **Cookie ウォーミング**: `context.cookies()` を `cookieToSetCookie` で `Set-Cookie` 化し、`text/html` の `Response` ヘッダーへ載せる。以降は `relayBrowse` がこれを `cookieJar.store(...)` で jar へ取り込む（ブラウザへは返さない）。
 - **ライフサイクル**: ブラウザはプロセス内で再利用し、context はリクエストごとに作って確実に close する。同時実行数を上限（`PROXY_BROWSER_MAX_CONCURRENCY`、既定 2）で絞る。
 - **テスト**: 純粋関数（上記）のみ単体テスト対象。ブラウザ I/O は[テスト方針](../testing/policy.md)によりテスト対象外。
 - **既知の制約（#123）**: 配信する `page.content()` は hydration 後の DOM のため、クライアントの再 hydration で React の hydration エラー（`#418` 等）が console に多発する。実害なし（コンソールノイズ）と切り分け済みで、低減策は体験を壊すリスクから意図的に見送る。詳細は[機能仕様 §既知の制約: クライアント再 hydration](../spec/features/proxy.md#既知の制約-クライアント再-hydration123)。
@@ -525,16 +526,16 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 ### 制約（MVP）
 
 - **ナビゲーションは対象外**。ページ遷移・フォーム送信はサーバー側書き換えに委ねる。
-- **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、プロキシ origin に保存されたターゲットのスコープ Cookie が `/api/proxy` まで届く。これにより `credentials: "include"` 相当の Cookie ベース・クロスオリジン XHR が、上流転送のスコープ抽出（`scopedCookieHeader`）で現ターゲット分だけに限定されたうえで成立する（#28。[機能仕様 §認証情報の転送 §セキュリティ上の制約](../spec/features/proxy.md#セキュリティ上の制約-1)）。プロキシ自身のインフラ認証 cookie（Cloudflare Access の `CF_Authorization` 等）は非スコープのため上流転送から除外される。元リクエストの `credentials` モードは区別せず一律 `same-origin` で振り向ける（既知の制約は同機能仕様を参照）。
+- **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、`__pxy_sid` セッション Cookie が `/api/proxy` まで届く。これにより `credentials: "include"` 相当の Cookie ベース・クロスオリジン XHR が、サーバー側 jar からの現ターゲット origin 分の復元（`cookieJar.cookieHeader`）に限定されたうえで成立する（#28。[機能仕様 §認証情報の転送 §セキュリティ上の制約](../spec/features/proxy.md#セキュリティ上の制約-1)）。ブラウザの `Cookie` 自体は上流へ転送しないため、プロキシ自身のインフラ認証 cookie（Cloudflare Access の `CF_Authorization` 等）も漏れない。元リクエストの `credentials` モードは区別せず一律 `same-origin` で振り向ける（既知の制約は同機能仕様を参照）。
 - **ランタイム相対 module import はパス反映で解消（#100）**。アセットがパス反映形式（`/api/proxy/<scheme>/<host>/<path>`）で配信されるため、チャンク分割 SPA の相対 import はブラウザがモジュールのディレクトリ基準で正しく解決し、自前ルートとして素通しされルートが中継する（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)）。残る best-effort はクロスオリジン module からのルート絶対参照（referrer 不在のためページ target origin に振り向ける）。
 
 ---
 
 ## `src/lib/proxy/headers.ts`
 
-**役割**: ターゲットのレスポンスヘッダーから不要なものを除去する。加えて、リクエスト側で転送する認証ヘッダーの抽出と、サイト間 Cookie アイソレーションのための Cookie スコープ化も担う。
+**役割**: ターゲットのレスポンスヘッダーから不要なものを除去する。加えて、リクエスト側で転送する認証ヘッダー（`Cookie` / `Authorization`）の組み立ても担う。中継 Cookie の保持そのものは `cookieJar.ts`（サーバー側 jar）が担当し、`headers.ts` は jar から復元済みの `Cookie` 文字列を受け取って転送ヘッダーへ載せる（#151 Phase 1）。
 
-除去対象（`Speculation-Rules` を含む）は [プロキシ機能仕様 §レスポンスヘッダー処理](../spec/features/proxy.md) を参照。前段 CDN が後段で注入する `Speculation-Rules` はコードからは除去できないため CDN 側設定で無効化する（同仕様の注記参照）。
+除去対象（`Speculation-Rules` を含む）は [プロキシ機能仕様 §レスポンスヘッダー処理](../spec/features/proxy.md) を参照。前段 CDN が後段で注入する `Speculation-Rules` はコードからは除去できないため CDN 側設定で無効化する（同仕様の注記参照）。中継レスポンスの `Set-Cookie` は**ブラウザへ返さず**除去対象とし、保持は `cookieJar.ts` が担う。
 
 ### `htmlUiHeaders()`（プロキシ UI のクリックジャッキング防止・#131）
 
@@ -542,23 +543,11 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 プロキシ自身が生成する HTML UI レスポンス用のヘッダーを組み立てる純粋関数。`Content-Type: text/html; charset=utf-8` に加えて `X-Frame-Options: DENY` を付与する。これを使うのは `browseRelay.ts` の `htmlResponse`（エラー）/ `loopGuidanceResponse`（ループ案内）と `browse/route.ts` の `url` 未指定案内ページ（`noUrlBrowseHtml`）。`sanitizeHeaders` が中継レスポンスから `X-Frame-Options` を**除去**する（iframe 埋め込み中継のため）のと対になり、UI レスポンスには逆に**付与**して枠外埋め込みを禁止する。ホーム `/` は React コンポーネントでレスポンスヘッダーを直接付与できないため、この関数ではなく `next.config.mjs` の `headers()`（`source: '/'` 限定）で付与する。
 
-### `cookieScopeKey(origin)`
-
-> 関連仕様: [プロキシ機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
-
-ターゲット origin（`scheme://host[:port]`）から Cookie 名へ付与するスコープ鍵（`base64url(origin)`）を生成する純粋関数。`URL.origin` は IDN を punycode 化するため ASCII で、Cookie 名 token に使える文字のみになる。区切りに `.` を使うため、base64url が `.` を含まないことを利用して復元時に鍵と元の名前を分離する。
-
-### `sanitizeHeaders(headers, targetOrigin)` / `sanitizeSetCookie(value, targetOrigin)`
+### `sanitizeHeaders(headers)`
 
 > 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization) / [§サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
 
-`sanitizeHeaders` はレスポンスヘッダーをサニタイズし、`Set-Cookie` は `sanitizeSetCookie` へ委譲する。`sanitizeSetCookie` は `Domain` 属性を除去したうえで Cookie 名を `__pxy.<cookieScopeKey(targetOrigin)>.<元の名前>` へスコープ化する（`Path` / `Secure` / `SameSite` は維持）。`targetOrigin` にはリダイレクト追従後の**最終 URL の origin**を渡す（書き換え基準 `baseUrl` と揃える、#42）。
-
-### `scopedCookieHeader(cookieHeader, targetOrigin)`
-
-> 関連仕様: [プロキシ機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
-
-受信 `Cookie` ヘッダー値から、`targetOrigin` のスコープ鍵に一致する `__pxy.<鍵>.` 接頭辞を持つ Cookie だけを抽出し、接頭辞を外して元の名前で連結する純粋関数。別 origin にスコープされた Cookie・非スコープの Cookie（プロキシ自身のインフラ認証 cookie 等）は除外される。残る Cookie が無ければ空文字を返し、呼び出し側は `Cookie` ヘッダーを付けない。`forwardableRequestHeaders` / `relayRequestHeaders` の両方が往路 `Cookie` の処理に用いる。
+レスポンスヘッダーをサニタイズする純粋関数。`BLOCKED_HEADERS`（`Content-Security-Policy` / `X-Frame-Options` / `Content-Encoding` / `Transfer-Encoding` / `Content-Length` / `Speculation-Rules`）に加えて **`Set-Cookie` を除去**し、中継 Cookie をブラウザへ返さない。`Set-Cookie` の保持は呼び出し側（`relayBrowse` / `relayAsset`）が `cookieJar.store(...)` で行うため、本関数は握り潰すだけ（#151 Phase 1）。`Set-Cookie` のスコープ化（旧 `sanitizeSetCookie` による名前接頭辞付与）は廃止した。
 
 ### `authorizationAllowed(incoming, targetOrigin)` / `originFromProxiedReferer(referer)`
 
@@ -566,17 +555,17 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 `Authorization` を宛先ターゲット origin へスコープするための判定ヘルパー（#136）。`originFromProxiedReferer(referer)` は受信 `Referer` 文字列を `URL` としてパースし、その `pathname` / `search` から `targetFromBrowsePath` → `targetFromProxyPath` → 後方互換 `?url=` の順で中継元ターゲット絶対 URL を復元し、その `origin` を返す純粋関数（復元不能なら `null`）。`authorizationAllowed(incoming, targetOrigin)` は `originFromProxiedReferer(incoming.get("referer"))` が `targetOrigin` と**完全一致**する場合のみ `true` を返す（`Referer` 欠落・パース不能・不一致はすべて `false` ＝ fail-closed）。`forwardableRequestHeaders` / `relayRequestHeaders` の両方が往路 `Authorization` の転送可否に用いる。
 
-### `forwardableRequestHeaders(incoming, targetOrigin)`
+### `forwardableRequestHeaders(incoming, targetOrigin, jarCookie)`
 
 > 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization)
 
-受信リクエストの `Headers` から、ターゲットへ転送してよい認証ヘッダーを**許可リスト**（`Cookie` / `Authorization`）で抜き出し `Record<string, string>` で返す純粋関数。存在するヘッダーのみを含める。全ヘッダー素通しを避け、転送対象を明示的に限定する。`GET` 中継（`/browse` GET / `/api/proxy` GET）が `proxyFetch` の `options.headers` へ渡す（`/browse` POST は `content-type` も併せて渡す）。`Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。`Authorization` は `authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。
+ターゲットへ転送する認証ヘッダーを組み立てる純粋関数。`Cookie` はブラウザ受信分を一切使わず、呼び出し側が `cookieJar.cookieHeader(sessionId, targetOrigin)` で復元した `jarCookie`（空なら付けない）を載せる。`Authorization` は受信 `Headers` から取り、`authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。`GET` 中継（`/browse` GET / `/api/proxy` GET）が `proxyFetch` の `options.headers` へ渡す（`/browse` POST は `content-type` も併せて渡す）。全ヘッダー素通しは避け、転送対象を明示的に限定する。
 
-### `relayRequestHeaders(incoming, targetOrigin)`
+### `relayRequestHeaders(incoming, targetOrigin, jarCookie)`
 
 > 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
 
-SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`）に加え、プロキシ自身の文脈を漏らす `origin` / `referer` を除外し（#27）、`Content-Type` / `Authorization` / `Cookie` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。残す `Cookie` は `scopedCookieHeader(_, targetOrigin)` で現ターゲット origin 分だけに限定する。`Authorization` はサーバー側のスコープ機構が無いため、`authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。
+SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`）に加え、プロキシ自身の文脈を漏らす `origin` / `referer`、およびブラウザの `cookie`（プロキシ自身の `__pxy_sid` / `__pxy_auth` を上流へ漏らさないため）を除外し（#27）、`Content-Type` / `Authorization` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。転送する `Cookie` は呼び出し側が jar から復元した `jarCookie`（空なら付けない）。`Authorization` はサーバー側のスコープ機構が無いため、`authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。
 
 ### `allowedCorsOrigin(origin, host)`
 
@@ -589,6 +578,40 @@ SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエス
 > 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
 
 `OPTIONS` 応答用の CORS 許可ヘッダー（`Access-Control-Allow-Methods/-Headers`・`Max-Age`・`Vary`、および許可時の `Access-Control-Allow-Origin/-Credentials`）を組み立てる純粋関数。`origin` は呼び出し側が `allowedCorsOrigin` で検証済みの値（許可 Origin または `null`）を渡す。**`origin` が非 null の場合のみ** `Access-Control-Allow-Origin` をエコーし `Allow-Credentials: true` を付ける（無検証エコー・`*` フォールバックは行わない。#27）。`Access-Control-Request-Headers` は従来どおりエコーする（無ければ `*`）。
+
+---
+
+## `src/lib/proxy/cookieJar.ts`（サーバー側 Cookie jar・#151 Phase 1）
+
+> 関連仕様: [プロキシ機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション) / [§サイト間アイソレーションの構造的制約](../spec/features/proxy.md#サイト間アイソレーションの構造的制約131)
+
+**役割**: 中継先の `Set-Cookie` をクライアントへ返さず、サーバー側のインメモリ jar に **セッション × origin** 別で保持する。これにより中継 Cookie が `document.cookie` に現れなくなり、脅威 (a)（server-set Cookie 分）を塞ぐ。`rateLimit.ts` 等と同じく単一プロセス前提・プロセス再起動でリセット・複数インスタンス非共有。
+
+### データ構造
+
+```ts
+// Map<sessionId, { origins: Map<origin, Map<cookieName, JarCookie>>, lastAccess }>
+interface JarCookie { value: string; expiresAt: number | null } // null = セッション cookie
+```
+
+### セッション識別（純粋関数 + 生成）
+
+- **`SESSION_COOKIE_NAME = "__pxy_sid"`**: jar を引くためのセッション ID Cookie 名。`__pxy.`（廃止した旧スコープ接頭辞）・`__pxy_auth`（`auth.ts`）と非衝突。
+- **`newSessionId(): string`**: `crypto.randomUUID()` で不透明なセッション ID を生成する。
+- **`buildSessionCookie(sessionId, basePath): string`**: `__pxy_sid=<id>; HttpOnly; SameSite=Lax; Path=<basePath || "/">` を組み立てる純粋関数（`buildAuthCookie` に倣い `Secure` は付けない＝TLS 終端構成）。
+- **`resolveSession(cookieHeader): { id, isNew }`**: 受信 `Cookie` から `__pxy_sid` を読む（`auth.ts` の `parseCookieValue` を再利用）。あれば `{ id, isNew: false }`、無ければ新規 `{ id: newSessionId(), isNew: true }`。`isNew` の場合のみ呼び出し側がレスポンスへ `buildSessionCookie` を `Set-Cookie` する。
+- **`parseSetCookie(setCookie, now): { name, value, expiresAt, deleted } | null`**: 1 行の `Set-Cookie` を解析する純粋関数。`Domain` は無視、`Max-Age`（相対）/ `Expires`（絶対）から `expiresAt` を算出し、`Max-Age<=0` や過去 `Expires` は `deleted` とする。`name=value` 形でなければ `null`。
+
+### `CookieJar`（シングルトン `cookieJar`）
+
+- **`store(sessionId, origin, setCookies, now?)`**: `res.headers.getSetCookie()` の配列を `parseSetCookie` で解析し、`deleted` は除去・それ以外は upsert する。セッションの `lastAccess` を更新し、origin あたりの保持数に上限を設ける。
+- **`cookieHeader(sessionId, origin, now?): string`**: 当該セッション × origin の未失効エントリを `name=value; …` で連結して返す（無ければ空文字）。
+- **GC**: 最終アクセスから `SESSION_TTL_MS` を過ぎたセッション・期限切れエントリを回収する。セッション総数の上限も設け、超過時は最古から退避する（`rateLimit.ts` の `evictExpired` と同方針）。スループット影響を避けるため `store` 呼び出し時に間引いて実行する。
+
+### 呼び出し経路
+
+- 往路: `relayAsset` / `browse` 系 route が `resolveSession(req)` → `cookieJar.cookieHeader(id, targetOrigin)` で `jarCookie` を得て、`forwardableRequestHeaders` / `relayRequestHeaders` の第 3 引数へ渡す。
+- 復路: `relayBrowse` / `relayAsset` が上流レスポンス取得後に `cookieJar.store(id, new URL(finalUrl).origin, res.headers.getSetCookie())` で格納し、`isNew` セッションなら `outHeaders.append("Set-Cookie", buildSessionCookie(id, BASE_PATH))` を付ける。
 
 ---
 
@@ -673,7 +696,7 @@ private perIp = new Map<string, number>(); // IP 単位の同時処理数
 
 ### 定数・設定
 
-- **`AUTH_COOKIE_NAME = "__pxy_auth"`** / **`AUTH_HEADER_NAME = "x-proxy-token"`**: トークン受け渡しに使う Cookie 名・ヘッダー名。Cookie 名は中継先 Cookie のスコープ接頭辞 `__pxy.`（`headers.ts`）と一致しないため、`scopedCookieHeader` でターゲットへ転送されない。
+- **`AUTH_COOKIE_NAME = "__pxy_auth"`** / **`AUTH_HEADER_NAME = "x-proxy-token"`**: トークン受け渡しに使う Cookie 名・ヘッダー名。`__pxy_auth` はプロキシ自身の Cookie で、往路はブラウザの `Cookie` を一切上流へ転送しない（jar から復元する。`cookieJar.ts`・#151 Phase 1）ためターゲットへ漏れない。`__pxy_sid`（セッション ID）とも別名。
 - **`proxyAuthConfigFromEnv(env = process.env): { token: string } | null`**: `PROXY_AUTH_TOKEN` を trim して返す純粋関数（`clientIp.ts` 等の `*FromEnv` パターンに倣う）。未設定・空白のみは `null`（＝認証無効・オープン）。
 
 ### トークン検証（純粋関数）

@@ -5,8 +5,9 @@
 // 未設定・空白のみは無効（オープン）で後方互換。本モジュールは純粋関数で構成し、NextRequest
 // 依存のグルーは呼び出し側（browseGuards / relayAsset / /unlock ルート）に置く。
 
-// トークン受け渡しに使う Cookie 名・ヘッダー名。Cookie 名は中継先 Cookie のスコープ接頭辞
-// "__pxy."（headers.ts）と一致しないため、scopedCookieHeader でターゲットへ転送されない。
+// トークン受け渡しに使う Cookie 名・ヘッダー名。__pxy_auth はプロキシ自身の Cookie で、
+// 往路はブラウザの Cookie を一切上流へ転送しない（jar から復元する。cookieJar.ts・#151 Phase 1）
+// ためターゲットへ漏れない。セッション ID Cookie "__pxy_sid"（cookieJar.ts）とも別名。
 export const AUTH_COOKIE_NAME = "__pxy_auth";
 export const AUTH_HEADER_NAME = "x-proxy-token";
 

@@ -8,6 +8,7 @@ import {
   htmlResponse,
 } from "@/lib/proxy/browseRelay";
 import { getClientIp } from "@/lib/proxy/clientIp";
+import { resolveSession, cookieJar } from "@/lib/proxy/cookieJar";
 
 // 後方互換ルート（?url= クエリ方式）。パス反映ナビ形式（/browse/<scheme>/<host>/<path>・#115）が
 // 正本だが、外部リンク・ブックマーク・アドレスバー入力経由の ?url= も受理する。
@@ -73,10 +74,13 @@ export async function POST(req: NextRequest) {
   if (guard) return guard;
 
   // Cookie / Authorization に加え、Content-Type を転送して
-  // urlencoded / multipart の境界情報を維持する。
+  // urlencoded / multipart の境界情報を維持する。Cookie は jar から復元する（#151 Phase 1）。
+  const session = resolveSession(req.headers.get("cookie"));
+  const jarCookie = cookieJar.cookieHeader(session.id, parsed.origin);
   const headers: Record<string, string> = forwardableRequestHeaders(
     req.headers,
-    parsed.origin
+    parsed.origin,
+    jarCookie
   );
   const contentType = req.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
@@ -90,6 +94,7 @@ export async function POST(req: NextRequest) {
     },
     false,
     false,
-    getClientIp(req.headers)
+    getClientIp(req.headers),
+    session
   );
 }

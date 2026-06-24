@@ -11,6 +11,7 @@ import {
   htmlResponse,
 } from "@/lib/proxy/browseRelay";
 import { getClientIp } from "@/lib/proxy/clientIp";
+import { resolveSession, cookieJar } from "@/lib/proxy/cookieJar";
 
 // ページ遷移のパス反映ルート（/browse/<scheme>/<host>/<path>・正本。#115）。
 // percent-encoding を保つため、デコード済みの catch-all params ではなく生の
@@ -31,15 +32,20 @@ export function GET(req: NextRequest) {
   const guard = browseGuards(req, parsed);
   if (guard) return guard;
 
+  // 往路 Cookie は __pxy_sid セッション × ターゲット origin で jar から復元する（#151 Phase 1）。
+  const session = resolveSession(req.headers.get("cookie"));
+  const jarCookie = cookieJar.cookieHeader(session.id, parsed.origin);
+
   // allowlist 指定サイトはブラウザバック中継（browserFetch）へ昇格する（#69）。
   // allowlist 非該当でも、中継ティアの結果が崩れ/チャレンジなら自動昇格する（#70。GET のみ許可）。
   const useBrowser = shouldUseBrowser(parsed.href, browserTierConfigFromEnv());
   return relayBrowse(
     parsed,
-    { headers: forwardableRequestHeaders(req.headers, parsed.origin) },
+    { headers: forwardableRequestHeaders(req.headers, parsed.origin, jarCookie) },
     useBrowser,
     true,
-    getClientIp(req.headers)
+    getClientIp(req.headers),
+    session
   );
 }
 
@@ -59,9 +65,12 @@ export async function POST(req: NextRequest) {
   const guard = browseGuards(req, parsed);
   if (guard) return guard;
 
+  const session = resolveSession(req.headers.get("cookie"));
+  const jarCookie = cookieJar.cookieHeader(session.id, parsed.origin);
   const headers: Record<string, string> = forwardableRequestHeaders(
     req.headers,
-    parsed.origin
+    parsed.origin,
+    jarCookie
   );
   const contentType = req.headers.get("content-type");
   if (contentType) headers["content-type"] = contentType;
@@ -75,6 +84,7 @@ export async function POST(req: NextRequest) {
     },
     false,
     false,
-    getClientIp(req.headers)
+    getClientIp(req.headers),
+    session
   );
 }
