@@ -6,6 +6,10 @@ const BLOCKED_HEADERS = new Set([
   "x-frame-options",
   "content-encoding",
   "transfer-encoding",
+  // 中継 Cookie はブラウザへ返さず（document.cookie 露出の遮断・#151 Phase 1）、保持は
+  // cookieJar が担う。呼び出し側が res.headers.getSetCookie() を jar へ格納したうえで本関数で
+  // 握り潰す。詳細は docs/spec/features/proxy.md §サイト間 Cookie アイソレーション。
+  "set-cookie",
   // 上流が identity 要求を無視して gzip 応答すると、fetch は本文を展開して渡すが上流の
   // content-length は圧縮時サイズのまま残る。content-encoding を除去しつつこの値を転送すると
   // 実本文長と宣言長が食い違い ERR_CONTENT_LENGTH_MISMATCH／本文切り詰めを招く（#97）。
@@ -29,79 +33,22 @@ export function htmlUiHeaders(): Record<string, string> {
   };
 }
 
-export function sanitizeHeaders(
-  headers: Headers,
-  targetOrigin: string
-): Headers {
+// レスポンスヘッダーをサニタイズする純粋関数。BLOCKED_HEADERS（Set-Cookie を含む）を除去する。
+// 中継 Cookie の保持は呼び出し側が cookieJar.store(...) で行うため、本関数は Set-Cookie を
+// 握り潰すだけ（ブラウザへ返さない・#151 Phase 1）。
+// 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §サイト間 Cookie アイソレーション
+export function sanitizeHeaders(headers: Headers): Headers {
   const result = new Headers();
   headers.forEach((value, name) => {
     if (!BLOCKED_HEADERS.has(name.toLowerCase())) {
       try {
-        if (name.toLowerCase() === "set-cookie") {
-          result.append(name, sanitizeSetCookie(value, targetOrigin));
-        } else {
-          result.set(name, value);
-        }
+        result.set(name, value);
       } catch {
         // 不正な値（改行文字など）を含むヘッダーはスキップ
       }
     }
   });
   return result;
-}
-
-// サイト間 Cookie アイソレーション用の接頭辞。区切り "." は base64url が使わない
-// 文字なので、復元時に最初の "." でスコープ鍵と元の Cookie 名を一意に分離できる。
-// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
-const COOKIE_SCOPE_PREFIX = "__pxy.";
-
-// ターゲット origin から Cookie 名へ付与するスコープ鍵（base64url(origin)）を生成する
-// 純粋関数。URL.origin は IDN を punycode 化するため ASCII で、Cookie 名 token に
-// 使える文字のみになる。
-// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
-export function cookieScopeKey(origin: string): string {
-  return btoa(origin)
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-}
-
-// Set-Cookie 値から Domain 属性を除去し、Cookie 名をターゲット origin でスコープ化する
-// 純粋関数。Path / Secure / SameSite は維持する。
-// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
-export function sanitizeSetCookie(value: string, targetOrigin: string): string {
-  const parts = value
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => !/^domain=/i.test(part));
-
-  const [nameValue, ...attrs] = parts;
-  const eq = nameValue.indexOf("=");
-  // name=value の形でなければスコープ化できないため、Domain 除去のみで返す。
-  if (eq === -1) return parts.join("; ");
-
-  const name = nameValue.slice(0, eq);
-  const cookieValue = nameValue.slice(eq + 1);
-  const scopedName = `${COOKIE_SCOPE_PREFIX}${cookieScopeKey(targetOrigin)}.${name}`;
-  return [`${scopedName}=${cookieValue}`, ...attrs].join("; ");
-}
-
-// 受信 Cookie ヘッダー値から、targetOrigin のスコープ鍵に一致する Cookie だけを抽出し、
-// 接頭辞を外して元の名前で連結する純粋関数。別 origin にスコープされた Cookie・
-// 非スコープの Cookie（プロキシ自身のインフラ認証 cookie 等）は除外される。
-// 残る Cookie が無ければ空文字を返す（呼び出し側は Cookie ヘッダーを付けない）。
-// 仕様: docs/spec/features/proxy.md §サイト間 Cookie アイソレーション
-export function scopedCookieHeader(
-  cookieHeader: string,
-  targetOrigin: string
-): string {
-  const prefix = `${COOKIE_SCOPE_PREFIX}${cookieScopeKey(targetOrigin)}.`;
-  return cookieHeader
-    .split(";")
-    .map((part) => part.trim())
-    .filter((part) => part.startsWith(prefix))
-    .map((part) => part.slice(prefix.length))
-    .join("; ");
 }
 
 // 受信 Referer（プロキシ origin の URL）から中継元ページのターゲット origin を復元する
@@ -157,31 +104,22 @@ function authorizationAllowed(
   return source !== null && source === targetOrigin;
 }
 
-// ターゲットへ転送してよいリクエスト認証ヘッダーの許可リスト。
-// 全ヘッダー素通しを避け、明示的に限定する。
-const FORWARD_REQUEST_HEADERS = ["cookie", "authorization"] as const;
-
-// 受信リクエストの Headers から、転送対象の認証ヘッダー（Cookie / Authorization）を
-// 許可リストで抽出する純粋関数。存在するヘッダーのみを含める。
+// ターゲットへ転送する認証ヘッダー（Cookie / Authorization）を組み立てる純粋関数。
+// Cookie はブラウザ受信分を一切使わず、呼び出し側が cookieJar から復元した jarCookie
+// （空文字なら付けない）を載せる（#151 Phase 1。document.cookie 露出の遮断）。
+// Authorization は中継元 origin（Referer 由来）が宛先と一致する場合のみ転送する（#136）。
 // 各 Route Handler はこの結果を proxyFetch の options.headers へ渡す。
-// 仕様: docs/spec/features/proxy.md §認証情報の転送
+// 仕様: docs/spec/features/proxy.md §認証情報の転送 / §サイト間 Cookie アイソレーション
 export function forwardableRequestHeaders(
   incoming: Headers,
-  targetOrigin: string
+  targetOrigin: string,
+  jarCookie: string
 ): Record<string, string> {
   const result: Record<string, string> = {};
-  for (const name of FORWARD_REQUEST_HEADERS) {
-    const value = incoming.get(name);
-    if (!value) continue;
-    if (name === "cookie") {
-      const scoped = scopedCookieHeader(value, targetOrigin);
-      if (scoped) result[name] = scoped;
-    } else if (name === "authorization") {
-      // Authorization は中継元 origin が宛先と一致する場合のみ転送する（#136）。
-      if (authorizationAllowed(incoming, targetOrigin)) result[name] = value;
-    } else {
-      result[name] = value;
-    }
+  if (jarCookie) result.cookie = jarCookie;
+  const authorization = incoming.get("authorization");
+  if (authorization && authorizationAllowed(incoming, targetOrigin)) {
+    result.authorization = authorization;
   }
   return result;
 }
@@ -191,6 +129,8 @@ export function forwardableRequestHeaders(
 // origin / referer はプロキシ自身の origin・/browse?url=… 閲覧 URL をターゲットへ
 // 漏らすため除外する（#27。サーバー間中継のため Origin 無し＝同一オリジン扱いと
 // なり多くの API でむしろ整合する）。
+// cookie はブラウザ受信分（プロキシ自身の __pxy_sid / __pxy_auth 等）を上流へ漏らさない
+// ため除外し、転送する Cookie は cookieJar から復元した jarCookie だけを載せる（#151 Phase 1）。
 const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
   "host",
   "connection",
@@ -205,27 +145,26 @@ const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
   "accept-encoding",
   "origin",
   "referer",
+  "cookie",
 ]);
 
 // SW が /api/proxy へ振り向けた非 GET 中継向けに、リクエストヘッダーを
 // 拒否リスト方式で広めに転送する純粋関数。Content-Type / Authorization /
-// Cookie / X-* などカスタムヘッダーを保持し、ターゲットの API を動かす。
-// Authorization は中継元 origin（Referer から復元）が宛先 targetOrigin と一致する
-// 場合のみ転送する（authorizationAllowed。#136）。
-// 仕様: docs/spec/features/proxy.md §CORS プリフライト対応 / §Authorization のオリジンスコープ
+// X-* などカスタムヘッダーを保持し、ターゲットの API を動かす。
+// Cookie はブラウザ受信分を使わず、呼び出し側が cookieJar から復元した jarCookie
+// （空文字なら付けない）を載せる（#151 Phase 1）。Authorization は中継元 origin
+// （Referer から復元）が宛先 targetOrigin と一致する場合のみ転送する（authorizationAllowed。#136）。
+// 仕様: docs/spec/features/proxy.md §CORS プリフライト対応 / §サイト間 Cookie アイソレーション / §Authorization のオリジンスコープ
 export function relayRequestHeaders(
   incoming: Headers,
-  targetOrigin: string
+  targetOrigin: string,
+  jarCookie: string
 ): Record<string, string> {
   const result: Record<string, string> = {};
+  if (jarCookie) result.cookie = jarCookie;
   incoming.forEach((value, name) => {
     const lower = name.toLowerCase();
     if (RELAY_BLOCKED_REQUEST_HEADERS.has(lower)) return;
-    if (lower === "cookie") {
-      const scoped = scopedCookieHeader(value, targetOrigin);
-      if (scoped) result[name] = scoped;
-      return;
-    }
     if (lower === "authorization") {
       // Authorization は中継元 origin が宛先と一致する場合のみ転送する（#136）。
       if (authorizationAllowed(incoming, targetOrigin)) result[name] = value;

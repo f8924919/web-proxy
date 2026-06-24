@@ -14,6 +14,12 @@ import {
   buildCorsPreflightHeaders,
   allowedCorsOrigin,
 } from "@/lib/proxy/headers";
+import {
+  cookieJar,
+  resolveSession,
+  buildSessionCookie,
+  setCookiesFromHeaders,
+} from "@/lib/proxy/cookieJar";
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { assetRateLimiter } from "@/lib/proxy/rateLimit";
 import { isAllowedTarget, allowedPortsFromEnv } from "@/lib/proxy/targetPolicy";
@@ -28,6 +34,8 @@ import {
   AUTH_HEADER_NAME,
 } from "@/lib/proxy/auth";
 import { logError } from "@/lib/logger";
+
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 // アセット中継の共通処理。両 route（パス反映形式の [...slug] と後方互換の ?url=）が
 // ターゲット絶対 URL を決定したうえで本関数へ委譲する。
@@ -84,13 +92,16 @@ export async function relayAsset(
   }
 
   try {
+    // Cookie はブラウザ受信分を使わず、__pxy_sid セッション × ターゲット origin で jar から
+    // 復元した分だけを上流へ転送する（#151 Phase 1。サイト間アイソレーション）。
+    const session = resolveSession(req.headers.get("cookie"));
+    const jarCookie = cookieJar.cookieHeader(session.id, parsed.origin);
     // GET/HEAD は既存の許可リスト（Cookie/Authorization）を維持。
     // 非 GET は拒否リスト方式で広めにヘッダーを転送し、ボディも転送する。
-    // Cookie は現ターゲット origin にスコープされた分だけを転送する（サイト間アイソレーション）。
     const isBodyMethod = req.method !== "GET" && req.method !== "HEAD";
     const headers = isBodyMethod
-      ? relayRequestHeaders(req.headers, parsed.origin)
-      : forwardableRequestHeaders(req.headers, parsed.origin);
+      ? relayRequestHeaders(req.headers, parsed.origin, jarCookie)
+      : forwardableRequestHeaders(req.headers, parsed.origin, jarCookie);
 
     let res: Response;
     let finalUrl: string;
@@ -108,9 +119,21 @@ export async function relayAsset(
     }
 
     const contentType = res.headers.get("content-type") ?? "";
-    // Set-Cookie のスコープ鍵にはリダイレクト追従後の最終 URL の origin を用いる
-    // （書き換え基準 baseUrl と揃える。#42）。
-    const outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
+    // 中継 Cookie はブラウザへ返さず、リダイレクト追従後の最終 URL の origin（書き換え基準
+    // baseUrl と揃える。#42）をキーに jar へ格納する（#151 Phase 1）。新規セッションなら
+    // __pxy_sid を発行する。
+    cookieJar.store(
+      session.id,
+      new URL(finalUrl).origin,
+      setCookiesFromHeaders(res.headers)
+    );
+    const outHeaders = sanitizeHeaders(res.headers);
+    if (session.isNew) {
+      outHeaders.append(
+        "Set-Cookie",
+        buildSessionCookie(session.id, BASE_PATH)
+      );
+    }
 
     // 要求 Origin が自プロキシと同一オリジンの場合のみ CORS 許可ヘッダーを付与する。
     // 第三者クロスオリジンへは無検証エコー＋Allow-Credentials を返さない（#27）。
