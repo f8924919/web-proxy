@@ -667,6 +667,41 @@ private perIp = new Map<string, number>(); // IP 単位の同時処理数
 
 ---
 
+## `src/lib/proxy/auth.ts`（認証 / 接続元許可制・#148）
+
+**役割**: 任意の共有トークン認証（既定オフ）の純粋関数群。`PROXY_AUTH_TOKEN` を設定したときのみ全中継経路で認証を要求する。中継本体（`browseGuards` / `relayAsset`）と解錠ルート（`/unlock`）が共通利用する。仕様は [機能仕様 §認証 / 接続元許可制](../spec/features/proxy.md#認証--接続元許可制任意148)。
+
+### 定数・設定
+
+- **`AUTH_COOKIE_NAME = "__pxy_auth"`** / **`AUTH_HEADER_NAME = "x-proxy-token"`**: トークン受け渡しに使う Cookie 名・ヘッダー名。Cookie 名は中継先 Cookie のスコープ接頭辞 `__pxy.`（`headers.ts`）と一致しないため、`scopedCookieHeader` でターゲットへ転送されない。
+- **`proxyAuthConfigFromEnv(env = process.env): { token: string } | null`**: `PROXY_AUTH_TOKEN` を trim して返す純粋関数（`clientIp.ts` 等の `*FromEnv` パターンに倣う）。未設定・空白のみは `null`（＝認証無効・オープン）。
+
+### トークン検証（純粋関数）
+
+- **`tokensMatch(presented: string | null, expected: string): boolean`**: タイミング攻撃を避ける**定数時間比較**。長さが違っても早期 return せず全長を走査する。`presented` が `null` なら `false`。
+- **`parseCookieValue(cookieHeader: string | null, name: string): string | null`**: `Cookie` ヘッダー値から指定名の Cookie を取り出す純粋関数。
+- **`presentedToken(headerValue: string | null, cookieHeader: string | null): string | null`**: `X-Proxy-Token` ヘッダー（優先）→ `__pxy_auth` Cookie の順に提示トークンを取り出す。
+- **`isAuthorized(headerValue, cookieHeader, config): boolean`**: `config` が `null`（無効）なら常に `true`。有効なら `tokensMatch(presentedToken(...), config.token)`。
+
+### 解錠 UI・Cookie・リダイレクト（純粋関数）
+
+- **`buildAuthCookie(token: string, basePath: string): string`**: `__pxy_auth=<token>; HttpOnly; SameSite=Lax; Path=<basePath || "/">` を組み立てる。`Secure` は TLS 終端構成（アプリは http で受ける）を壊さないため付けない（トランスポート層の責務）。
+- **`safeRedirectPath(raw: string | null, basePath: string): string`**: 解錠後の戻り先を検証する純粋関数。`/` 始まりかつ `//`（プロトコル相対）でないアプリ相対パスのみ通し、それ以外は `${basePath || ""}/` へフォールバック（オープンリダイレクト防止）。
+- **`unlockHtml(redirectTo: string, basePath: string, opts?: { error?: boolean }): string`**: トークン入力フォーム付き 401 ページ。フォームは `POST {basePath}/unlock`（ブラウザ送信 URL のため `BASE_PATH` を前置）、隠しフィールドに `redirect`（アプリ相対・`BASE_PATH` なし）を持つ。`opts.error` で不一致メッセージを表示。
+
+### 配線
+
+- **`browseGuards`（`browseRelay.ts`）**: 先頭でレート制限より前に認証を検査し、未認証なら `unlockHtml` を `401`（`htmlUiHeaders` で `X-Frame-Options: DENY`）で返す。`redirect` は `req.nextUrl.pathname + search`（アプリ相対）。
+- **`relayAsset`（`relayAsset.ts`）**: 入口で未認証なら `401`（プレーン）。レート制限・同時接続スロットを消費する前に弾く。
+- **`/unlock`（`src/app/unlock/route.ts`）**: `POST` は `token` / `redirect` を読み、`tokensMatch` で検証。一致なら `Set-Cookie: buildAuthCookie(...)` 付きで `safeRedirectPath(redirect)`（`BASE_PATH` なしのアプリ相対 Location。リバースプロキシが prefix を再付加するため。#74）へ `303`。不一致は `unlockHtml(..., { error: true })` を `401`。`GET` は手動解錠用にフォーム（`200`）を返す。認証無効時はホームへ `303`。
+- **SW / 横取りシム carve-out**: `isProxyOwnPath`（`rewrite.ts`）と `public/sw.js` の対の関数に `/unlock` を自前ルートとして追加し、フォーム POST が `/api/proxy` へ書き換えられないようにする。
+
+### 制約
+
+- 単一の共有トークン（利用者識別・個別失効なし）。トークンは Cookie 値・ヘッダーに平文で載るため TLS 終端必須。インメモリ状態を持たないため複数インスタンスでも同一トークンで一貫動作する。
+
+---
+
 ## `src/lib/proxy/loopGuard.ts`
 
 **役割**: `enablejs` のような JS 自己再ナビゲーション無限ループを検出する。`rateLimit.ts` と同じインメモリ・スライディングウィンドウ方式だが、キーが異なる。

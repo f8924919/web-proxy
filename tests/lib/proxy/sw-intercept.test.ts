@@ -41,6 +41,7 @@ describe("isProxyOwnPath", () => {
     ["/_next/image", false],
     ["/_next/data/build/x.json", true],
     ["/sw.js", true],
+    ["/unlock", true],
     ["/images/nav_logo229.png", false],
     ["/xjs/_/js/k=foo", false],
     ["/browser/app.js", false],
