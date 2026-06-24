@@ -10,6 +10,7 @@ import {
   relayRequestHeaders,
   buildCorsPreflightHeaders,
   allowedCorsOrigin,
+  htmlUiHeaders,
 } from "@/lib/proxy/headers";
 
 const ORIGIN_A = "https://a.example";
@@ -90,6 +91,14 @@ describe("sanitizeHeaders", () => {
     expect(result.get("content-type")).toBe("text/html; charset=utf-8");
   });
 
+  // #131: 中継レスポンスには UI 用のクリックジャッキング防止ヘッダーを付けない
+  // （iframe 埋め込み中継を壊さないため）。X-Frame-Options はむしろ除去される。
+  test("中継レスポンスに X-Frame-Options を付与しない（#131）", () => {
+    const headers = new Headers({ "content-type": "text/html; charset=utf-8" });
+    const result = sanitizeHeaders(headers, ORIGIN_A);
+    expect(result.has("x-frame-options")).toBe(false);
+  });
+
   test("cache-control はそのまま維持する", () => {
     const headers = new Headers({ "cache-control": "max-age=3600" });
     const result = sanitizeHeaders(headers, ORIGIN_A);
@@ -103,6 +112,16 @@ describe("sanitizeHeaders", () => {
     expect(result.get("set-cookie")).toBe(
       `${scoped(ORIGIN_A, "session", "abc")}; Path=/`
     );
+  });
+});
+
+describe("htmlUiHeaders（#131）", () => {
+  test("クリックジャッキング防止に X-Frame-Options: DENY を付与する", () => {
+    expect(htmlUiHeaders()["X-Frame-Options"]).toBe("DENY");
+  });
+
+  test("HTML の Content-Type を含む", () => {
+    expect(htmlUiHeaders()["Content-Type"]).toBe("text/html; charset=utf-8");
   });
 });
 
