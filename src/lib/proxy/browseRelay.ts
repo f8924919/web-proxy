@@ -24,7 +24,16 @@ import {
 } from "@/lib/proxy/concurrency";
 import { navigationLoopGuard, loopGuidanceHtml } from "@/lib/proxy/loopGuard";
 import { getClientIp } from "@/lib/proxy/clientIp";
+import {
+  proxyAuthConfigFromEnv,
+  isAuthorized,
+  safeRedirectPath,
+  unlockHtml,
+  AUTH_HEADER_NAME,
+} from "@/lib/proxy/auth";
 import { logError } from "@/lib/logger";
+
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 // ページ遷移（/browse）の中継処理。パス反映形式（/browse/<scheme>/<host>/<path>・#115）と
 // 後方互換の ?url= 形式の両ルートが、ターゲット絶対 URL を決定したうえで本モジュールへ委譲する。
@@ -54,6 +63,27 @@ function loopGuidanceResponse(): Response {
 // レート制限・ナビゲーションループ検出を行い、打ち切るべきなら Response を返す。
 // 続行可能なら null を返す。GET / POST の両ルートで共通利用する。
 export function browseGuards(req: NextRequest, parsed: URL): Response | null {
+  // 任意の共有トークン認証（#148）。有効（PROXY_AUTH_TOKEN 設定時）かつ未認証なら、
+  // レート制限等を消費する前にトークン入力フォーム付き 401 を返す。redirect は元の閲覧 URL
+  // （アプリ相対・BASE_PATH なし）。解錠後に /unlock がここへ 303 で戻す。
+  const authConfig = proxyAuthConfigFromEnv();
+  if (
+    !isAuthorized(
+      req.headers.get(AUTH_HEADER_NAME),
+      req.headers.get("cookie"),
+      authConfig
+    )
+  ) {
+    const redirectTo = safeRedirectPath(
+      req.nextUrl.pathname + req.nextUrl.search,
+      BASE_PATH
+    );
+    return new Response(unlockHtml(redirectTo, BASE_PATH), {
+      status: 401,
+      headers: htmlUiHeaders(),
+    });
+  }
+
   const ip = getClientIp(req.headers);
   try {
     pageRateLimiter.check(ip);
