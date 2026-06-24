@@ -12,6 +12,8 @@ import {
   STEALTH_LAUNCH_ARGS,
   STEALTH_INIT_SCRIPT,
   inlineCssomStyles,
+  measureDomByteLength,
+  domSizeExceedsLimit,
 } from "@/lib/proxy/browserFetch";
 
 describe("parseBrowserHosts", () => {
@@ -387,5 +389,43 @@ describe("inlineCssomStyles（#120）", () => {
     });
     expect(() => inlineCssomStyles(doc as never)).not.toThrow();
     expect(appended).toHaveLength(0);
+  });
+});
+
+// measureDomByteLength（#144）。page.content() で Node ヒープへ全量展開する前に、
+// ブラウザ context 内で描画済み DOM の UTF-8 バイト数を概算する DOM 関数。
+// 実ブラウザ（page.evaluate）配線はテスト対象外（テスト方針）のため、
+// documentElement.outerHTML を持つ document 互換オブジェクトで検証する。
+describe("measureDomByteLength（#144）", () => {
+  const fakeDoc = (outerHTML: string) =>
+    ({ documentElement: { outerHTML } }) as unknown as Document;
+
+  test("ASCII のみは文字数＝UTF-8 バイト数", () => {
+    const html = "<html><body>hello</body></html>";
+    expect(measureDomByteLength(fakeDoc(html))).toBe(html.length);
+  });
+
+  test("マルチバイト文字は UTF-8 バイト数で測る（文字列長より大きい）", () => {
+    const html = "<p>あいう</p>"; // 「あいう」は各 3 バイト
+    const byteLength = measureDomByteLength(fakeDoc(html));
+    expect(byteLength).toBe(new TextEncoder().encode(html).length);
+    expect(byteLength).toBeGreaterThan(html.length);
+  });
+
+  test("空 DOM は 0 バイト", () => {
+    expect(measureDomByteLength(fakeDoc(""))).toBe(0);
+  });
+});
+
+// domSizeExceedsLimit（#144）。概算バイト数が上限を超えるかの純粋判定。
+// readTextWithLimit と同じく「>（厳密超過）」で揃える。
+describe("domSizeExceedsLimit（#144）", () => {
+  test.each([
+    [9, 10, false],
+    [10, 10, false], // 上限ちょうどは許可（境界）
+    [11, 10, true],
+    [0, 10, false],
+  ])("byteLength=%p, maxBytes=%p → %p", (byteLength, maxBytes, expected) => {
+    expect(domSizeExceedsLimit(byteLength, maxBytes)).toBe(expected);
   });
 });
