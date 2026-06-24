@@ -9,6 +9,8 @@ import {
   assertSsrfAllowed,
   firstBlockedAddress,
   DEFAULT_USER_AGENT,
+  BodyTooLargeError,
+  maxBufferBytesFromEnv,
   type ProxyFetchResult,
   type ProxyRequestOptions,
 } from "./fetch";
@@ -242,6 +244,24 @@ export function inlineCssomStyles(doc: Document = document): void {
   }
 }
 
+// 描画済み DOM の UTF-8 バイト数を概算する（#144）。page.content() で Node ヒープへ全量
+// 転送する前に page.evaluate でブラウザ context 内で測り、上限超過なら取得を打ち切るために使う。
+// 文字列長（UTF-16 コード単位数）ではなくバイト数で測り、#134（PROXY_MAX_BUFFER_BYTES）の
+// バイト基準と揃える（マルチバイト文字を過小評価しないため）。
+// inlineCssomStyles と同じく page.evaluate で実行するため、doc 既定値はブラウザの document。
+export function measureDomByteLength(doc: Document = document): number {
+  return new TextEncoder().encode(doc.documentElement.outerHTML).length;
+}
+
+// 概算 DOM バイト数が上限を超えるか判定する純粋関数（#144）。readTextWithLimit と同じく
+// 「>（厳密超過）」で判定し、上限ちょうどは許可する。
+export function domSizeExceedsLimit(
+  byteLength: number,
+  maxBytes: number
+): boolean {
+  return byteLength > maxBytes;
+}
+
 // ===== ランタイム配線（I/O・テスト対象外） =====
 
 // プロセス内で 1 つのブラウザを再利用する（起動コスト削減）。
@@ -383,6 +403,19 @@ export async function browserFetch(
     // inlineCssomStyles の参照を直接渡す（ラッパー () => inlineCssomStyles() は閉包参照を解決できず
     // ブラウザ側で ReferenceError になる）。引数なし呼び出しで doc は既定の document を使う。
     await page.evaluate(inlineCssomStyles as () => void).catch(() => {});
+
+    // page.content() で描画済み DOM を Node ヒープへ全量転送する前に、ブラウザ context 内で
+    // DOM の UTF-8 バイト数を概算し、上限（#134 と同じ PROXY_MAX_BUFFER_BYTES）超過なら
+    // 取得を打ち切る（#144）。readTextWithLimit は page.content() 後の Node 側文字列にしか
+    // 効かず、ブラウザティアではメモリ常駐が「手遅れ」になるため。測定が失敗したら 0（上限内）
+    // とみなして続行し、後段の readTextWithLimit を安全網に残す（ベストエフォート）。
+    const domByteLength = await page
+      .evaluate(measureDomByteLength as () => number)
+      .catch(() => 0);
+    if (domSizeExceedsLimit(domByteLength, maxBufferBytesFromEnv())) {
+      throw new BodyTooLargeError();
+    }
+
     const html = await page.content();
 
     // ブラウザの cookie jar をスコープ化のため Set-Cookie 化して返す。

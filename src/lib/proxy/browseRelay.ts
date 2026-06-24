@@ -86,6 +86,9 @@ async function fetchTarget(
   } catch (err) {
     // SSRF ブロックは 403 として扱うため伝播させる。
     if (err instanceof SsrfBlockedError) throw err;
+    // DOM サイズ上限超過（#144）は中継ティアへフォールバックせず 413 として扱うため伝播させる
+    // （フォールバックすると上限超過の中継先を別経路で再取得することになり挙動が揃わない）。
+    if (err instanceof BodyTooLargeError) throw err;
     logError("[proxy/browser-fallback]", err);
     return proxyFetch(url, fetchOptions);
   }
@@ -135,6 +138,11 @@ export async function relayBrowse(
     } catch (err) {
       if (err instanceof SsrfBlockedError) {
         return htmlResponse("アクセスできない URL です。", 403);
+      }
+      // ブラウザティアの DOM サイズ上限超過（#144）。展開後経路（下の catch）の 413 と
+      // メッセージ・ステータスを揃える。
+      if (err instanceof BodyTooLargeError) {
+        return htmlResponse("ページのサイズが大きすぎます。", 413);
       }
       if (err instanceof FetchTimeoutError) {
         return htmlResponse("サイトに接続できませんでした。", 502);

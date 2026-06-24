@@ -233,6 +233,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 `relayBrowse`（HTML）・`relayAsset`（CSS）はこれを用いて読み、`BodyTooLargeError` を捕捉して `413` を返す。書き換え不要アセットは `res.body` ストリーム透過のため対象外。
 
+ブラウザティア（`browserFetch`）は `page.content()` で DOM 全体を Node ヒープへ展開した後でしか `readTextWithLimit` が効かないため、`browserFetch` 側で `page.content()` の**前**に DOM サイズを概算して同じ上限で打ち切る（[§browserFetch.ts](#srclibproxybrowserfetchts) の `measureDomByteLength` / `domSizeExceedsLimit`・#144）。`browserFetch` が投げる `BodyTooLargeError` は `relayBrowse` の `fetchTarget` で（`SsrfBlockedError` と同様に）フォールバックさせず伝播させ、`413` へ揃える。
+
 ---
 
 ## `src/lib/proxy/browserFetch.ts`
@@ -272,6 +274,21 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 - **配線**: `browserFetch` で `page.content()` を呼ぶ直前に `page.evaluate(inlineCssomStyles)` を実行する。`inlineCssomStyles` は外部参照を持たず DOM グローバルのみで完結させる（`page.evaluate` がブラウザ context で実行するため。`doc` 引数の既定値はブラウザの `document`）。ブラウザティアでは常時実行（env フラグなし）。
 - **テスト**: `inlineCssomStyles` を `document` 互換オブジェクトに対する単体テストで検証する。`page.evaluate` の I/O 配線は[テスト方針](../testing/policy.md)によりテスト対象外。
 
+### 描画済み DOM のサイズ上限（DOM 概算関数・#144）
+
+> 関連仕様: [プロキシ機能仕様 §browserFetch の振る舞い](../spec/features/proxy.md#browserfetch-の振る舞い) / [§中継本文のサイズ上限](../spec/features/proxy.md#中継本文のサイズ上限メモリ枯渇-dos-対策134)。対応 Issue: [#144](https://github.com/f8924919/web-proxy/issues/144)。
+
+`readTextWithLimit`（#134）は `proxyFetch` のストリーム本文にしか効かず、`browserFetch` は `page.content()` で描画済み DOM を文字列化した時点で Node ヒープへ全量展開されるため上限検査が「手遅れ」になる。これを防ぐため `page.content()` の**前**に DOM サイズを概算して同じ上限で打ち切る。
+
+| 関数 / 役割                                 | 役割                                                                                                                                                                                                                                                                                       |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `measureDomByteLength(doc?)`                | ブラウザ context 内で `doc.documentElement.outerHTML` の UTF-8 バイト数（`new TextEncoder().encode(...).length`）を返す。`page.evaluate` で実行するため `doc` 既定値はブラウザの `document`。バイト基準で #134 の上限と揃える（文字列長＝UTF-16 単位数だとマルチバイトを過小評価するため） |
+| `domSizeExceedsLimit(byteLength, maxBytes)` | 概算バイト数が上限を超えるか判定する純粋関数。`readTextWithLimit` と同じく **`>`（厳密超過）** で判定する                                                                                                                                                                                  |
+
+- **配線**: `browserFetch` で `inlineCssomStyles` 実体化の後・`page.content()` の直前に `page.evaluate(measureDomByteLength)` で概算し、`domSizeExceedsLimit(byteLength, maxBufferBytesFromEnv())` が真なら `page.content()` を呼ばずに `BodyTooLargeError` を投げる。測定 evaluate が失敗した場合は概算 0（上限内）として続行し、後段の `readTextWithLimit` を安全網に残す（ベストエフォート方針は `inlineCssomStyles` と同じ）。
+- **伝播**: `fetchTarget`（`browseRelay.ts`）は `browserFetch` の `BodyTooLargeError` を `SsrfBlockedError` 同様にフォールバックさせず再 throw し、`relayBrowse` の取得時 `catch` が `413` を返す（展開後経路の 413 とメッセージ・ステータスを揃える）。
+- **テスト**: `measureDomByteLength`（`document` 互換オブジェクト・マルチバイト）と `domSizeExceedsLimit`（境界値）を単体テスト対象とする。`page.evaluate` の I/O 配線は[テスト方針](../testing/policy.md)によりテスト対象外。
+
 ### ブラウザ実行基盤の差し替え（純粋関数 + `getBrowser`・#71）
 
 > 関連仕様: [プロキシ機能仕様 §ブラウザ実行基盤](../spec/features/proxy.md#ブラウザ実行基盤バックエンドの差し替え71)。比較・デプロイは [setup.md §9](../setup.md#9-本番デプロイブラウザ実行基盤71)。
@@ -308,7 +325,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 - **Playwright は遅延ロード**（`await import("playwright")`）。ティアが使われない限り読み込まない（バンドル肥大・常時ロードを避ける）。バックエンドは `getBrowser()` が `browserBackendFromEnv()` に従い launch / CDP を選ぶ（#71）。
 - **SSRF**: 初回ナビゲーション URL に `assertSsrfAllowed`（`fetch.ts` から公開）を適用し、ブラウザの**全サブリクエスト**にも `context.route` 傍受で**全アドレス（A / AAAA）**のブロックリスト照合（IPv4 / IPv6 両対応）を適用する（1 つでもブロック対象なら中断）。ただし Chromium の接続時再解決のため IP ピン留めはできず、リバインディングの残存窓がある（[機能仕様 §SSRF（不弱化）](../spec/features/proxy.md#ssrf不弱化)）。
 - **コンテキスト**: 既定 UA（`PROXY_USER_AGENT` で上書き可、`fetch.ts` の `DEFAULT_USER_AGENT`）と `options.headers`（`Cookie` / `Authorization` 等）を `extraHTTPHeaders` として適用し、リクエストごとに新規 context を作って分離する。
-- **取得**: `page.goto`（`resolveBrowserWaitConfig` の待機）→ settle 待ち → `page.content()`（本文）/ `page.url()`（finalUrl）。失敗時もベストエフォートで収集して返す。
+- **取得**: `page.goto`（`resolveBrowserWaitConfig` の待機）→ settle 待ち → `inlineCssomStyles` 実体化 → **DOM サイズ概算（`measureDomByteLength`）で上限超過なら打ち切り（#144）** → `page.content()`（本文）/ `page.url()`（finalUrl）。失敗時もベストエフォートで収集して返す。
 - **Cookie ウォーミング**: `context.cookies()` を `cookieToSetCookie` で `Set-Cookie` 化し、`text/html` の `Response` ヘッダーへ載せる。以降は `relayBrowse` の `sanitizeHeaders` が既存どおりスコープ化する。
 - **ライフサイクル**: ブラウザはプロセス内で再利用し、context はリクエストごとに作って確実に close する。同時実行数を上限（`PROXY_BROWSER_MAX_CONCURRENCY`、既定 2）で絞る。
 - **テスト**: 純粋関数（上記）のみ単体テスト対象。ブラウザ I/O は[テスト方針](../testing/policy.md)によりテスト対象外。
