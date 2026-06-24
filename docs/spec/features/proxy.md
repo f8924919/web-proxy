@@ -453,6 +453,8 @@ HTML / CSS は URL 書き換え（`rewriteHtml` / `rewriteCss`）のために本
 - **二段の判定**: ①応答の `Content-Length` が上限を超えると宣言していれば、本文を読む前に即座に打ち切る（早期判定）。②`Content-Length` が無い・過少申告の場合に備え、本文を**ストリームで読みながら実バイト数を加算**し、上限を超えた時点でストリームを `cancel` して打ち切る。
 - **上限超過時の応答**: 本文を打ち切り、`413`（Payload Too Large）を返す。上流到達不能・タイムアウト等のゲートウェイ異常（`502`）とは区別する。
 - **上限値**: 既定 **10 MiB**（`10 * 1024 * 1024` バイト）。環境変数 `PROXY_MAX_BUFFER_BYTES`（サーバー専用。`NEXT_PUBLIC_` 接頭辞なし）で上書きできる。正の整数以外・未設定は既定値を用いる。
+- **ブラウザティアの事前検査（#144）**: ブラウザバック中継（`browserFetch`）は `page.content()` で描画済み DOM を文字列化した時点でメモリへ全量展開されるため、上記②のストリーム検査（`readTextWithLimit`）では「手遅れ」になる（巨大文字列はすでに常駐済み）。`browserFetch` のレスポンスには `Content-Length` も付かず①の早期判定も効かない。これを防ぐため、`page.content()` を呼ぶ**前**にブラウザ context 内で描画済み DOM の UTF-8 バイト数を概算し（`new TextEncoder().encode(document.documentElement.outerHTML).length`）、同じ上限（`PROXY_MAX_BUFFER_BYTES`）を超えるなら取得を打ち切って `413` を返す（中継ティアの挙動と揃える）。測定はブラウザプロセス内で行うため、Node プロセスへ巨大文字列を全量転送する前に未然に打ち切れる。詳細は [§browserFetch の振る舞い](#browserfetch-の振る舞い)。
+- **ブラウザティア事前検査の限界（#144）**: 上記は**完全なストリーミング上限ではなく DOM 概算ベース**であり、(1) 概算値は `page.content()` の実シリアライズ結果と厳密一致しない（属性正規化・空白等で差が出る）、(2) 概算文字列の生成自体はブラウザプロセス内で一時的にメモリを使う（保護対象は Node プロセスのヒープ）、(3) `inlineCssomStyles`（#120）による CSSOM 実体化で増幅したサイズも測定対象に含む。測定 evaluate が失敗した場合は概算 0（上限内）とみなして続行し、展開後の `readTextWithLimit` を後段の安全網として残す。
 - **既知の制約**: ストリーム透過アセットには本上限を適用しないため、巨大な単一アセットの**転送量**自体は制限しない（自プロセスのメモリは消費しないため OOM 脅威の対象外。転送量上限が必要なら別途検討）。タイムアウト（[§リダイレクト追従](#リダイレクト追従) の 10 秒）は引き続き全経路に効く。
 
 ---
@@ -521,6 +523,7 @@ URL 書き換え方式（`proxyFetch` + `rewriteHtml` + `public/sw.js`）は、J
 
 - `proxyFetch` と同じ `{ response, finalUrl }` 契約を満たす。`page.content()` の settled DOM を本文（`text/html`）に、`page.url()` を `finalUrl` に用いる。以降は中継ティアと同じ `rewriteHtml` / `sanitizeHeaders` が適用される。
 - **CSSOM スタイルの実体化（[#120](https://github.com/f8924919/web-proxy/issues/120)）**: `page.content()` は DOM のテキストノードのみをシリアライズし、CSSOM（`CSSStyleSheet.insertRule()`）で注入された CSS を出力しない。CSS-in-JS（emotion/styled-components 等の本番 "speedy" モード）を使うサイト（例 news.yahoo.co.jp）はクライアントで CSS を CSSOM に直接注入し `<style>` のテキストを空にするため、そのまま取得するとサイト全体の CSS が欠落しレイアウトが崩れる。これを防ぐため、`page.content()` の**直前**に各 `<style>` の `sheet.cssRules` を `<style>` テキストへ書き戻し、`document.adoptedStyleSheets`（構築済みスタイルシート）の内容も `<style>` 要素として `<head>` へ出力してから DOM を取得する。書き戻しはブラウザティアでは常時行う（CSS 欠落は常に不利益のため env フラグは設けない）。cross-origin 等で `cssRules` が読めないシートは安全にスキップし全損させない。既存テキストより CSSOM ルールが多い場合のみ書き戻す（冪等）。
+- **描画済み DOM のサイズ上限（[#144](https://github.com/f8924919/web-proxy/issues/144)）**: `page.content()` の**直前**（`inlineCssomStyles` 実体化の後）に、ブラウザ context 内で描画済み DOM の UTF-8 バイト数を概算する。`PROXY_MAX_BUFFER_BYTES`（[§中継本文のサイズ上限](#中継本文のサイズ上限メモリ枯渇-dos-対策134)）を超える場合は `page.content()` を呼ばずに取得を打ち切り、`BodyTooLargeError` 経由で `413` を返す（中継ティアと同じ上限・同じ応答）。`page.content()` で Node ヒープへ全量転送する前にブラウザ側で測ることで、展開後にしか効かない `readTextWithLimit` では防げないメモリ常駐を未然に断つ。概算ベースである点と限界は [§中継本文のサイズ上限](#中継本文のサイズ上限メモリ枯渇-dos-対策134) を参照。
 - **待機戦略**: `page.goto` の `waitUntil` / `timeout` と、追加の idle 待ち（settle）を env で調整可能（`debug-browser.mjs` と同じ検証・ベストエフォート方針、[#39](https://github.com/f8924919/web-proxy/issues/39)）。タイムアウト・読み込み失敗でも収集済み DOM をベストエフォートで返す。
 - **既定 User-Agent / 認証情報**: 中継ティアと同じ既定 UA（`PROXY_USER_AGENT` で上書き可）をブラウザコンテキストに適用し、受信リクエストの `Cookie` / `Authorization`（現ターゲット origin にスコープされた分）を初回ナビゲーションへ引き継ぐ。
 
