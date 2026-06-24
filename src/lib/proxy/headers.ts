@@ -16,6 +16,19 @@ const BLOCKED_HEADERS = new Set([
   "speculation-rules",
 ]);
 
+// プロキシ自身が生成する HTML UI レスポンス（ホーム以外：エラー / ループ案内 /
+// url 未指定案内ページ）用のヘッダーを組み立てる純粋関数。中継レスポンスから
+// X-Frame-Options を除去する（iframe 埋め込み中継のため）のと対になり、UI レスポンス
+// には逆に X-Frame-Options: DENY を付与して枠外埋め込み（クリックジャッキング）を禁止する。
+// ホーム / は React コンポーネントのため next.config.mjs の headers() で付与する。
+// 仕様: docs/spec/features/proxy.md §プロキシ UI レスポンスのクリックジャッキング防止（#131）
+export function htmlUiHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "text/html; charset=utf-8",
+    "X-Frame-Options": "DENY",
+  };
+}
+
 export function sanitizeHeaders(
   headers: Headers,
   targetOrigin: string

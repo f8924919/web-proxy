@@ -14,7 +14,7 @@ import {
   promotionGuard,
 } from "@/lib/proxy/promotion";
 import { rewriteHtml } from "@/lib/proxy/rewrite";
-import { sanitizeHeaders } from "@/lib/proxy/headers";
+import { sanitizeHeaders, htmlUiHeaders } from "@/lib/proxy/headers";
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
 import { isAllowedTarget, allowedPortsFromEnv } from "@/lib/proxy/targetPolicy";
@@ -36,9 +36,10 @@ export function errorHtml(message: string): string {
 }
 
 export function htmlResponse(message: string, status: number): Response {
+  // プロキシ自身の UI レスポンスには X-Frame-Options: DENY を付与する（#131）。
   return new Response(errorHtml(message), {
     status,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: htmlUiHeaders(),
   });
 }
 
@@ -46,7 +47,7 @@ export function htmlResponse(message: string, status: number): Response {
 function loopGuidanceResponse(): Response {
   return new Response(loopGuidanceHtml(), {
     status: 200,
-    headers: { "Content-Type": "text/html; charset=utf-8" },
+    headers: htmlUiHeaders(),
   });
 }
 

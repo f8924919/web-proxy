@@ -519,6 +519,12 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 除去対象（`Speculation-Rules` を含む）は [プロキシ機能仕様 §レスポンスヘッダー処理](../spec/features/proxy.md) を参照。前段 CDN が後段で注入する `Speculation-Rules` はコードからは除去できないため CDN 側設定で無効化する（同仕様の注記参照）。
 
+### `htmlUiHeaders()`（プロキシ UI のクリックジャッキング防止・#131）
+
+> 関連仕様: [プロキシ機能仕様 §プロキシ UI レスポンスのクリックジャッキング防止](../spec/features/proxy.md#プロキシ-ui-レスポンスのクリックジャッキング防止131) / [§サイト間アイソレーションの構造的制約](../spec/features/proxy.md#サイト間アイソレーションの構造的制約131)
+
+プロキシ自身が生成する HTML UI レスポンス用のヘッダーを組み立てる純粋関数。`Content-Type: text/html; charset=utf-8` に加えて `X-Frame-Options: DENY` を付与する。これを使うのは `browseRelay.ts` の `htmlResponse`（エラー）/ `loopGuidanceResponse`（ループ案内）と `browse/route.ts` の `url` 未指定案内ページ（`noUrlBrowseHtml`）。`sanitizeHeaders` が中継レスポンスから `X-Frame-Options` を**除去**する（iframe 埋め込み中継のため）のと対になり、UI レスポンスには逆に**付与**して枠外埋め込みを禁止する。ホーム `/` は React コンポーネントでレスポンスヘッダーを直接付与できないため、この関数ではなく `next.config.mjs` の `headers()`（`source: '/'` 限定）で付与する。
+
 ### `cookieScopeKey(origin)`
 
 > 関連仕様: [プロキシ機能仕様 §サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
