@@ -760,6 +760,7 @@ describe("isProxyOwnPath（#124）", () => {
     ["/", true, "ホーム"],
     ["", true, "空"],
     ["/sw.js", true, "SW"],
+    ["/unlock", true, "解錠ルート（#148）"],
     ["/favicon.ico", true, "favicon"],
     ["/browse", true, "browse 完全一致"],
     ["/browse/https/x.com/y", true, "browse 配下"],

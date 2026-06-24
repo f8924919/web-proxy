@@ -22,6 +22,11 @@ import {
   ConcurrencyLimitExceededError,
 } from "@/lib/proxy/concurrency";
 import { getClientIp } from "@/lib/proxy/clientIp";
+import {
+  proxyAuthConfigFromEnv,
+  isAuthorized,
+  AUTH_HEADER_NAME,
+} from "@/lib/proxy/auth";
 import { logError } from "@/lib/logger";
 
 // アセット中継の共通処理。両 route（パス反映形式の [...slug] と後方互換の ?url=）が
@@ -31,6 +36,19 @@ export async function relayAsset(
   req: NextRequest,
   targetHref: string
 ): Promise<Response> {
+  // 任意の共有トークン認証（#148）。有効かつ未認証ならアセットは HTML フォームではなく
+  // 401（プレーン）で弾く。通常はページ自体が先に 401 で止まるため、ここに来るのは Cookie
+  // 欠落時に限られる。レート制限・同時接続スロットを消費する前に検査する。
+  if (
+    !isAuthorized(
+      req.headers.get(AUTH_HEADER_NAME),
+      req.headers.get("cookie"),
+      proxyAuthConfigFromEnv()
+    )
+  ) {
+    return new Response("Unauthorized", { status: 401 });
+  }
+
   let parsed: URL;
   try {
     parsed = new URL(targetHref);

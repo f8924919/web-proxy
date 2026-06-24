@@ -378,6 +378,7 @@ export function isProxyOwnPath(pathname: string, basePath: string): boolean {
   }
   if (p === "" || p === "/") return true; // ホーム
   if (p === "/sw.js") return true;
+  if (p === "/unlock") return true; // 共有トークン認証の解錠ルート（#148）
   // 完全一致＋パス境界で判定（ターゲット側の /browser や /api/proxyData を誤判定しない）
   if (p === "/browse" || p.startsWith("/browse/")) return true;
   if (p === "/api/proxy" || p.startsWith("/api/proxy/")) return true;
