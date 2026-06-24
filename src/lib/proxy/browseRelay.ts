@@ -15,6 +15,12 @@ import {
 } from "@/lib/proxy/promotion";
 import { rewriteHtml } from "@/lib/proxy/rewrite";
 import { sanitizeHeaders, htmlUiHeaders } from "@/lib/proxy/headers";
+import {
+  cookieJar,
+  buildSessionCookie,
+  setCookiesFromHeaders,
+  type SessionRef,
+} from "@/lib/proxy/cookieJar";
 import { isNullBodyStatus } from "@/lib/proxy/response";
 import { pageRateLimiter } from "@/lib/proxy/rateLimit";
 import { isAllowedTarget, allowedPortsFromEnv } from "@/lib/proxy/targetPolicy";
@@ -38,6 +44,31 @@ const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 // ページ遷移（/browse）の中継処理。パス反映形式（/browse/<scheme>/<host>/<path>・#115）と
 // 後方互換の ?url= 形式の両ルートが、ターゲット絶対 URL を決定したうえで本モジュールへ委譲する。
 // 仕様: docs/spec/features/proxy.md §ページ遷移のパス反映 / §ナビゲーションループの検出
+
+// 上流レスポンスの Set-Cookie をブラウザへ返さず、最終 URL の origin をキーに jar へ
+// 格納する（#151 Phase 1）。session が無い経路（後方互換 ?url= GET 等）では何もしない。
+function storeRelayCookies(
+  session: SessionRef | undefined,
+  finalUrl: string,
+  responseHeaders: Headers
+): void {
+  if (!session) return;
+  cookieJar.store(
+    session.id,
+    new URL(finalUrl).origin,
+    setCookiesFromHeaders(responseHeaders)
+  );
+}
+
+// 新規セッションのときだけ __pxy_sid を Set-Cookie する（#151 Phase 1）。
+function issueSessionCookie(
+  session: SessionRef | undefined,
+  outHeaders: Headers
+): void {
+  if (session?.isNew) {
+    outHeaders.append("Set-Cookie", buildSessionCookie(session.id, BASE_PATH));
+  }
+}
 
 export function errorHtml(message: string): string {
   return `<!DOCTYPE html><html lang="ja"><body style="font-family:sans-serif;padding:2rem">
@@ -134,7 +165,8 @@ export async function relayBrowse(
   fetchOptions?: Parameters<typeof proxyFetch>[1],
   useBrowser = false,
   allowAutoPromote = false,
-  ip = "unknown"
+  ip = "unknown",
+  session?: SessionRef
 ): Promise<Response> {
   // 同時接続数の制限（#133）。スロットを確保し、レスポンス構築後に finally で解放する
   // （ストリーム透過本文の転送中は計上しない）。ip は呼び出し元（route）が getClientIp で解決して渡す。
@@ -183,9 +215,12 @@ export async function relayBrowse(
     }
 
     const contentType = res.headers.get("content-type") ?? "";
-    // Set-Cookie のスコープ鍵にはリダイレクト追従後の最終 URL の origin を用いる
-    // （書き換え基準 baseUrl と揃える。#42）。
-    let outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
+    // 中継 Cookie はブラウザへ返さず、リダイレクト追従後の最終 URL の origin（書き換え基準
+    // baseUrl と揃える。#42）をキーに jar へ格納する（#151 Phase 1）。新規セッションなら
+    // __pxy_sid を発行する。
+    storeRelayCookies(session, finalUrl, res.headers);
+    let outHeaders = sanitizeHeaders(res.headers);
+    issueSessionCookie(session, outHeaders);
 
     try {
       // 204/304 などボディを持てないステータスはボディを null にして中継する
@@ -220,7 +255,9 @@ export async function relayBrowse(
           const promoted = await browserFetch(parsed.href, fetchOptions);
           res = promoted.response;
           finalUrl = promoted.finalUrl;
-          outHeaders = sanitizeHeaders(res.headers, new URL(finalUrl).origin);
+          storeRelayCookies(session, finalUrl, res.headers);
+          outHeaders = sanitizeHeaders(res.headers);
+          issueSessionCookie(session, outHeaders);
           html = await readTextWithLimit(res, maxBytes);
         } catch (err) {
           // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。

@@ -177,8 +177,8 @@ export interface BrowserCookie {
 }
 
 // Playwright の cookie を Set-Cookie 文字列へ変換する。Domain は付けない
-// （sanitizeSetCookie がスコープ化する）。Path / Secure / HttpOnly / SameSite と、
-// 永続 cookie の Expires を反映する。
+// （呼び出し側の cookieJar.store が origin 別に保持する・#151 Phase 1）。Path / Secure /
+// HttpOnly / SameSite と、永続 cookie の Expires を反映する。
 export function cookieToSetCookie(cookie: BrowserCookie): string {
   const parts = [`${cookie.name}=${cookie.value}`];
   parts.push(`Path=${cookie.path ?? "/"}`);
@@ -418,7 +418,7 @@ export async function browserFetch(
 
     const html = await page.content();
 
-    // ブラウザの cookie jar をスコープ化のため Set-Cookie 化して返す。
+    // ブラウザの cookie jar を Set-Cookie 化して返す（呼び出し側が cookieJar へ取り込む・#151 Phase 1）。
     const headers = new Headers();
     headers.set("Content-Type", "text/html; charset=utf-8");
     for (const c of await context.cookies()) {
