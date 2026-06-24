@@ -10,6 +10,20 @@ const nextConfig = {
   // リバースプロキシ配下でプレフィックスを失い 404 になる（#74 と同類）。catch-all ルートが
   // 末尾スラッシュ有無の両方を直接処理できるよう、自動リダイレクトを無効化する。
   skipTrailingSlashRedirect: true,
+  // ホーム / はプロキシ自身の UI（アドレスバー入力）。React コンポーネントのため
+  // レスポンスヘッダーを直接付与できず、ここで X-Frame-Options: DENY を付けて
+  // クリックジャッキングを防ぐ。中継パス（/browse・/api/proxy）には付けない
+  // （iframe 埋め込み中継を壊さないため。エラー / 案内ページは headers.ts の
+  // htmlUiHeaders で個別付与する）。
+  // 仕様: docs/spec/features/proxy.md §プロキシ UI レスポンスのクリックジャッキング防止（#131）
+  async headers() {
+    return [
+      {
+        source: "/",
+        headers: [{ key: "X-Frame-Options", value: "DENY" }],
+      },
+    ];
+  },
 };
 
 export default nextConfig;

@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { forwardableRequestHeaders } from "@/lib/proxy/headers";
+import { forwardableRequestHeaders, htmlUiHeaders } from "@/lib/proxy/headers";
 import { noUrlBrowseHtml } from "@/lib/proxy/rewrite";
 import { buildBrowsePath } from "@/lib/proxy/browsePath";
 import {
@@ -21,9 +21,10 @@ export function GET(req: NextRequest) {
   if (!url) {
     // url 未指定はリダイレクトせず、アドレスバー付き案内ページ(200) をその場で返す。
     // 以前のホーム(${BASE_PATH}/)への 307 はリバースプロキシ配下で 404 になっていた（#74）。
+    // プロキシ自身の UI レスポンスには X-Frame-Options: DENY を付与する（#131）。
     return new Response(noUrlBrowseHtml(), {
       status: 200,
-      headers: { "Content-Type": "text/html; charset=utf-8" },
+      headers: htmlUiHeaders(),
     });
   }
 
