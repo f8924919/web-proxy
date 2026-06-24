@@ -105,10 +105,10 @@ URL 書き換え方式のため、すべての中継先は**単一のプロキ�
 
 ## 6. 次アクション（実装 Issue 分割）
 
-本 Issue を以下へ分割して実装する（受け入れ条件のスパイク許容に従う）。Issue 起票は方針確認後に行う。
+本 Issue を以下へ分割して実装する（受け入れ条件のスパイク許容に従う）。起票済み。
 
-- **Phase 1 実装 Issue**: サーバー側 `HttpOnly` Cookie jar 化。受け入れ条件 = サイト間で `document.cookie` に他サイト中継 Cookie が現れないことをテストで検証。`headers.ts` の jar 移行・`__pxy_sid` 発行・TTL/GC・docs 反映。
-- **Phase 2 実装 Issue**: サブドメイン origin 分離（feature-flag）。受け入れ条件 = サブドメインモード ON で `a.proxy` の JS から `b.proxy` のセッションへアクセスできないことをテスト／手動で検証。`rewrite.ts` / `sw.js` / ルーティング / 証明書運用 docs。
+- **Phase 1 実装 Issue [#155](https://github.com/f8924919/web-proxy/issues/155)**: サーバー側 `HttpOnly` Cookie jar 化。受け入れ条件 = サイト間で `document.cookie` に他サイト中継 Cookie が現れないことをテストで検証。`headers.ts` の jar 移行・`__pxy_sid` 発行・TTL/GC・docs 反映。
+- **Phase 2 実装 Issue [#156](https://github.com/f8924919/web-proxy/issues/156)**: サブドメイン origin 分離（feature-flag）。受け入れ条件 = サブドメインモード ON で `a.proxy` の JS から `b.proxy` のセッションへアクセスできないことをテスト／手動で検証。`rewrite.ts` / `sw.js` / ルーティング / 証明書運用 docs。
 
 ---
 
