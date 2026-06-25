@@ -503,7 +503,11 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 ### `fetch` ハンドラの処理
 
 ```
-1. request.mode === "navigate" → 素通し（ページ遷移・フォーム送信に委ねる）
+1. request.mode === "navigate":
+   - destination が iframe / frame（サブフレーム）→ rewriteSubframeNavUrl で /browse/<scheme>/<host>/<path>
+     を組み立て、Response.redirect(dest, 302) で振り向ける（dest が null〔自前ルート・非 http(s)・
+     ターゲット不明〕なら fetch(req) 素通し）。#162
+   - それ以外（destination=document のトップレベル遷移）→ 素通し（ページ遷移・フォーム送信に委ねる）
 2. 同一オリジンの自前ルート（/browse・/api/proxy・/_next/* 等。ただし /_next/image を除く）→ 素通し
 3. clientId から要求元ページ URL（パス反映 /browse/<scheme>/<host>/<path>・後方互換 /browse?url=<target>）を取得し、extractTarget でターゲットを復元する
 4. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
@@ -519,6 +523,8 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 > メソッド非依存の URL 書き換えは純粋関数 `rewriteRequestUrl` が担い（メソッドで分岐しない）、非 GET のボディ・ヘッダー保持は `fetch` ハンドラ（ランタイム配線）側で行う。
 
+**サブフレーム（iframe）ナビゲーションの横取り（#162）**: ランタイムで動的生成された `<iframe>` の root 相対 / 絶対 src は `mode=navigate` になり、トップレベル遷移と同じく素通しするとプロキシ自身の origin へ 404 着地する（実測: Dailymotion のプレイヤー iframe `/player/xtv3w.html`）。これを防ぐため、`destination` が `iframe` / `frame` の navigate のみ純粋関数 `rewriteSubframeNavUrl(requestUrl, pageUrl, swOrigin, basePath)` で `/browse/<scheme>/<host>/<path>` を組み立て、`Response.redirect(dest, 302)` で振り向ける。`rewriteSubframeNavUrl` は `rewriteRequestUrl` と対称だが、出力が `/api/proxy`（アセット）ではなく `/browse`（ブラウズ中継）である点が異なる。これにより iframe はブラウズ中継経路で読み込まれ、中継・書き換え・SW 登録・シム注入がフル適用される。クロスオリジン絶対 URL はそのまま `/browse` へ、同一オリジン root 相対パスは `extractTarget(pageUrl)` でターゲット origin を復元してから解決する。自前ルート（`/browse`・`/api/proxy` 等）・非 http(s)（`about:blank`・`data:` 等）・ターゲット不明は `null` を返し素通し（リダイレクト再帰・スキーム破壊・誤振り向けを防ぐ）。トップレベル（`destination=document`）の素通しは不変。
+
 `isProxyOwnPath` は `/_next/` を原則プロキシ自身の資産として素通し扱いにするが、`/_next/image` だけは「自前ルートでない」と判定し、`rewriteRequestUrl` の既存フォールバック（同一オリジンの非自前パス → ターゲット origin に解決）へ委ねる。Next.js 製ターゲットのクライアント hydration が再生成する `/_next/image?url=<外部>` をターゲット自身の最適化エンドポイントへ中継して 400 を防ぐ（#102。サーバー描画分の `srcset` は #98 で対応済み）。ターゲット不明のページ（ホーム等）では `extractTarget` が `null` を返し素通しされるため、プロキシ自身の `/_next/image` 利用には影響しない（[機能仕様 §Service Worker](../spec/features/proxy.md#service-worker-による実行時リクエスト横取り)）。
 
 ### 純粋ロジックの分離とテスト
@@ -527,7 +533,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 ### 制約（MVP）
 
-- **ナビゲーションは対象外**。ページ遷移・フォーム送信はサーバー側書き換えに委ねる。
+- **トップレベルのナビゲーションは対象外**。トップレベルのページ遷移・フォーム送信はサーバー側書き換えに委ねる。ただしサブフレーム（iframe）の navigate は `/browse` へリダイレクト横取りする（#162・上記）。
 - **`credentials: "same-origin"` で振り向け**。振り向け先は常に同一オリジンの `/api/proxy` であり、`__pxy_sid` セッション Cookie が `/api/proxy` まで届く。これにより `credentials: "include"` 相当の Cookie ベース・クロスオリジン XHR が、サーバー側 jar からの現ターゲット origin 分の復元（`cookieJar.cookieHeader`）に限定されたうえで成立する（#28。[機能仕様 §認証情報の転送 §セキュリティ上の制約](../spec/features/proxy.md#セキュリティ上の制約-1)）。ブラウザの `Cookie` 自体は上流へ転送しないため、プロキシ自身のインフラ認証 cookie（Cloudflare Access の `CF_Authorization` 等）も漏れない。元リクエストの `credentials` モードは区別せず一律 `same-origin` で振り向ける（既知の制約は同機能仕様を参照）。
 - **ランタイム相対 module import はパス反映で解消（#100）**。アセットがパス反映形式（`/api/proxy/<scheme>/<host>/<path>`）で配信されるため、チャンク分割 SPA の相対 import はブラウザがモジュールのディレクトリ基準で正しく解決し、自前ルートとして素通しされルートが中継する（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)）。残る best-effort はクロスオリジン module からのルート絶対参照（referrer 不在のためページ target origin に振り向ける）。
 

@@ -136,6 +136,70 @@
     return toProxy(resolved);
   }
 
+  // サブフレーム（iframe）ナビゲーションの src をブラウズ中継経路（/browse/<scheme>/<host>/<path>）
+  // へ書き換える。rewriteRequestUrl と対称だが、出力が /api/proxy ではなく /browse である点が異なる。
+  // これにより iframe はブラウズ中継経路で読み込まれ、中継・書き換え・SW 登録・シム注入がフル適用
+  // され、iframe 内部の相対 URL も正しく解決される。横取り不要（自前ルート・非 http(s)・ターゲット
+  // 不明）なら null を返す。仕様: docs/spec/features/proxy.md §サブフレーム（iframe）ナビゲーションの横取り（#162）
+  function rewriteSubframeNavUrl(requestUrl, pageUrl, swOrigin, basePath) {
+    let req;
+    try {
+      req = new URL(requestUrl);
+    } catch {
+      return null;
+    }
+
+    // 非 http(s)（about:blank・data:・blob: 等）は素通し（スキーム破壊を防ぐ）。
+    if (req.protocol !== "http:" && req.protocol !== "https:") return null;
+
+    const toBrowse = (absolute) => {
+      const u = new URL(absolute);
+      const scheme = u.protocol.replace(/:$/, "");
+      return (
+        basePath +
+        "/browse/" +
+        scheme +
+        "/" +
+        u.host +
+        u.pathname +
+        u.search +
+        u.hash
+      );
+    };
+
+    // クロスオリジンの絶対 URL → そのまま /browse へ
+    if (req.origin !== swOrigin) {
+      return toBrowse(req.href);
+    }
+
+    // 同一オリジン: 自前ルートは横取りしない（/browse へのリダイレクト再帰を防ぐ）
+    if (isProxyOwnPath(req.pathname, basePath)) {
+      return null;
+    }
+
+    // 同一オリジンの非自前パス（root 相対等）→ ページのターゲット origin に解決
+    const target = extractTarget(pageUrl);
+    if (!target) return null;
+    let targetOrigin;
+    try {
+      targetOrigin = new URL(target).origin;
+    } catch {
+      return null;
+    }
+
+    let path = req.pathname;
+    if (basePath && path.startsWith(basePath)) {
+      path = path.slice(basePath.length) || "/";
+    }
+    let resolved;
+    try {
+      resolved = new URL(path + req.search + req.hash, targetOrigin).href;
+    } catch {
+      return null;
+    }
+    return toBrowse(resolved);
+  }
+
   // ---- SW ランタイム配線（テスト環境では実行しない）----
   if (typeof importScripts === "function") {
     self.addEventListener("install", function () {
@@ -146,8 +210,51 @@
     });
     self.addEventListener("fetch", function (event) {
       const req = event.request;
-      // ページ遷移ナビゲーション（フォーム POST 含む）はサーバー側書き換えに委ねる。
-      if (req.mode === "navigate") return;
+      // ナビゲーション（mode === "navigate"）の扱い。
+      if (req.mode === "navigate") {
+        // トップレベル遷移（destination=document）はサーバー側書き換え・クライアント横取り・
+        // フォーム送信に委ねて素通し。サブフレーム（iframe/frame）の navigate だけは、
+        // ランタイム動的生成 iframe の root 相対/絶対 src がプロキシ自身の origin に 404 着地
+        // するのを防ぐため、ターゲット origin 基準の /browse へ 302 リダイレクトする（#162）。
+        if (req.destination !== "iframe" && req.destination !== "frame") return;
+
+        const navBasePath = deriveBasePath(self.registration.scope);
+        const navSwOrigin = self.location.origin;
+        let navUrl;
+        try {
+          navUrl = new URL(req.url);
+        } catch {
+          return;
+        }
+        // 既に自前ルート（/browse 等）を指すサブフレーム遷移は素通し（リダイレクト再帰防止）。
+        if (
+          navUrl.origin === navSwOrigin &&
+          isProxyOwnPath(navUrl.pathname, navBasePath)
+        ) {
+          return;
+        }
+
+        event.respondWith(
+          (async function () {
+            let pageUrl = req.referrer;
+            if (event.clientId) {
+              const client = await self.clients.get(event.clientId);
+              if (client && client.url) pageUrl = client.url;
+            }
+            const dest = rewriteSubframeNavUrl(
+              req.url,
+              pageUrl,
+              navSwOrigin,
+              navBasePath
+            );
+            if (!dest) return fetch(req);
+            // dest はプロキシ origin 上の相対パス。Response.redirect は絶対 URL を要求する
+            // ため、SW の origin を基準に絶対化して標準準拠の Location を返す。
+            return Response.redirect(new URL(dest, navSwOrigin).href, 302);
+          })()
+        );
+        return;
+      }
 
       const basePath = deriveBasePath(self.registration.scope);
       const swOrigin = self.location.origin;
@@ -215,6 +322,7 @@
       isProxyOwnPath,
       extractTarget,
       rewriteRequestUrl,
+      rewriteSubframeNavUrl,
     };
   }
 

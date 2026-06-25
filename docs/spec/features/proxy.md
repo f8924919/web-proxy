@@ -298,7 +298,8 @@ JS 依存サイト（Google 等）では、画像・スクリプト・XHR など
 | 同一オリジンのルート絶対パス（例 `/images/x.png`、`/xjs/...`）                                                     | ターゲット origin に解決し `/api/proxy/<scheme>/<host>/<path>`                                                                            |
 | 同一オリジンの `/_next/image`（ターゲットが Next.js 製の画像最適化エンドポイント）                                 | ターゲット origin に解決し `/api/proxy/<scheme>/<host>/_next/image?...`（下記参照。#102）                                                 |
 | 自前ルート（`/browse`・`/api/proxy/*`・`/_next/*`〔`/_next/image` を除く〕・`/sw.js`・`/favicon.ico`・ホーム `/`） | 横取りせず素通し（パス反映済みの相対 import `/api/proxy/<scheme>/<host>/<path>` もここで素通しされ、ルートが中継する。#100）              |
-| ページ遷移ナビゲーション（`request.mode === "navigate"`）                                                          | 横取りせず素通し（サーバー側書き換え・[クライアント側ナビゲーション横取り](#クライアント側ナビゲーションの横取り)・フォーム送信に委ねる） |
+| トップレベルのページ遷移ナビゲーション（`request.mode === "navigate"` かつ `destination` が `document`）            | 横取りせず素通し（サーバー側書き換え・[クライアント側ナビゲーション横取り](#クライアント側ナビゲーションの横取り)・フォーム送信に委ねる） |
+| サブフレーム（`<iframe>`）のナビゲーション（`request.mode === "navigate"` かつ `destination` が `iframe` / `frame`） | ターゲット origin に解決し `/browse/<scheme>/<host>/<path>` へ **302 リダイレクト**（[§サブフレーム（iframe）ナビゲーションの横取り](#サブフレームiframeナビゲーションの横取り160162)）                                            |
 
 - **対象メソッド**: ナビゲーションを除き **GET / POST / PUT / PATCH / DELETE** を横取りする（[§CORS プリフライト対応](#cors-プリフライト対応) のため非 GET も同一オリジンの `/api/proxy` へ振り向ける）。非 GET の振り向けではメソッド・ボディ・リクエストヘッダーを保持する。
 - **ターゲット origin の特定**: SW は `fetch` イベントの `clientId` から要求元ページの URL を取得し、`extractTarget` でターゲットを復元する（パス反映 `/browse/<scheme>/<host>/<path>`・後方互換 `/browse?url=<target>` の両対応。#115）。
@@ -306,6 +307,23 @@ JS 依存サイト（Google 等）では、画像・スクリプト・XHR など
 - **ランタイム相対 module import（#100）**: チャンク分割 SPA がランタイムで発行する相対 import（`import('./chunk.js')`）は、エントリ JS がパス反映形式（`/api/proxy/<scheme>/<host>/<path>`）で配信されるため、ブラウザがモジュールのディレクトリを基準にネイティブに正しく解決する。解決結果も `/api/proxy/<scheme>/<host>/<path>`（自前ルート）となり、SW は素通ししてルートが中継する。これによりクエリ方式時代の「`…/api/chunk.js` への誤解決 → 404・MIME エラー」が解消する（[§プロキシ URL スキーム](#プロキシ-url-スキームパス反映)）。
 - **残存制約（クロスオリジン module からのルート絶対参照）**: クロスオリジンのチャンクが発行する**ルート絶対**参照（`/y.js`）は、ブラウザがプロキシ origin 直下に解決し、SW は referrer 不在のため**ページ target の origin**に振り向ける（モジュール自身の origin ではない）。同一 origin のチャンク内参照・絶対 URL は正しく振り向く。
 - **配信と適用範囲**: SW は `public/sw.js` で配信し、登録スコープは `${NEXT_PUBLIC_BASE_PATH}/`。リバースプロキシのパスプレフィックスは SW 自身の登録スコープ（`self.registration.scope`）から導出する。詳細は [arch/proxy.md §Service Worker](../../arch/proxy.md#service-worker-publicswjs)。
+
+### サブフレーム（iframe）ナビゲーションの横取り（#160・#162）
+
+JS が実行時に動的生成した `<iframe>` の `src` に **root 相対パス**（例 `/player/xtv3w.html`）や絶対 URL が設定されると、その iframe ドキュメント要求は `request.mode === "navigate"` になる。トップレベル遷移と同じく素通しすると、root 相対パスは**プロキシ自身の origin** に解決されて **404** になり（実測: Dailymotion のプレイヤー埋め込み iframe）、サーバー側 HTML 書き換え（静的 `<iframe src>` のパス反映化）・fetch/XHR シム・クリック横取りのいずれもランタイム生成 iframe を捕捉できない。
+
+これを補うため、SW は **`destination` が `iframe` / `frame`（サブフレーム）の navigate のみ**横取りし、ターゲット origin 基準で解決した `/browse/<scheme>/<host>/<path>` へ **302 リダイレクト**する。リダイレクト先は自前ルート（`/browse`）なので、iframe はブラウズ中継経路で読み込まれ、本文の中継・書き換え・SW 登録・シム注入がフル適用され、iframe 内部の相対 URL も正しく解決される。
+
+| サブフレーム navigate の src | 横取り後 |
+| --- | --- |
+| 同一オリジンの root 相対パス（`/player/...`） | 閲覧ページ URL からターゲット origin を復元し `/browse/<scheme>/<host>/<path>` へ 302 |
+| クロスオリジンの絶対 URL（`https://other.example/...`） | `/browse/<scheme>/<host>/<path>` へ 302 |
+| 自前ルート（`/browse`・`/api/proxy/*` 等）・非 http(s)（`about:blank`・`data:` 等） | 横取りせず素通し（リダイレクトの再帰・スキーム破壊を防ぐ） |
+
+- **トップレベル遷移は不変**: `destination` が `document` のナビゲーションは従来どおり素通しし、既存挙動（サーバー側書き換え・クライアント側ナビゲーション横取り・フォーム送信）を変えない。
+- **ターゲット origin の特定**: SW の `fetch` イベントの `clientId`（無ければ `referrer`）から親ページ URL を取得し、`extractTarget` でターゲットを復元する（既存の subresource 横取りと同方式）。ページ URL からターゲットを復元できない場合は素通しする（従来挙動へフォールバック）。
+- **再帰防止**: リダイレクト先 `/browse/...` は自前ルートのため、再度の iframe navigate では横取り対象外となり素通しされる。
+- **限界**: 初回ロードで SW が未制御の段階で生成される iframe は捕捉できない（SW 制御確立後のランタイム生成が主対象）。
 
 ### 実行時リクエスト横取りシム（SW 非依存・#124）
 

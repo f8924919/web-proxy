@@ -6,7 +6,13 @@
 // SW ランタイム配線は importScripts の有無でガードされるため Node 環境で読み込める。
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const sw = require("../../../public/sw.js");
-const { deriveBasePath, isProxyOwnPath, extractTarget, rewriteRequestUrl } = sw;
+const {
+  deriveBasePath,
+  isProxyOwnPath,
+  extractTarget,
+  rewriteRequestUrl,
+  rewriteSubframeNavUrl,
+} = sw;
 
 const SW_ORIGIN = "https://host";
 const PAGE = (target: string, basePath = "") =>
@@ -20,6 +26,11 @@ const NAVPAGE = (target: string, basePath = "") => {
 const PROXY = (absolute: string, basePath = "") => {
   const u = new URL(absolute);
   return `${basePath}/api/proxy/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
+};
+// ブラウズ中継形式（/browse/<scheme>/<host>/<path>）の独立オラクル（#162）。
+const BROWSE = (absolute: string, basePath = "") => {
+  const u = new URL(absolute);
+  return `${basePath}/browse/${u.protocol.replace(/:$/, "")}/${u.host}${u.pathname}${u.search}${u.hash}`;
 };
 
 describe("deriveBasePath", () => {
@@ -237,6 +248,120 @@ describe("rewriteRequestUrl", () => {
       expect(
         rewriteRequestUrl(
           `${SW_ORIGIN}/proxy/3000/api/proxy?url=x`,
+          pageBp,
+          SW_ORIGIN,
+          bp
+        )
+      ).toBeNull();
+    });
+  });
+});
+
+describe("rewriteSubframeNavUrl（サブフレーム iframe ナビゲーション横取り・#162）", () => {
+  const page = NAVPAGE("https://www.dailymotion.com/");
+
+  test("同一オリジンの root 相対パス → ターゲット origin に解決して /browse", () => {
+    expect(
+      rewriteSubframeNavUrl(
+        `${SW_ORIGIN}/player/xtv3w.html`,
+        page,
+        SW_ORIGIN,
+        ""
+      )
+    ).toBe(BROWSE("https://www.dailymotion.com/player/xtv3w.html"));
+  });
+
+  test("クロスオリジンの絶対 URL → そのまま /browse", () => {
+    expect(
+      rewriteSubframeNavUrl(
+        "https://geo.dailymotion.com/player/xtv3w.html",
+        page,
+        SW_ORIGIN,
+        ""
+      )
+    ).toBe(BROWSE("https://geo.dailymotion.com/player/xtv3w.html"));
+  });
+
+  test("クエリ・ハッシュを保持する", () => {
+    expect(
+      rewriteSubframeNavUrl(
+        `${SW_ORIGIN}/embed?id=abc#t=10`,
+        page,
+        SW_ORIGIN,
+        ""
+      )
+    ).toBe(BROWSE("https://www.dailymotion.com/embed?id=abc#t=10"));
+  });
+
+  test.each([
+    [`${SW_ORIGIN}/browse/https/example.com/`, "browse 自身（再帰防止）"],
+    [`${SW_ORIGIN}/api/proxy/https/example.com/x`, "api/proxy 自身"],
+    [`${SW_ORIGIN}/`, "ホーム"],
+    [`${SW_ORIGIN}/_next/static/x.js`, "_next アセット"],
+  ])("自前ルート %s（%s）→ null（素通し）", (reqUrl) => {
+    expect(rewriteSubframeNavUrl(reqUrl, page, SW_ORIGIN, "")).toBeNull();
+  });
+
+  test.each([
+    ["about:blank", "about:blank"],
+    ["data:text/html,<p>x</p>", "data: URL"],
+    ["blob:https://host/uuid", "blob: URL"],
+  ])("非 http(s) スキーム %s（%s）→ null（素通し）", (reqUrl) => {
+    expect(rewriteSubframeNavUrl(reqUrl, page, SW_ORIGIN, "")).toBeNull();
+  });
+
+  test("ターゲット不明（browse でないページ）の root 相対は null（素通し）", () => {
+    expect(
+      rewriteSubframeNavUrl(
+        `${SW_ORIGIN}/player/xtv3w.html`,
+        `${SW_ORIGIN}/browse`,
+        SW_ORIGIN,
+        ""
+      )
+    ).toBeNull();
+  });
+
+  test("ターゲット不明でもクロスオリジン絶対 URL は /browse へ振り向ける", () => {
+    expect(
+      rewriteSubframeNavUrl(
+        "https://geo.dailymotion.com/player/xtv3w.html",
+        `${SW_ORIGIN}/`,
+        SW_ORIGIN,
+        ""
+      )
+    ).toBe(BROWSE("https://geo.dailymotion.com/player/xtv3w.html"));
+  });
+
+  describe("BASE_PATH=/proxy/3000", () => {
+    const bp = "/proxy/3000";
+    const pageBp = NAVPAGE("https://www.dailymotion.com/", bp);
+
+    test("root 相対パス → ターゲット解決して /proxy/3000/browse", () => {
+      expect(
+        rewriteSubframeNavUrl(
+          `${SW_ORIGIN}${bp}/player/xtv3w.html`,
+          pageBp,
+          SW_ORIGIN,
+          bp
+        )
+      ).toBe(BROWSE("https://www.dailymotion.com/player/xtv3w.html", bp));
+    });
+
+    test("クロスオリジン → /proxy/3000/browse", () => {
+      expect(
+        rewriteSubframeNavUrl(
+          "https://geo.dailymotion.com/player/xtv3w.html",
+          pageBp,
+          SW_ORIGIN,
+          bp
+        )
+      ).toBe(BROWSE("https://geo.dailymotion.com/player/xtv3w.html", bp));
+    });
+
+    test("prefix 付き自前ルート（/proxy/3000/browse/...）→ null", () => {
+      expect(
+        rewriteSubframeNavUrl(
+          `${SW_ORIGIN}${bp}/browse/https/example.com/`,
           pageBp,
           SW_ORIGIN,
           bp
