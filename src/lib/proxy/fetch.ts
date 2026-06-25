@@ -50,7 +50,8 @@ export function maxBufferBytesFromEnv(
 // res.text() の代替。書き換えのため全量バッファする HTML / CSS 本文にサイズ上限を課す純粋関数。
 // ① Content-Length が maxBytes 超過を宣言していれば、本文を読む前に BodyTooLargeError を投げる。
 // ② res.body をチャンク読みし、累積バイト数が maxBytes を超えたらストリームを cancel して投げる。
-// 上限内なら UTF-8 デコードした文字列を返す（res.body が無ければ空文字）。
+// 上限内なら resolveCharset で判定した文字コードでデコードした文字列を返す（res.body が無ければ
+// 空文字）。サイズ上限の累積判定はデコード前の生バイト列で行う（charset 追従後も 413 挙動は不変・#158）。
 // 仕様: docs/spec/features/proxy.md §中継本文のサイズ上限（メモリ枯渇 DoS 対策・#134）
 export async function readTextWithLimit(
   res: Response,
@@ -86,7 +87,71 @@ export async function readTextWithLimit(
     merged.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return new TextDecoder().decode(merged);
+  return decodeBody(merged, res.headers.get("content-type"));
+}
+
+// 本文先頭を ASCII として走査して charset 宣言を sniff する範囲（バイト）。
+// HTML/CSS の charset 宣言は規約上 head 先頭・ファイル先頭に来るため、先頭のみで十分。
+const SNIFF_LIMIT_BYTES = 4096;
+
+// charset ラベルを正規化する（前後空白・引用符を除去し小文字化）。空なら null。
+function normalizeCharsetLabel(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  const label = raw
+    .trim()
+    .replace(/^["']|["']$/g, "")
+    .trim()
+    .toLowerCase();
+  return label || null;
+}
+
+// 中継本文の文字コードを判定する純粋関数（#158）。
+// 優先順: ①Content-Type の charset → ②本文先頭の sniff（HTML <meta> / CSS @charset）→ ③utf-8。
+// 仕様: docs/spec/features/proxy.md §中継本文の文字コード処理（#158）
+export function resolveCharset(
+  contentType: string | null | undefined,
+  bytes: Uint8Array
+): string {
+  // ① Content-Type ヘッダーの charset。
+  const fromHeader = normalizeCharsetLabel(
+    /charset=([^;]+)/i.exec(contentType ?? "")?.[1]
+  );
+  if (fromHeader) return fromHeader;
+
+  // ② 本文先頭を ASCII として読み、HTML の <meta>・CSS の @charset を sniff する。
+  // 非 ASCII バイトはマークアップに現れないため latin1 解釈で取りこぼさない。
+  const head = new TextDecoder("latin1").decode(
+    bytes.subarray(0, SNIFF_LIMIT_BYTES)
+  );
+  const fromMetaCharset = normalizeCharsetLabel(
+    /<meta[^>]+charset=["']?([^"'\s/>]+)/i.exec(head)?.[1]
+  );
+  if (fromMetaCharset) return fromMetaCharset;
+  const fromMetaHttpEquiv = normalizeCharsetLabel(
+    /<meta[^>]+http-equiv=["']?content-type["']?[^>]*content=["'][^"']*charset=([^"'\s;]+)/i.exec(
+      head
+    )?.[1]
+  );
+  if (fromMetaHttpEquiv) return fromMetaHttpEquiv;
+  const fromCssCharset = normalizeCharsetLabel(
+    /^@charset\s+["']([^"']+)["']/i.exec(head)?.[1]
+  );
+  if (fromCssCharset) return fromCssCharset;
+
+  // ③ いずれも無ければ UTF-8。
+  return "utf-8";
+}
+
+// 判定した charset で本文をデコードする。未知・不正ラベルは UTF-8 にフォールバックし、
+// 中継を例外で失敗させない（#158）。Node 組込み TextDecoder が euc-jp / shift_jis /
+// iso-2022-jp 等を標準サポートするため追加依存は不要。
+function decodeBody(bytes: Uint8Array, contentType: string | null): string {
+  const charset = resolveCharset(contentType, bytes);
+  try {
+    return new TextDecoder(charset).decode(bytes);
+  } catch {
+    return new TextDecoder("utf-8").decode(bytes);
+  }
 }
 
 // SSRF ブロック対象の IPv4 レンジ（[下限, 上限] の閉区間・32bit 整数）。
