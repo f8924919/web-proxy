@@ -230,9 +230,10 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 書き換えのため全量バッファする HTML / CSS の本文に上限を設ける純粋関数群。
 
 - `maxBufferBytesFromEnv(env = process.env)`: `PROXY_MAX_BUFFER_BYTES` を整数として読み、正の整数以外・未設定なら既定 `10 * 1024 * 1024`（10 MiB）を返す（`*FromEnv` パターン）。
-- `readTextWithLimit(res, maxBytes)`: `res.text()` の代替。①`Content-Length` が `maxBytes` 超過を宣言していれば読む前に `BodyTooLargeError` を投げる。②`res.body`（Web Streams `ReadableStream<Uint8Array>`）を `getReader()` でチャンク読みし、累積バイト数が `maxBytes` を超えたらストリームを `cancel` して `BodyTooLargeError` を投げる。上限内なら UTF-8 デコードした文字列を返す（`res.body` が無ければ空文字）。
+- `readTextWithLimit(res, maxBytes)`: `res.text()` の代替。①`Content-Length` が `maxBytes` 超過を宣言していれば読む前に `BodyTooLargeError` を投げる。②`res.body`（Web Streams `ReadableStream<Uint8Array>`）を `getReader()` でチャンク読みし、累積バイト数が `maxBytes` を超えたらストリームを `cancel` して `BodyTooLargeError` を投げる。上限内なら `resolveCharset` で判定した文字コードでデコードした文字列を返す（`res.body` が無ければ空文字）。**サイズ上限の累積判定はデコード前の生バイト列で行う**ため、文字コード追従後も `413` 挙動は不変。
+- `resolveCharset(contentType, bytes)`: 中継本文の文字コードを判定する純粋関数（#158）。①`Content-Type` の `charset=` → ②（①が無い場合）`bytes` 先頭の sniff（HTML `<meta charset>` / `<meta http-equiv>`、CSS `@charset`）→ ③ UTF-8、の優先順でラベルを決める。`readTextWithLimit` は判定ラベルで `TextDecoder` を生成し、未知・不正ラベルなら UTF-8 にフォールバックする（`euc-jp` / `shift_jis` / `iso-2022-jp` は Node 組込みで対応。追加依存なし）。仕様: [§中継本文の文字コード処理](../spec/features/proxy.md#中継本文の文字コード処理158)。
 
-`relayBrowse`（HTML）・`relayAsset`（CSS）はこれを用いて読み、`BodyTooLargeError` を捕捉して `413` を返す。書き換え不要アセットは `res.body` ストリーム透過のため対象外。
+`relayBrowse`（HTML）・`relayAsset`（CSS）はこれを用いて読み、`BodyTooLargeError` を捕捉して `413` を返す。書き換え後の本文は常に UTF-8（`charset=utf-8`）で返す。書き換え不要アセットは `res.body` ストリーム透過のため対象外。
 
 ブラウザティア（`browserFetch`）は `page.content()` で DOM 全体を Node ヒープへ展開した後でしか `readTextWithLimit` が効かないため、`browserFetch` 側で `page.content()` の**前**に DOM サイズを概算して同じ上限で打ち切る（[§browserFetch.ts](#srclibproxybrowserfetchts) の `measureDomByteLength` / `domSizeExceedsLimit`・#144）。`browserFetch` が投げる `BodyTooLargeError` は `relayBrowse` の `fetchTarget` で（`SsrfBlockedError` と同様に）フォールバックさせず伝播させ、`413` へ揃える。
 

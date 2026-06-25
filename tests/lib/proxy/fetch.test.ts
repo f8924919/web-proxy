@@ -16,6 +16,7 @@ import {
   nextRedirectMethod,
   maxBufferBytesFromEnv,
   readTextWithLimit,
+  resolveCharset,
   BodyTooLargeError,
 } from "@/lib/proxy/fetch";
 
@@ -455,5 +456,175 @@ describe("readTextWithLimit（#134）", () => {
     await expect(
       readTextWithLimit(streamResponse("x".repeat(10)), 10)
     ).resolves.toBe("x".repeat(10));
+  });
+});
+
+describe("readTextWithLimit の文字コード追従（#158）", () => {
+  // 指定バイト列を 1 チャンクで流す Response（Content-Type 任意）。
+  const bytesResponse = (bytes: number[], contentType?: string): Response => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array(bytes));
+        c.close();
+      },
+    });
+    const headers = new Headers();
+    if (contentType) headers.set("content-type", contentType);
+    return new Response(stream, { headers });
+  };
+
+  // ASCII 文字列をバイト配列へ（meta タグ等のマークアップ部はどの charset でも同一）。
+  const ascii = (s: string): number[] =>
+    Array.from(s, (ch) => ch.charCodeAt(0));
+
+  // 検証用の既知バイト列（resolveCharset/TextDecoder で確認済み）。
+  const EUC_JP_NIHONGO = [0xc6, 0xfc, 0xcb, 0xdc, 0xb8, 0xec]; // "日本語"
+  const SJIS_NIHON = [0x93, 0xfa, 0x96, 0x7b]; // "日本"
+
+  test("Content-Type の charset=euc-jp に追従してデコードする", async () => {
+    await expect(
+      readTextWithLimit(
+        bytesResponse(EUC_JP_NIHONGO, "text/html; charset=euc-jp"),
+        1024
+      )
+    ).resolves.toBe("日本語");
+  });
+
+  test("Content-Type の charset=Shift_JIS に追従してデコードする（大小無視）", async () => {
+    await expect(
+      readTextWithLimit(
+        bytesResponse(SJIS_NIHON, "text/html; charset=Shift_JIS"),
+        1024
+      )
+    ).resolves.toBe("日本");
+  });
+
+  test("ヘッダーに charset が無ければ HTML の <meta charset> を sniff する", async () => {
+    const bytes = [
+      ...ascii('<!DOCTYPE html><html><head><meta charset="euc-jp"><title>'),
+      ...EUC_JP_NIHONGO,
+      ...ascii("</title></head></html>"),
+    ];
+    const out = await readTextWithLimit(
+      bytesResponse(bytes, "text/html"),
+      4096
+    );
+    expect(out).toContain("日本語");
+  });
+
+  test("ヘッダーに charset が無ければ <meta http-equiv> の charset を sniff する", async () => {
+    const bytes = [
+      ...ascii(
+        '<html><head><meta http-equiv="Content-Type" content="text/html; charset=Shift_JIS"><title>'
+      ),
+      ...SJIS_NIHON,
+      ...ascii("</title></head></html>"),
+    ];
+    const out = await readTextWithLimit(
+      bytesResponse(bytes, "text/html"),
+      4096
+    );
+    expect(out).toContain("日本");
+  });
+
+  test("meta の属性順が逆（content 先・http-equiv 後）でも charset を sniff する", async () => {
+    // 実在する書き方。meta タグ内の charset= を位置非依存で拾えることを固定する。
+    const bytes = [
+      ...ascii(
+        '<html><head><meta content="text/html; charset=Shift_JIS" http-equiv="Content-Type"><title>'
+      ),
+      ...SJIS_NIHON,
+      ...ascii("</title></head></html>"),
+    ];
+    const out = await readTextWithLimit(
+      bytesResponse(bytes, "text/html"),
+      4096
+    );
+    expect(out).toContain("日本");
+  });
+
+  test("CSS は先頭の @charset を sniff する", async () => {
+    const bytes = [
+      ...ascii('@charset "euc-jp";\n/* '),
+      ...EUC_JP_NIHONGO,
+      ...ascii(" */"),
+    ];
+    const out = await readTextWithLimit(bytesResponse(bytes, "text/css"), 4096);
+    expect(out).toContain("日本語");
+  });
+
+  test("ヘッダーの charset を meta sniff より優先する", async () => {
+    // ヘッダー euc-jp が正、meta は誤って shift_jis を宣言。ヘッダー優先で正しく読める。
+    const bytes = [
+      ...ascii('<meta charset="shift_jis"><title>'),
+      ...EUC_JP_NIHONGO,
+      ...ascii("</title>"),
+    ];
+    const out = await readTextWithLimit(
+      bytesResponse(bytes, "text/html; charset=euc-jp"),
+      4096
+    );
+    expect(out).toContain("日本語");
+  });
+
+  test("未知・不正な charset ラベルは UTF-8 にフォールバックする", async () => {
+    const utf8 = Array.from(new TextEncoder().encode("こんにちは"));
+    await expect(
+      readTextWithLimit(
+        bytesResponse(utf8, "text/html; charset=x-unknown-bogus"),
+        1024
+      )
+    ).resolves.toBe("こんにちは");
+  });
+
+  test("charset 宣言がどこにも無ければ UTF-8 とみなす", async () => {
+    const utf8 = Array.from(new TextEncoder().encode("こんにちは"));
+    await expect(
+      readTextWithLimit(bytesResponse(utf8, "text/html"), 1024)
+    ).resolves.toBe("こんにちは");
+  });
+
+  test("サイズ上限は charset 追従後もデコード前の生バイトで判定する", async () => {
+    // EUC-JP 6 バイトを上限 5 バイトで読むと、デコード前に BodyTooLargeError。
+    await expect(
+      readTextWithLimit(
+        bytesResponse(EUC_JP_NIHONGO, "text/html; charset=euc-jp"),
+        5
+      )
+    ).rejects.toBeInstanceOf(BodyTooLargeError);
+  });
+});
+
+describe("resolveCharset（#158）", () => {
+  const bytes = (s: string): Uint8Array =>
+    new Uint8Array(Array.from(s, (ch) => ch.charCodeAt(0)));
+
+  test("Content-Type の charset を抽出する", () => {
+    expect(resolveCharset("text/html; charset=euc-jp", bytes(""))).toBe(
+      "euc-jp"
+    );
+  });
+
+  test("charset は前後の空白・引用符を除去し小文字化する", () => {
+    expect(resolveCharset('text/html; charset="Shift_JIS" ', bytes(""))).toBe(
+      "shift_jis"
+    );
+  });
+
+  test("ヘッダー charset が無ければ HTML meta を sniff する", () => {
+    expect(resolveCharset("text/html", bytes('<meta charset="EUC-JP">'))).toBe(
+      "euc-jp"
+    );
+  });
+
+  test("ヘッダー charset が無ければ CSS @charset を sniff する", () => {
+    expect(resolveCharset("text/css", bytes('@charset "shift_jis";'))).toBe(
+      "shift_jis"
+    );
+  });
+
+  test("どこにも宣言が無ければ utf-8 を返す", () => {
+    expect(resolveCharset("text/html", bytes("<html></html>"))).toBe("utf-8");
+    expect(resolveCharset(null, bytes(""))).toBe("utf-8");
   });
 });
