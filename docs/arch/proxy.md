@@ -346,10 +346,11 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 | 純粋関数                                            | 役割                                                                                                                                                                |
 | --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autoPromoteEnabledFromEnv(env)`                    | `PROXY_BROWSER_AUTO_PROMOTE`（`true` / `1` / `on` で有効、既定無効）を解釈する                                                                                      |
-| `shouldPromoteToBrowser(html, status, contentType)` | `text/html` 応答について、チャレンジ語句 / `<noscript>` 主体 / `403`・`503` のいずれかを検出したら `true`。非 HTML は常に `false`（空 body 単独は判定材料にしない） |
+| `shouldPromoteToBrowser(html, status, contentType)` | `text/html` 応答について、チャレンジ語句 / `<noscript>` 主体 / `403`・`503` / 空 SPA シェル（#160）のいずれかを検出したら `true`。非 HTML は常に `false`（空 body 単独は判定材料にしない） |
 
 - **チャレンジ語句**: `enable javascript` / `enablejs` / `checking your browser` / `recaptcha` / Cloudflare チャレンジ等の語句を本文（小文字化）に含むか判定する。
 - **`<noscript>` 主体**: `<noscript>` を含み、かつ `<script>` / `<style>` / `<noscript>` を除いた可視テキストが極小であるかで判定する。
+- **空 SPA シェル（#160）**: ① 既知の SPA マウント先要素の存在（`SPA_ROOT_IDS` = `root` / `__next` / `app` / `app-root`・タグ種別不問・ID 完全一致は id 値直後の引用符/空白/`>` を先読み `(?=[\s>])` で担保）② 外部 `<script src>` の存在（`src` は独立属性として照合し `data-src` 等を弾く）③ 可視テキスト極小、の **3 条件 AND** で判定する。クライアント描画 SPA（中継ティアでは `location.pathname` がプロキシパスになり描画されない）を昇格対象にする。`node-html-parser` は使わず `promotion.ts` 既存の正規表現方針に揃える。
 
 ### 再昇格抑止（`PromotionGuard`・インメモリ状態）
 

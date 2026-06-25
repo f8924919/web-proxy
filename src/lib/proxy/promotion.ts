@@ -28,6 +28,23 @@ const CHALLENGE_MARKERS = [
 // noscript 外の可視テキストがこの文字数未満なら「noscript 主体」とみなす。
 const NOSCRIPT_DOMINANT_MAX_TEXT = 64;
 
+// 空 SPA シェル判定: 可視テキストがこの文字数未満なら「未描画」とみなす（#160）。
+const SPA_SHELL_MAX_TEXT = 64;
+
+// 既知のクライアント描画 SPA のマウント先要素 id（#160）。完全一致で照合する。
+const SPA_ROOT_IDS = ["__next", "app-root", "root", "app"];
+
+// マウント先要素（タグ種別不問）の存在を照合する正規表現。id 値は完全一致
+// （前方一致の `application` 等を弾くため、id 値直後が引用符/空白/`>` であることを要求）。
+const SPA_ROOT_RE = new RegExp(
+  `<[a-z][\\w-]*\\b[^>]*\\bid=["']?(?:${SPA_ROOT_IDS.join("|")})["']?(?=[\\s>])`,
+  "i"
+);
+
+// 外部スクリプト（`<script ... src=...>`）の存在を照合する正規表現。`src` は独立属性として
+// 照合する（直前に空白を要求し、`data-src` 等の別属性を src と誤認しない）。
+const EXTERNAL_SCRIPT_RE = /<script\b[^>]*\ssrc\s*=/i;
+
 // script / style / noscript の各要素（内容ごと）とタグを除いた可視テキストを抽出し、
 // 連続空白を 1 つに畳んでトリムした文字列を返す。
 function visibleTextOutsideNoscript(html: string): string {
@@ -40,9 +57,21 @@ function visibleTextOutsideNoscript(html: string): string {
     .trim();
 }
 
+// 空 SPA シェル（クライアント描画 SPA）を検出する（#160）。次の 3 条件をすべて満たすと true。
+// ① 既知の SPA マウント先要素が存在する（id 完全一致）。② 外部スクリプトが存在する。
+// ③ noscript 外の可視テキストが極小（中継ティアで未描画）。マウント先が「空」であることは
+// 要求しない（実サイトは空のスケルトン枠を持つため。未描画判定は③が担う）。
+function hasEmptySpaShell(html: string): boolean {
+  return (
+    SPA_ROOT_RE.test(html) &&
+    EXTERNAL_SCRIPT_RE.test(html) &&
+    visibleTextOutsideNoscript(html).length < SPA_SHELL_MAX_TEXT
+  );
+}
+
 // 初回（中継ティア）応答から、ブラウザティアへ昇格すべき崩れ/チャレンジ兆候を検出する。
-// text/html 応答のみ対象。チャレンジ語句 / <noscript> 主体 / 403・503 のいずれかで true。
-// 空 body 単独は誤検知が多いため判定材料にしない。非 HTML は常に false（安全側）。
+// text/html 応答のみ対象。チャレンジ語句 / <noscript> 主体 / 403・503 / 空 SPA シェル（#160）の
+// いずれかで true。空 body 単独は誤検知が多いため判定材料にしない。非 HTML は常に false（安全側）。
 export function shouldPromoteToBrowser(
   html: string,
   status: number,
@@ -65,6 +94,9 @@ export function shouldPromoteToBrowser(
   ) {
     return true;
   }
+
+  // 空 SPA シェル（クライアント描画 SPA が中継ティアで描画されない・#160）。
+  if (hasEmptySpaShell(html)) return true;
 
   return false;
 }
