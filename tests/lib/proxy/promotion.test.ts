@@ -93,6 +93,69 @@ describe("shouldPromoteToBrowser", () => {
   test("非 HTML 応答は 403 でも昇格しない", () => {
     expect(shouldPromoteToBrowser("forbidden", 403, "text/plain")).toBe(false);
   });
+
+  describe("空 SPA シェル（#160）", () => {
+    // マウント先 + 外部 script + 可視テキスト極小 の 3 条件 AND。
+    test("空 SPA シェル（Dailymotion 相当: 空枠 div + script + 可視テキスト無し）は昇格する", () => {
+      const html =
+        "<html><head><title>Dailymotion</title></head><body>" +
+        '<div id="root"><div class="Root__app___xbuTD desktop"></div></div>' +
+        '<script src="/api/proxy/https/static.example.com/app.js"></script>' +
+        "</body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test.each([
+      ['id="root"', '<div id="root"></div>'],
+      ['id="__next"', '<div id="__next"></div>'],
+      ['id="app"', "<main id=app></main>"],
+      ['id="app-root"', '<div id="app-root"></div>'],
+    ])(
+      "マウント先 %s + script + 可視テキスト極小は昇格する",
+      (_label, root) => {
+        const html = `<html><body>${root}<script src="/a.js"></script></body></html>`;
+        expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+      }
+    );
+
+    test("マウント先はあるが外部 script が無ければ昇格しない", () => {
+      const html = '<html><body><div id="root"></div></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+
+    test("マウント先 + script でも可視テキストが十分（SSR 済み）なら昇格しない", () => {
+      const body =
+        "実際の記事本文がここに十分な分量で描画されています。".repeat(8);
+      const html =
+        `<html><body><div id="app"><article>${body}</article></div>` +
+        '<script src="/a.js"></script></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+
+    test("script + 可視テキスト極小でもマウント先が無ければ昇格しない", () => {
+      const html =
+        '<html><body><div id="content"></div><script src="/a.js"></script></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+
+    test('id の前方一致（id="application"）はマウント先として扱わない（昇格しない）', () => {
+      const html =
+        '<html><body><div id="application"></div><script src="/a.js"></script></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+
+    test("インライン script のみ（外部 src 無し）は昇格しない", () => {
+      const html =
+        '<html><body><div id="root"></div><script>var a=1;</script></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+
+    test("data-src 等の別属性は外部 script src と誤認しない（昇格しない）", () => {
+      const html =
+        '<html><body><div id="root"></div><script data-src="/lazy.js"></script></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+  });
 });
 
 describe("PromotionGuard", () => {
