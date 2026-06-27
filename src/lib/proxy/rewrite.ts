@@ -237,9 +237,32 @@ export function buildGetFormDestination(
   let targetStr = extractBrowseTarget(browseRef);
   let prefix = browseNavPrefix(browseRef);
   if (!targetStr || !prefix) {
-    // action から復元できなければ閲覧ページ自身から復元する。
-    targetStr = extractBrowseTarget(pageUrl);
-    prefix = browseNavPrefix(pageUrl);
+    // action が proxy ナビ URL でない場合の復元。
+    //  (1) 閲覧ページ（プロキシ）と別オリジンの絶対 http(s) URL（React 等のハイドレーションで
+    //      実サイト URL へ復元された action 等。#164）は、その URL 自体を実ターゲットとして
+    //      直接 proxify する。プレフィックスは閲覧ページから導出する。
+    //  (2) それ以外（同一オリジンのルート相対 action・action 無し等）は閲覧ページ自身から復元する。
+    const pagePrefix = browseNavPrefix(pageUrl);
+    let ref: URL | null = null;
+    let pageOrigin: string | null = null;
+    try {
+      ref = new URL(browseRef);
+      pageOrigin = new URL(pageUrl).origin;
+    } catch {
+      ref = null;
+    }
+    if (
+      ref &&
+      pagePrefix &&
+      ref.origin !== pageOrigin &&
+      (ref.protocol === "http:" || ref.protocol === "https:")
+    ) {
+      targetStr = ref.href;
+      prefix = pagePrefix;
+    } else {
+      targetStr = extractBrowseTarget(pageUrl);
+      prefix = pagePrefix;
+    }
   }
   if (!targetStr || !prefix) return null;
 
@@ -260,17 +283,23 @@ export function buildGetFormDestination(
 
 // GET フォーム送信を横取りする注入スクリプト。
 // 純粋ロジック（buildGetFormDestination）を toString() で埋め込み、ブラウザでは
-// 2 経路で捕捉する:
+// 3 経路で捕捉する:
 //  (A) document への submit イベント委任（capture）。動的フォーム・ネイティブ submit・
 //      requestSubmit（submit イベントを発火する）を含めて捕捉する。横取り時は
 //      preventDefault に加え stopImmediatePropagation を呼び、SPA（React 等）が
 //      バブルの自前 submit ハンドラで実サイトへ後勝ち遷移するのを阻止する（#93。
-//      クリック横取りと同方式。例: www.yahoo.co.jp トップ検索）。
+//      クリック横取りと同方式）。
 //  (B) HTMLFormElement.prototype.submit のオーバーライド。form.submit()（プログラム送信）は
 //      submit イベントを発火しないため (A) で捕捉できない（例: Google 検索）。同じ
 //      buildGetFormDestination を適用して振り向ける（#78）。
+//  (C) document への keydown イベント委任（capture・Enter キー）。submit イベントも
+//      form.submit() も介さず、自前の keydown ハンドラで location.href へ実サイト絶対 URL を
+//      直接代入して遷移するサイト（例: www.yahoo.co.jp トップ検索）対策（#164）。location 系は
+//      改変不能でフックできないため、Enter をサイトのハンドラより先に capture で奪い、フォーム内
+//      input の暗黙送信相当のときだけ stopImmediatePropagation して同じ振り向けロジックで遷移する。
+//      IME 変換中・修飾キー併用・textarea・送信を伴わない input 型・フォーム外 input は素通しする。
 // 自前のアドレスバー（#proxy-addressbar 内のフォーム）は独自の onsubmit を持つため
-// 双方で横取り対象から除外する（横取りすると入力 URL が無視され得る）。
+// 全経路で横取り対象から除外する（横取りすると入力 URL が無視され得る）。
 const GET_FORM_INTERCEPT_HTML =
   `<script>(function(){` +
   `var browseNavPrefix=${browseNavPrefix.toString()};` +
@@ -282,6 +311,19 @@ const GET_FORM_INTERCEPT_HTML =
   `if(f.closest&&f.closest('#proxy-addressbar'))return;` +
   `var fd;try{fd=new FormData(f,e.submitter)}catch(_){fd=new FormData(f)}` +
   `var dest=build(f.getAttribute('method')||'get',f.getAttribute('action')||'',location.href,Array.from(fd.entries()));` +
+  `if(dest){e.preventDefault();e.stopImmediatePropagation();location.href=dest;}` +
+  `},true);` +
+  // (C) Enter キー押下（submit/form.submit() を介さず location.href 直接代入で遷移するサイト対策。#164）。
+  `document.addEventListener('keydown',function(e){` +
+  `if(e.key!=='Enter'||e.isComposing||e.keyCode===229)return;` +
+  `if(e.defaultPrevented||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;` +
+  `var t=e.target;if(!t||t.tagName!=='INPUT')return;` +
+  `var ty=(t.getAttribute('type')||'text').toLowerCase();` +
+  `if(ty==='button'||ty==='submit'||ty==='reset'||ty==='checkbox'||ty==='radio'||ty==='file'||ty==='image')return;` +
+  `var f=t.form||(t.closest&&t.closest('form'));if(!f)return;` +
+  `if(f.closest&&f.closest('#proxy-addressbar'))return;` +
+  `var fd;try{fd=new FormData(f)}catch(_){fd=null}` +
+  `var dest=fd?build(f.getAttribute('method')||'get',f.getAttribute('action')||'',location.href,Array.from(fd.entries())):null;` +
   `if(dest){e.preventDefault();e.stopImmediatePropagation();location.href=dest;}` +
   `},true);` +
   // (B) form.submit()（プログラム送信）。submit イベントを出さないので prototype を上書きする。

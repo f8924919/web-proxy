@@ -475,6 +475,32 @@ describe("buildGetFormDestination", () => {
     expect(dest).toBe(nav("https://example.com/search?q=x"));
   });
 
+  test("絶対クロスオリジン action（ハイドレーションで復元された実 URL）をそのまま proxify する（#164）", () => {
+    // React 等のハイドレーションで action がパス反映 URL から実サイト絶対 URL（閲覧ページと
+    // 別オリジン）へ戻るケース。閲覧ページ（example.com）へフォールバックせず、action の
+    // ホスト（search.example.com）自体を実ターゲットとして直接 proxify する。
+    const dest = buildGetFormDestination(
+      "get",
+      "https://search.example.com/search",
+      PAGE,
+      [["q", "hello world"]]
+    );
+    expect(dest).toBe(nav("https://search.example.com/search?q=hello+world"));
+  });
+
+  test("絶対クロスオリジン action でも BASE_PATH を遷移先で保持する（#164）", () => {
+    const page = `https://proxy.test/proxy/3000${nav("https://www.example.com")}`;
+    const dest = buildGetFormDestination(
+      "get",
+      "https://search.example.com/search",
+      page,
+      [["q", "x"]]
+    );
+    expect(dest).toBe(
+      `/proxy/3000${nav("https://search.example.com/search?q=x")}`
+    );
+  });
+
   test("POST フォームは横取りしない（null を返す）", () => {
     const action = nav("https://example.com/search");
     expect(

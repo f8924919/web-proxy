@@ -111,6 +111,128 @@ describe("GET フォーム横取りスクリプト（注入）", () => {
   });
 });
 
+describe("Enter キー押下の横取りスクリプト（注入・#164）", () => {
+  // 仕様: docs/spec/features/proxy.md §GET フォーム送信の横取り（Enter キー押下による遷移の捕捉）
+  // submit イベントも form.submit() も介さず location.href 直接代入で実サイトへ遷移するサイト
+  //（例 www.yahoo.co.jp トップ検索）を、keydown(Enter) のキャプチャ横取りで救済する。
+  beforeEach(() => {
+    injectInterceptor();
+  });
+
+  // input で Enter を発火し、横取りされたかを判定する。横取り時は capture フェーズで
+  // preventDefault + stopImmediatePropagation するため、defaultPrevented になり、かつ
+  // バブルの keydown probe へ到達しない。（jsdom はナビゲーション未実装のため到達観察で判定）
+  function dispatchEnter(
+    target: Element,
+    init: KeyboardEventInit = {}
+  ): { prevented: boolean; reachedBubble: boolean } {
+    let reachedBubble = false;
+    const probe = () => {
+      reachedBubble = true;
+    };
+    document.addEventListener("keydown", probe, false);
+    const evt = new KeyboardEvent("keydown", {
+      key: "Enter",
+      bubbles: true,
+      cancelable: true,
+      ...init,
+    });
+    try {
+      target.dispatchEvent(evt);
+    } catch {
+      // location.href 代入で jsdom が例外を投げ得るが、判定（preventDefault 済み）に影響しない
+    }
+    document.removeEventListener("keydown", probe, false);
+    return { prevented: evt.defaultPrevented, reachedBubble };
+  }
+
+  function makeSearchForm(action: string, inputType = "search") {
+    const form = document.createElement("form");
+    form.setAttribute("method", "get");
+    form.setAttribute("action", action);
+    const input = document.createElement("input");
+    input.setAttribute("type", inputType);
+    input.setAttribute("name", "p");
+    input.value = "hello";
+    form.appendChild(input);
+    document.body.appendChild(form);
+    return { form, input };
+  }
+
+  test("絶対クロスオリジン action のフォームで input Enter を横取りする（yahoo 相当）", () => {
+    const { input } = makeSearchForm("https://search.yahoo.co.jp/search");
+    const r = dispatchEnter(input);
+    expect(r.prevented).toBe(true);
+    expect(r.reachedBubble).toBe(false);
+  });
+
+  test("パス反映 action のフォームでも input Enter を横取りする", () => {
+    const { input } = makeSearchForm(
+      "/proxy/3000/browse?url=" +
+        encodeURIComponent("https://www.google.com/search")
+    );
+    const r = dispatchEnter(input);
+    expect(r.prevented).toBe(true);
+    expect(r.reachedBubble).toBe(false);
+  });
+
+  test("IME 変換確定中（isComposing）の Enter は横取りしない", () => {
+    const { input } = makeSearchForm("https://search.yahoo.co.jp/search");
+    const r = dispatchEnter(input, { isComposing: true });
+    expect(r.prevented).toBe(false);
+    expect(r.reachedBubble).toBe(true);
+  });
+
+  test("修飾キー併用（metaKey）の Enter は横取りしない", () => {
+    const { input } = makeSearchForm("https://search.yahoo.co.jp/search");
+    const r = dispatchEnter(input, { metaKey: true });
+    expect(r.prevented).toBe(false);
+    expect(r.reachedBubble).toBe(true);
+  });
+
+  test("textarea の Enter（改行入力）は横取りしない", () => {
+    const form = document.createElement("form");
+    form.setAttribute("method", "get");
+    form.setAttribute("action", "https://search.yahoo.co.jp/search");
+    const ta = document.createElement("textarea");
+    ta.setAttribute("name", "p");
+    form.appendChild(ta);
+    document.body.appendChild(form);
+    const r = dispatchEnter(ta);
+    expect(r.prevented).toBe(false);
+    expect(r.reachedBubble).toBe(true);
+  });
+
+  test("送信を伴わない input 型（checkbox）の Enter は横取りしない", () => {
+    const { input } = makeSearchForm(
+      "https://search.yahoo.co.jp/search",
+      "checkbox"
+    );
+    const r = dispatchEnter(input);
+    expect(r.prevented).toBe(false);
+    expect(r.reachedBubble).toBe(true);
+  });
+
+  test("フォームに属さない input の Enter は横取りしない", () => {
+    const input = document.createElement("input");
+    input.setAttribute("type", "search");
+    document.body.appendChild(input);
+    const r = dispatchEnter(input);
+    expect(r.prevented).toBe(false);
+    expect(r.reachedBubble).toBe(true);
+  });
+
+  test("自前アドレスバーの input Enter は横取りしない", () => {
+    const addrInput = document.querySelector(
+      "#proxy-addressbar form input"
+    ) as HTMLInputElement;
+    expect(addrInput).not.toBeNull();
+    const r = dispatchEnter(addrInput);
+    expect(r.prevented).toBe(false);
+    expect(r.reachedBubble).toBe(true);
+  });
+});
+
 describe("クリックナビ横取りスクリプト（注入）", () => {
   // 仕様: docs/spec/features/proxy.md §クライアント側ナビゲーションの横取り
   // 注入スクリプト（CLICK_NAV_INTERCEPT_HTML）のランタイム挙動を jsdom で検証する。
