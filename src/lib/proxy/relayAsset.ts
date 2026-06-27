@@ -29,6 +29,11 @@ import {
 } from "@/lib/proxy/concurrency";
 import { getClientIp } from "@/lib/proxy/clientIp";
 import {
+  assetRetryConfigFromEnv,
+  computeRetryWaitMs,
+  sleep,
+} from "@/lib/proxy/retry";
+import {
   proxyAuthConfigFromEnv,
   isAuthorized,
   AUTH_HEADER_NAME,
@@ -103,19 +108,42 @@ export async function relayAsset(
       ? relayRequestHeaders(req.headers, parsed.origin, jarCookie)
       : forwardableRequestHeaders(req.headers, parsed.origin, jarCookie);
 
+    // 上流 429 のサーバー側リトライ（#166）。egress IP 集中で上流 CDN（例: Wikimedia の
+    // Varnish）が短い Retry-After 付き 429 を返すと画像が欠けるため、GET/HEAD に限り
+    // Retry-After を尊重して限定回数だけ再試行する。自前レート制限・同時接続由来の 429 は
+    // 上流 fetch の前に発行済みのため対象外。非冪等メソッドは副作用二重発火を避け再試行しない。
+    // 仕様: docs/spec/features/proxy.md §アセット中継の上流 429 リトライ（Retry-After 尊重・#166）
+    const retryConfig = assetRetryConfigFromEnv();
+    const retryable = req.method === "GET" || req.method === "HEAD";
+    let attemptsLeft = retryable ? retryConfig.attempts : 0;
     let res: Response;
     let finalUrl: string;
-    try {
-      ({ response: res, finalUrl } = await proxyFetch(parsed.href, {
-        method: req.method,
-        body: isBodyMethod ? req.body : undefined,
-        headers,
-      }));
-    } catch (err) {
-      if (err instanceof SsrfBlockedError) {
-        return new Response("Forbidden", { status: 403 });
+    for (;;) {
+      try {
+        ({ response: res, finalUrl } = await proxyFetch(parsed.href, {
+          method: req.method,
+          body: isBodyMethod ? req.body : undefined,
+          headers,
+        }));
+      } catch (err) {
+        if (err instanceof SsrfBlockedError) {
+          return new Response("Forbidden", { status: 403 });
+        }
+        return new Response("Bad Gateway", { status: 502 });
       }
-      return new Response("Bad Gateway", { status: 502 });
+
+      if (res.status !== 429 || attemptsLeft <= 0) break;
+      const waitMs = computeRetryWaitMs(
+        res.headers.get("retry-after"),
+        Date.now(),
+        retryConfig
+      );
+      // null は「Retry-After が上限超」→ 再試行せず 429 を即透過。
+      if (waitMs === null) break;
+      // 再試行前に 429 本文を破棄してストリームを解放する。
+      await res.body?.cancel().catch(() => {});
+      attemptsLeft--;
+      await sleep(waitMs);
     }
 
     const contentType = res.headers.get("content-type") ?? "";

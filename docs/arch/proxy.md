@@ -141,6 +141,10 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
    - GET/HEAD: forwardableRequestHeaders（許可リスト＝Cookie/Authorization、既存挙動）
    - 非 GET   : relayRequestHeaders（拒否リスト方式で広めに転送）＋ body を転送
    { response, finalUrl } = proxyFetch(url, { method, body, headers }) → SSRF ブロックなら 403
+4b. 上流 429 リトライ（GET/HEAD のみ・#166）: res.status === 429 かつ再試行回数が残るなら
+   computeRetryWaitMs(res.headers.get("retry-after"), Date.now(), retryConfig) で待機 ms を決定。
+   null（Retry-After が上限超）なら 429 を即透過。値が返れば res.body を cancel し sleep 後に
+   再 proxyFetch（[機能仕様 §アセット中継の上流 429 リトライ](../spec/features/proxy.md#アセット中継の上流-429-リトライretry-after-尊重166)）
 5. Content-Type が text/css → readTextWithLimit(res, maxBufferBytesFromEnv()) で
    上限内に読み（超過は BodyTooLargeError → 413）、rewriteCss(css, finalUrl)
    （baseUrl は追従後の最終 URL。#42。サイズ上限は #134）。
@@ -635,6 +639,38 @@ interface JarCookie {
 
 - 往路: `relayAsset` / `browse` 系 route が `resolveSession(req)` → `cookieJar.cookieHeader(id, targetOrigin)` で `jarCookie` を得て、`forwardableRequestHeaders` / `relayRequestHeaders` の第 3 引数へ渡す。
 - 復路: `relayBrowse` / `relayAsset` が上流レスポンス取得後に `cookieJar.store(id, new URL(finalUrl).origin, res.headers.getSetCookie())` で格納し、`isNew` セッションなら `outHeaders.append("Set-Cookie", buildSessionCookie(id, BASE_PATH))` を付ける。
+
+---
+
+## `src/lib/proxy/retry.ts`（上流 429 リトライ・#166）
+
+**役割**: アセット中継が上流から受けた `429` を `Retry-After` 尊重で再試行するための、純粋ロジックと待機ユーティリティ。relayAsset 本体は現行方針でテスト対象外のため、判定・待機計算を純粋関数へ切り出して単体テスト可能にする。
+
+> 関連機能仕様: [機能仕様 §アセット中継の上流 429 リトライ](../spec/features/proxy.md#アセット中継の上流-429-リトライretry-after-尊重166)。
+
+### `parseRetryAfter(value, nowMs)`
+
+`Retry-After` ヘッダー文字列を待機ミリ秒へ解釈する純粋関数。
+
+- **秒数形式**（`"1"` 等の非負整数）: その秒数 × 1000 を返す。
+- **HTTP-date 形式**（`"Wed, 21 Oct 2026 07:28:00 GMT"` 等）: `Date.parse` で解釈し、`nowMs` との差（負なら 0）を返す。
+- **欠落（null）・解析不能**: `null` を返す（呼び出し側で既定待機にフォールバック）。
+
+### `assetRetryConfigFromEnv(env = process.env)`
+
+`PROXY_ASSET_RETRY_ATTEMPTS`（既定 1）/ `PROXY_ASSET_RETRY_MAX_WAIT_MS`（既定 2000）を読む純粋関数。`PROXY_ASSET_RETRY_ATTEMPTS` は **0 以上**の整数（0 は実質無効化）、`PROXY_ASSET_RETRY_MAX_WAIT_MS` は **正の整数**を受け付け、いずれも不正値・未設定は既定へフォールバック（`maxBufferBytesFromEnv` と同方針）。
+
+### `computeRetryWaitMs(retryAfterHeader, nowMs, config)`
+
+リトライ可否と待機 ms を一手に決める純粋関数。`relayAsset` のループはこの戻り値だけで分岐する。
+
+- `parseRetryAfter` が `null`（欠落・解析不能）→ 短い既定待機 `min(DEFAULT_WAIT_MS=1000, config.maxWaitMs)`。
+- 解析値が `config.maxWaitMs` 超 → **`null`（再試行しない＝429 即透過）**。
+- それ以外 → 解析値（過去日時は 0）。
+
+### `sleep(ms)`
+
+`setTimeout` ベースの待機。I/O 相当のため純粋関数テストの対象外（`relayAsset` の配線でのみ使用）。
 
 ---
 
