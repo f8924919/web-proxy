@@ -24,7 +24,7 @@ src/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
 │       ├── browserFetch.ts   # ヘッドレスブラウザ中継（ブラウザバック中継・ティア判定・Cookie ウォーミング）
-│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り・クリックナビ横取り・document.domain シム・実行時リクエスト横取りシム <script> 注入含む）
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り（keydown(Enter)・絶対クロスオリジン action 含む。#164）・クリックナビ横取り・document.domain シム・実行時リクエスト横取りシム <script> 注入含む）
 │       ├── proxyPath.ts      # アセット中継 URL スキーム（パス反映）の組み立て・復元（純粋関数。#100）
 │       ├── browsePath.ts     # ブラウズ URL スキーム（パス反映）の組み立て・復元（純粋関数。#115）
 │       ├── relayAsset.ts     # アセット中継の共通処理（両 route が共有。中継・CORS・OPTIONS）
@@ -258,10 +258,10 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 ### 待機・Cookie 変換（純粋関数）
 
-| 純粋関数                        | 役割                                                                                                                                                                                                          |
-| ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolveBrowserWaitConfig(env)` | `PROXY_BROWSER_WAIT_UNTIL` / `PROXY_BROWSER_TIMEOUT_MS` / `PROXY_BROWSER_SETTLE_MS` を検証して `{ waitUntil, timeoutMs, settleMs }` を返す（不正値は既定へフォールバック。`debug-browser.mjs` と同方針、#39） |
-| `cookieToSetCookie(cookie)`     | Playwright の cookie オブジェクトを `Set-Cookie` 文字列へ変換する。`Domain` は付けず（`cookieJar.store` が origin 別に保持）、`Path` / `Secure` / `HttpOnly` / `SameSite` / 永続 cookie の `Expires` を反映する   |
+| 純粋関数                        | 役割                                                                                                                                                                                                            |
+| ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolveBrowserWaitConfig(env)` | `PROXY_BROWSER_WAIT_UNTIL` / `PROXY_BROWSER_TIMEOUT_MS` / `PROXY_BROWSER_SETTLE_MS` を検証して `{ waitUntil, timeoutMs, settleMs }` を返す（不正値は既定へフォールバック。`debug-browser.mjs` と同方針、#39）   |
+| `cookieToSetCookie(cookie)`     | Playwright の cookie オブジェクトを `Set-Cookie` 文字列へ変換する。`Domain` は付けず（`cookieJar.store` が origin 別に保持）、`Path` / `Secure` / `HttpOnly` / `SameSite` / 永続 cookie の `Expires` を反映する |
 
 ### CSSOM スタイルの実体化（DOM 操作関数・#120）
 
@@ -343,9 +343,9 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 ### 昇格判定・有効化（純粋関数）
 
-| 純粋関数                                            | 役割                                                                                                                                                                |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autoPromoteEnabledFromEnv(env)`                    | `PROXY_BROWSER_AUTO_PROMOTE`（`true` / `1` / `on` で有効、既定無効）を解釈する                                                                                      |
+| 純粋関数                                            | 役割                                                                                                                                                                                       |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `autoPromoteEnabledFromEnv(env)`                    | `PROXY_BROWSER_AUTO_PROMOTE`（`true` / `1` / `on` で有効、既定無効）を解釈する                                                                                                             |
 | `shouldPromoteToBrowser(html, status, contentType)` | `text/html` 応答について、チャレンジ語句 / `<noscript>` 主体 / `403`・`503` / 空 SPA シェル（#160）のいずれかを検出したら `true`。非 HTML は常に `false`（空 body 単独は判定材料にしない） |
 
 - **チャレンジ語句**: `enable javascript` / `enablejs` / `checking your browser` / `recaptcha` / Cloudflare チャレンジ等の語句を本文（小文字化）に含むか判定する。
@@ -408,7 +408,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 `rewriteHtml` は `<body>` 直後（アドレスバー・SW 登録に続けて）に、GET フォーム送信を横取りする `<script>` を注入する。パス反映ナビ形式（#115）では `action` がターゲットを**パス部**に持つため GET 送信でも消失しないが、SPA（React 等）が自前 submit ハンドラで実サイトへ後勝ち遷移する（#93）のを阻止するため横取りは維持する。
 
-注入スクリプトは 2 経路で捕捉する。いずれも振り向け先の決定は純粋関数 `buildGetFormDestination`（＋共有ヘルパー `extractBrowseTarget` / `browseNavPrefix` / `buildBrowseDest`）を共用する。
+注入スクリプトは 3 経路で捕捉する。いずれも振り向け先の決定は純粋関数 `buildGetFormDestination`（＋共有ヘルパー `extractBrowseTarget` / `browseNavPrefix` / `buildBrowseDest`）を共用する。
 
 ```
 (A) document に submit を capture で委任（動的フォーム・ネイティブ submit・requestSubmit にも効く）:
@@ -426,9 +426,21 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
   （例: Google 検索）。prototype を上書きして同じ buildGetFormDestination を適用する。
 - 自前アドレスバー / GET 以外 / 復元不可（dest が null）/ 例外時は、元の submit を
   そのまま呼ぶ（挙動を変えない）。dest が得られた場合のみ location.href で遷移する。
+
+(C) document に keydown を capture で委任（Enter キー。#164）:
+- submit イベントも form.submit() も介さず、自前の keydown ハンドラで location.href へ
+  実サイト絶対 URL を直接代入して遷移するサイト（例 www.yahoo.co.jp トップ検索）対策。
+  location 系は改変不能のためフックできず、(A)(B) は空振りする。
+- Enter 押下が「フォーム内 input の暗黙送信」相当のときのみ、サイトの keydown ハンドラより
+  先に preventDefault + stopImmediatePropagation し、同じ buildGetFormDestination で遷移する。
+- 誤捕捉回避: IME 変換中（isComposing / keyCode 229）・修飾キー併用は素通し。textarea や
+  送信を伴わない input 型（button/submit/reset/checkbox/radio/file/image）・フォーム外 input・
+  アドレスバーは対象外。dest が null なら preventDefault せず素通し（挙動を変えない）。
 ```
 
-`BASE_PATH` とパス反映プレフィックスは `action`/`window.location` から再利用することで保持される（スクリプト内で BASE_PATH を個別に組み立てない）。`location.assign` / `history` 駆動の純粋な JS ナビゲーション（フォームを介さない）は対象外。
+`buildGetFormDestination` は、`action` がパス反映／後方互換いずれの proxy ナビ URL でもなく、かつ閲覧ページ（プロキシ）と**別オリジンの絶対 http(s) URL**（ハイドレーションで実サイト URL へ復元された action 等。#164）のときは、その URL 自体を実ターゲットとして直接 proxify する。プレフィックスは閲覧ページ URL から導出する。
+
+`BASE_PATH` とパス反映プレフィックスは `action`/`window.location` から再利用することで保持される（スクリプト内で BASE_PATH を個別に組み立てない）。フォーム要素と無関係な `location.assign` / `history` 駆動の純粋な JS ナビゲーションは対象外。
 
 ### クライアント側ナビゲーション横取りスクリプト注入
 
@@ -599,7 +611,10 @@ SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエス
 
 ```ts
 // Map<sessionId, { origins: Map<origin, Map<cookieName, JarCookie>>, lastAccess }>
-interface JarCookie { value: string; expiresAt: number | null } // null = セッション cookie
+interface JarCookie {
+  value: string;
+  expiresAt: number | null;
+} // null = セッション cookie
 ```
 
 ### セッション識別（純粋関数 + 生成）
