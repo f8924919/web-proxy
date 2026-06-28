@@ -36,6 +36,7 @@
 | [129-ssrf-dns-rebinding-ip-pinning.md](129-ssrf-dns-rebinding-ip-pinning.md)   | SSRF: DNS リバインディング/TOCTOU を undici Agent の connect.lookup で IP ピン留めし封鎖、isSsrfBlocked を IPv6/CGNAT/IPv4-mapped 対応に拡張（全 A/AAAA 検査）Issue #129 #130 / PR #139                                                                                                                          | 2026-06-23 |
 | [168-sendbeacon-intercept.md](168-sendbeacon-intercept.md)                     | 実行時リクエスト横取りシムに navigator.sendBeacon 上書きを追加し /gen_204 等のルート相対 beacon の 404 を解消（方式B 実測で sendBeacon 由来 404 が 24→0）Issue #168 / PR #169                                                                                                                                    | 2026-06-28 |
 | [172-client-nav-url-hardening.md](172-client-nav-url-hardening.md)             | クライアント側ナビゲーション URL の堅牢化（history.pushState/replaceState 上書き＋Navigation API navigate 横取り＝buildNavApiRedirect＋リクエストシムの pg() フォールバック）。YouTube の location.replace 由来離脱を緩和（方式B 実測で youtubei API が ESCAPED→PROXIED）。残課題は #174 へ Issue #172 / PR #173 | 2026-06-28 |
+| [174-dynamic-element-src-intercept.md](174-dynamic-element-src-intercept.md)   | 動的挿入要素の src 横取り（buildElementSrcRewrite＋挿入メソッド/プロパティ setter/setAttribute/MutationObserver で script/link/media→/api/proxy・iframe→/browse、script は SRI 除去）。初回ロードの SW ギャップ離脱を解消（方式B 実測で /s/player・音声・CSS が ESCAPED→PROXIED：9件/離脱0）Issue #174 / PR #176 | 2026-06-28 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
