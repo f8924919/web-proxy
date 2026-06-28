@@ -27,7 +27,7 @@ docs の「`location`/`history` API はフック不能」という記述は誤�
 
 - `buildNavApiRedirect`（純粋関数）: `tests/lib/proxy/rewrite.test.ts`（node）。
 - history.pushState/replaceState 注入実行: `tests/lib/proxy/rewrite.dom.test.ts`（jsdom）。
-- Navigation API 配線・`pg()` フォールバックは I/O 境界（[テスト方針](../testing/policy.md)）につき単体対象外。方式B で実測検証。
+- Navigation API 配線・`pg()` フォールバックは I/O 境界（[テスト方針](../../testing/policy.md)）につき単体対象外。方式B で実測検証。
 
 ## 実測（方式B・`npm run debug:browser -- https://www.youtube.com/`）
 
