@@ -41,7 +41,9 @@ export function GET(req: NextRequest) {
   const useBrowser = shouldUseBrowser(parsed.href, browserTierConfigFromEnv());
   return relayBrowse(
     parsed,
-    { headers: forwardableRequestHeaders(req.headers, parsed.origin, jarCookie) },
+    {
+      headers: forwardableRequestHeaders(req.headers, parsed.origin, jarCookie),
+    },
     useBrowser,
     true,
     getClientIp(req.headers),

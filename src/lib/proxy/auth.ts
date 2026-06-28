@@ -96,7 +96,8 @@ export function buildAuthCookie(token: string, basePath: string): string {
 export function safeRedirectPath(raw: string | null, basePath: string): string {
   const fallback = `${basePath || ""}/`;
   if (!raw) return fallback;
-  if (!raw.startsWith("/") || raw[1] === "/" || raw[1] === "\\") return fallback;
+  if (!raw.startsWith("/") || raw[1] === "/" || raw[1] === "\\")
+    return fallback;
   return raw;
 }
 

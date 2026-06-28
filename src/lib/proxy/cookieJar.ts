@@ -34,7 +34,10 @@ export function newSessionId(): string {
 // __pxy_sid Cookie の Set-Cookie 値を組み立てる純粋関数。buildAuthCookie に倣い
 // HttpOnly / SameSite=Lax を付け、Path は BASE_PATH（あれば）にスコープする。Secure は
 // TLS 終端構成（アプリは http で受ける）を壊さないため付けない。
-export function buildSessionCookie(sessionId: string, basePath: string): string {
+export function buildSessionCookie(
+  sessionId: string,
+  basePath: string
+): string {
   const path = basePath || "/";
   return `${SESSION_COOKIE_NAME}=${sessionId}; HttpOnly; SameSite=Lax; Path=${path}`;
 }
@@ -140,7 +143,10 @@ export class CookieJar {
       }
       // 後勝ちで上書きするため、挿入順を最新化する目的で一度削除してから設定する。
       jar.delete(parsed.name);
-      jar.set(parsed.name, { value: parsed.value, expiresAt: parsed.expiresAt });
+      jar.set(parsed.name, {
+        value: parsed.value,
+        expiresAt: parsed.expiresAt,
+      });
     }
     this.enforceOriginCap(jar);
     this.enforceSessionCap();
