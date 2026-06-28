@@ -167,12 +167,15 @@ describe("relayRequestHeaders", () => {
     ["transfer-encoding", "chunked"],
     ["accept-encoding", "gzip"],
     ["cookie", "__pxy_sid=s1"],
-  ])("hop-by-hop・インフラ系・ブラウザ Cookie の %s は素通ししない", (name, value) => {
-    const headers = new Headers({ [name]: value, "x-keep": "1" });
-    const result = relayRequestHeaders(headers, ORIGIN_A, "");
-    expect(result[name]).toBeUndefined();
-    expect(result["x-keep"]).toBe("1");
-  });
+  ])(
+    "hop-by-hop・インフラ系・ブラウザ Cookie の %s は素通ししない",
+    (name, value) => {
+      const headers = new Headers({ [name]: value, "x-keep": "1" });
+      const result = relayRequestHeaders(headers, ORIGIN_A, "");
+      expect(result[name]).toBeUndefined();
+      expect(result["x-keep"]).toBe("1");
+    }
+  );
 
   test("プロキシ文脈を漏らす origin / referer は転送しない（#27）", () => {
     const headers = new Headers({

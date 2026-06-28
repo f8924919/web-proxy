@@ -38,9 +38,9 @@ describe("buildSessionCookie", () => {
 
 describe("resolveSession", () => {
   test("受信 Cookie に __pxy_sid があれば既存セッションとして返す", () => {
-    expect(resolveSession(`theme=dark; ${SESSION_COOKIE_NAME}=existing`)).toEqual(
-      { id: "existing", isNew: false }
-    );
+    expect(
+      resolveSession(`theme=dark; ${SESSION_COOKIE_NAME}=existing`)
+    ).toEqual({ id: "existing", isNew: false });
   });
 
   test("__pxy_sid が無ければ新規セッションを発行する", () => {
@@ -56,12 +56,14 @@ describe("resolveSession", () => {
 
 describe("parseSetCookie", () => {
   test("name=value を取り出し、属性が無ければ expiresAt は null（セッション cookie）", () => {
-    expect(parseSetCookie("sid=abc; Path=/; Domain=example.com", 1000)).toEqual({
-      name: "sid",
-      value: "abc",
-      expiresAt: null,
-      deleted: false,
-    });
+    expect(parseSetCookie("sid=abc; Path=/; Domain=example.com", 1000)).toEqual(
+      {
+        name: "sid",
+        value: "abc",
+        expiresAt: null,
+        deleted: false,
+      }
+    );
   });
 
   test("Max-Age を相対秒として now からの絶対時刻に変換する", () => {
@@ -79,12 +81,17 @@ describe("parseSetCookie", () => {
 
   test("過去の Expires は削除指示として deleted=true", () => {
     const past = "Thu, 01 Jan 1970 00:00:00 GMT";
-    expect(parseSetCookie(`sid=abc; Expires=${past}`, 1000)?.deleted).toBe(true);
+    expect(parseSetCookie(`sid=abc; Expires=${past}`, 1000)?.deleted).toBe(
+      true
+    );
   });
 
   test("Max-Age は Expires より優先する（RFC 6265）", () => {
     const past = "Thu, 01 Jan 1970 00:00:00 GMT";
-    const parsed = parseSetCookie(`sid=abc; Expires=${past}; Max-Age=100`, 1000);
+    const parsed = parseSetCookie(
+      `sid=abc; Expires=${past}; Max-Age=100`,
+      1000
+    );
     expect(parsed?.deleted).toBe(false);
     expect(parsed?.expiresAt).toBe(1000 + 100 * 1000);
   });
