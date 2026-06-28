@@ -299,8 +299,20 @@ describe("クリックナビ横取りスクリプト（注入）", () => {
     return a;
   }
 
+  // 注入スクリプトは history.pushState/replaceState も上書きする（#172）。テスト間へ
+  // 上書きが波及しないよう、注入前のネイティブ実装を保存し afterEach で復元する。
+  let origPush: typeof history.pushState;
+  let origReplace: typeof history.replaceState;
+
   beforeEach(() => {
+    origPush = history.pushState;
+    origReplace = history.replaceState;
     injectClickInterceptor();
+  });
+
+  afterEach(() => {
+    history.pushState = origPush;
+    history.replaceState = origReplace;
   });
 
   test("動的描画された http(s) 絶対 URL の <a> クリックを横取りする", () => {
@@ -370,6 +382,94 @@ describe("クリックナビ横取りスクリプト（注入）", () => {
     } finally {
       document.removeEventListener("click", spaRouter, false);
     }
+  });
+});
+
+describe("history.pushState/replaceState 横取りシム（注入実行・#172）", () => {
+  // 仕様: docs/spec/features/proxy.md §history.pushState / replaceState の横取り
+  // CLICK_NAV_INTERCEPT_HTML が history.pushState/replaceState を上書きし、第 3 引数 url を
+  // パス反映ナビ形式へ書き換える。純粋ロジック（buildClickNavDestination）は rewrite.test.ts。
+  // jsdom の location は …/proxy/3000/browse?url=https://www.google.com/（ファイル冒頭の url）。
+  let origPush: typeof history.pushState;
+  let origReplace: typeof history.replaceState;
+  let origHref: string;
+
+  function injectClickInterceptor() {
+    const out = rewriteHtml(
+      `<html><body><p>hi</p></body></html>`,
+      "https://www.google.com/"
+    );
+    document.body.innerHTML = out
+      .replace(/^[\s\S]*?<body[^>]*>/i, "")
+      .replace(/<\/body>[\s\S]*$/i, "");
+    document.querySelectorAll("script").forEach((s) => {
+      if (s.textContent && s.textContent.includes("addEventListener('click'")) {
+        // eslint-disable-next-line no-eval
+        eval(s.textContent);
+      }
+    });
+  }
+
+  beforeEach(() => {
+    origPush = history.pushState;
+    origReplace = history.replaceState;
+    origHref = location.href;
+    injectClickInterceptor();
+  });
+
+  afterEach(() => {
+    // 上書きを戻し、元実装で URL を元の閲覧ページへ復元する（他テストへ波及させない）。
+    history.pushState = origPush;
+    history.replaceState = origReplace;
+    origReplace.call(history, null, "", origHref);
+  });
+
+  // 振り向け先は browseNavPrefix が逆プロキシ前置（jsdom URL の /proxy/3000）を保持するため
+  // /proxy/3000/browse/<scheme>/<host>/<path> になる（BASE_PATH 相当の保持。GET フォーム横取りと同方式）。
+  test("ルート相対 URL の pushState をパス反映ナビ形式へ書き換える", () => {
+    history.pushState({ a: 1 }, "", "/search?q=foo");
+    expect(location.pathname).toBe(
+      "/proxy/3000/browse/https/www.google.com/search"
+    );
+    expect(location.search).toBe("?q=foo");
+  });
+
+  test("外部オリジン絶対 URL の replaceState をパス反映ナビ形式へ書き換える", () => {
+    history.replaceState(null, "", "https://www.google.com/foo/bar");
+    expect(location.pathname).toBe(
+      "/proxy/3000/browse/https/www.google.com/foo/bar"
+    );
+  });
+
+  test("url 省略（null/undefined）時は現在の URL を維持する", () => {
+    const before = location.href;
+    history.pushState({ a: 1 }, "");
+    expect(location.href).toBe(before);
+  });
+
+  test("state / title は元の値のまま委譲される", () => {
+    history.pushState({ k: "v" }, "", "/x");
+    expect(history.state).toEqual({ k: "v" });
+    expect(location.pathname).toBe("/proxy/3000/browse/https/www.google.com/x");
+  });
+
+  test("既にパス反映ナビ形式の url は二重書き換えしない（冪等）", () => {
+    history.pushState(
+      null,
+      "",
+      "/proxy/3000/browse/https/www.google.com/watch?v=1"
+    );
+    expect(location.pathname).toBe(
+      "/proxy/3000/browse/https/www.google.com/watch"
+    );
+    expect(location.search).toBe("?v=1");
+  });
+
+  test("# 同一ページアンカーは書き換えず素通しする", () => {
+    history.pushState(null, "", "#frag");
+    // 書き換えられず、閲覧ページのパスは変わらない（hash のみ付与）。
+    expect(location.hash).toBe("#frag");
+    expect(location.pathname).toBe("/proxy/3000/browse");
   });
 });
 
