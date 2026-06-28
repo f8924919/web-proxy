@@ -490,7 +490,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 > 関連仕様: [プロキシ機能仕様 §実行時リクエスト横取りシム](../spec/features/proxy.md#実行時リクエスト横取りシムsw-非依存124)
 
-`rewriteHtml` は、`window.fetch` と `XMLHttpRequest.prototype.open` を上書きしてリクエスト URL を `/api/proxy/<scheme>/<host>/<path>` へ書き換える横取りシム `<script>` を、ページ内スクリプトより先に実行されるよう **`<head>` 最先頭**へ注入する（`document.domain` シムと同様）。SW は初回ロードで `clients.claim()` 確立前のサブリソース要求を横取りできず、同一オリジン相対は 404・クロスオリジン XHR は CORS 失敗する。本シムは SW 制御の有無に依らずこのギャップを埋める。
+`rewriteHtml` は、`window.fetch` ・ `XMLHttpRequest.prototype.open` ・ `navigator.sendBeacon` を上書きしてリクエスト URL を `/api/proxy/<scheme>/<host>/<path>` へ書き換える横取りシム `<script>` を、ページ内スクリプトより先に実行されるよう **`<head>` 最先頭**へ注入する（`document.domain` シムと同様）。SW は初回ロードで `clients.claim()` 確立前のサブリソース要求を横取りできず、同一オリジン相対は 404・クロスオリジン XHR は CORS 失敗する。本シムは SW 制御の有無に依らずこのギャップを埋める。
 
 | 純粋関数                                                            | 役割                                                                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -499,7 +499,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 - **共有ヘルパー**: ターゲット復元は既存の純粋関数 `extractBrowseTarget` を再利用する。`buildRequestInterceptUrl` / `isProxyOwnPath` / `extractBrowseTarget` を `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
 - **SW との非競合**: シムの振り向け先（同一オリジンの `/api/proxy/...`）は SW が自前ルートと判定して素通しするため二重書き換えにならない。判定規則は `public/sw.js` と揃え、差分が出ないよう対で保守する（SW は `importScripts` 不可のためロジック共有はできず、両ファイルに同等実装を持つ）。
-- **fetch / XHR の配線**: `fetch` シムは `input` が文字列・`URL`・`Request` のいずれでも URL を取り出して書き換える（`Request` は新 `Request` で再構築）。XHR シムは `open(method, url)` の `url` を書き換える。いずれも非 GET のメソッド・ボディ・ヘッダーを保持する。書き換え不要（`null`）なら元の `fetch` / `open` を素通しする。
+- **fetch / XHR / sendBeacon の配線**: `fetch` シムは `input` が文字列・`URL`・`Request` のいずれでも URL を取り出して書き換える（`Request` は新 `Request` で再構築）。XHR シムは `open(method, url)` の `url` を書き換える。`navigator.sendBeacon` シム（#168）は第 1 引数 URL を書き換え、第 2 引数 `data` はそのまま委譲し、戻り値の `boolean` も元実装の結果を返す（`navigator` を `this` として呼ぶ）。`navigator.sendBeacon` が無い環境では上書きしない。いずれも非 GET のメソッド・ボディ・ヘッダーを保持する。書き換え不要（`null`）なら元の `fetch` / `open` / `sendBeacon` を素通しする。
 - **テスト**: `isProxyOwnPath` / `buildRequestInterceptUrl`（純粋関数）を単体テスト対象とする。`window.fetch` / XHR の上書き配線（ブラウザ I/O）は[テスト方針](../testing/policy.md)によりテスト対象外。
 
 ---

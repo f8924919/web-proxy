@@ -558,6 +558,13 @@ const REQUEST_INTERCEPT_HTML =
   `XMLHttpRequest.prototype.open=function(method,url){try{` +
   `var dest=build(url,location.href,origin,bp);if(dest){arguments[1]=dest;}` +
   `}catch(e){}return _open.apply(this,arguments);};` +
+  // navigator.sendBeacon 上書き（#168）。テレメトリ等の POST ping は fetch/XHR を
+  // 経由しないため、ここで第 1 引数 url を書き換える。data（第 2 引数）はそのまま委譲し、
+  // 戻り値（送信キュー投入可否の boolean）も元実装の結果を返す。navigator を this として呼ぶ。
+  `var _sb=navigator.sendBeacon;` +
+  `if(_sb){navigator.sendBeacon=function(url){try{` +
+  `var dest=build(url,location.href,origin,bp);if(dest){arguments[0]=dest;}` +
+  `}catch(e){}return _sb.apply(navigator,arguments);};}` +
   `})()</script>`;
 
 // 実行時リクエスト横取り Service Worker（public/sw.js）の登録スニペット。
