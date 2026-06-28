@@ -34,6 +34,7 @@
 | [124-runtime-request-intercept-shim.md](124-runtime-request-intercept-shim.md) | 初回ロードで SW 未制御により相対/クロスオリジン サブリソース(fetch/XHR)が取りこぼされる問題を、SW 同一規則の横取りシム(window.fetch/XHR.open 上書き)の head 注入で解消 Issue #124 / PR #125            | 2026-06-23 |
 | [123-hydration-known-limitation.md](123-hydration-known-limitation.md)         | 調査スパイク: ブラウザモードの React hydration エラー(#418 等)を切り分け、実害なし(コンソールノイズ)と判定し既知の制約として spec/arch に明記。低減策は体験を壊すリスクから見送り Issue #123 / PR #127 | 2026-06-23 |
 | [129-ssrf-dns-rebinding-ip-pinning.md](129-ssrf-dns-rebinding-ip-pinning.md)   | SSRF: DNS リバインディング/TOCTOU を undici Agent の connect.lookup で IP ピン留めし封鎖、isSsrfBlocked を IPv6/CGNAT/IPv4-mapped 対応に拡張（全 A/AAAA 検査）Issue #129 #130 / PR #139                | 2026-06-23 |
+| [168-sendbeacon-intercept.md](168-sendbeacon-intercept.md)                     | 実行時リクエスト横取りシムに navigator.sendBeacon 上書きを追加し /gen_204 等のルート相対 beacon の 404 を解消（方式B 実測で sendBeacon 由来 404 が 24→0）Issue #168 / PR #169                          | 2026-06-28 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
