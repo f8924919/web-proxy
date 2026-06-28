@@ -39,6 +39,6 @@ docs の「`location`/`history` API はフック不能」という記述は誤�
 
 ## 残課題（#172 対象外・別系統）
 
-- `/s/player/*.js`・`www-player.css`・`/s/search/audio/*.mp3` 等の**要素 src（script/link/media）のルート相対動的挿入**は本シム対象外で、Service Worker（初回ロードはギャップ）に依存。YouTube 左サイドバー／app-shell の描画はこれに律速される。→ SW ギャップ低減の別 Issue 候補。
+- `/s/player/*.js`・`www-player.css`・`/s/search/audio/*.mp3` 等の**要素 src（script/link/media）のルート相対動的挿入**は本シム対象外で、Service Worker（初回ロードはギャップ）に依存。YouTube 左サイドバー／app-shell の描画はこれに律速される。→ 別 Issue **#174** として起票済み。
 - `googlevideo.com/videoplayback` の 403（動画セグメント）はアンチボット/IP 起因（#73 と同種）。ブラウザティア・クリーン IP 前提で本質的に対象外。
 - CSP report-only の相対 `report-uri` 404（ブラウザネイティブ送信のため JS シムでは横取り不可）。実害なしのノイズ。
