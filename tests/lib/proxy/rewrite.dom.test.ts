@@ -406,3 +406,76 @@ describe("document.domain ドメインガード無効化シム（注入実行）
     expect(document.domain).toMatch(/^(.+\.)?yahoo(\.co|-labs)?\.jp$/);
   });
 });
+
+describe("実行時リクエスト横取りシム: navigator.sendBeacon（注入実行・#168）", () => {
+  // 仕様: docs/spec/features/proxy.md §実行時リクエスト横取りシム（SW 非依存・#124）
+  // 純粋ロジック（buildRequestInterceptUrl）の網羅は rewrite.test.ts（node 環境）が担当。
+  // ここでは注入シムが navigator.sendBeacon を上書きし、第 1 引数 URL を書き換えて
+  // 元実装へ委譲する「配線」を検証する。元 sendBeacon をスタブし、渡る URL を観測する。
+  // jsdom は navigator.sendBeacon を実装しないため、テストで定義・後始末する（境界での I/O）。
+  let original: PropertyDescriptor | undefined;
+  let calls: Array<[string, unknown]>;
+  let stub: (url: string, data?: unknown) => boolean;
+  // evalBeaconShim はシム IIFE 全体を実行するため fetch / XHR.open も上書きされる。
+  // 他テストへ波及しないよう、これらも前後で復元する（グローバル状態の復元・テスト方針）。
+  let originalFetch: typeof window.fetch;
+  let originalXhrOpen: typeof XMLHttpRequest.prototype.open;
+
+  beforeEach(() => {
+    original = Object.getOwnPropertyDescriptor(window.navigator, "sendBeacon");
+    originalFetch = window.fetch;
+    originalXhrOpen = XMLHttpRequest.prototype.open;
+    calls = [];
+    stub = (url: string, data?: unknown) => {
+      calls.push([url, data]);
+      return true;
+    };
+    Object.defineProperty(window.navigator, "sendBeacon", {
+      value: stub,
+      configurable: true,
+      writable: true,
+    });
+  });
+
+  afterEach(() => {
+    if (original) {
+      Object.defineProperty(window.navigator, "sendBeacon", original);
+    } else {
+      // 元々無かった（jsdom）ので削除して状態を復元する
+      delete (window.navigator as { sendBeacon?: unknown }).sendBeacon;
+    }
+    window.fetch = originalFetch;
+    XMLHttpRequest.prototype.open = originalXhrOpen;
+  });
+
+  // シム本体（navigator.sendBeacon を上書きする <script>）を注入実行する。
+  // ページ URL は jsdom の location（…/browse?url=https://www.google.com/）。
+  function evalBeaconShim(): void {
+    const out = rewriteHtml(
+      `<html><head></head><body></body></html>`,
+      "https://www.google.com/"
+    );
+    const m = out.match(
+      /<script>((?:(?!<\/script>)[\s\S])*navigator\.sendBeacon=(?:(?!<\/script>)[\s\S])*)<\/script>/
+    );
+    expect(m).not.toBeNull();
+    // eslint-disable-next-line no-eval
+    eval(m![1]);
+  }
+
+  test("ルート相対 beacon（/gen_204）はターゲット origin に解決して /api/proxy へ書き換える", () => {
+    evalBeaconShim();
+    const ret = window.navigator.sendBeacon("/gen_204?x=1", "payload");
+    expect(calls).toEqual([
+      ["/api/proxy/https/www.google.com/gen_204?x=1", "payload"],
+    ]);
+    // 元実装の戻り値（送信キュー投入可否）をそのまま返す
+    expect(ret).toBe(true);
+  });
+
+  test("自前ルート（/api/proxy）は書き換えず元の URL のまま委譲する", () => {
+    evalBeaconShim();
+    window.navigator.sendBeacon("/api/proxy/https/x.com/y");
+    expect(calls).toEqual([["/api/proxy/https/x.com/y", undefined]]);
+  });
+});
