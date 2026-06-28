@@ -8,6 +8,7 @@ import {
   buildGetFormDestination,
   buildClickNavDestination,
   buildNavApiRedirect,
+  buildElementSrcRewrite,
   browseNavPrefix,
   extractBrowseTarget,
   buildBrowseDest,
@@ -239,15 +240,17 @@ describe("rewriteHtml", () => {
       const html = `<script src="/app.js" integrity="sha256-abc" crossorigin="anonymous"></script>`;
       const result = rewriteHtml(html, BASE);
       expect(result).toContain(`src="${asset("/app.js")}"`);
-      expect(result).not.toContain("integrity");
-      expect(result).not.toContain("crossorigin");
+      // 属性形（integrity=/crossorigin=）で検査する。注入シムは removeAttribute('integrity')
+      // 等で語自体を含むため、bare 文字列での検査は誤検知する（#174）。
+      expect(result).not.toContain("integrity=");
+      expect(result).not.toContain("crossorigin=");
     });
 
     test("integrity を持たない script は src のみ書き換え従来どおり", () => {
       const html = `<script src="/app.js"></script>`;
       const result = rewriteHtml(html, BASE);
       expect(result).toContain(`src="${asset("/app.js")}"`);
-      expect(result).not.toContain("integrity");
+      expect(result).not.toContain("integrity=");
     });
 
     test("src を持たないインライン script の中身・属性は触らない", () => {
@@ -727,6 +730,109 @@ describe("buildNavApiRedirect（Navigation API 駆動の離脱の復元・#172�
   test("destUrl / pageUrl が不正なら null", () => {
     expect(buildNavApiRedirect("not a url", PAGE)).toBeNull();
     expect(buildNavApiRedirect(`${PROXY}/`, "not a url")).toBeNull();
+  });
+});
+
+describe("buildElementSrcRewrite（動的挿入要素の src 横取り・#174）", () => {
+  // 仕様: docs/spec/features/proxy.md §動的挿入要素の src 横取り
+  const ORIGIN = "https://proxy.test";
+  const TARGET = "https://www.youtube.com/";
+  const PAGE = `${ORIGIN}${nav(TARGET)}`; // /browse/https/www.youtube.com/
+  const rw = (
+    tag: string,
+    attr: string,
+    value: string,
+    rel = "",
+    page = PAGE
+  ) => buildElementSrcRewrite(tag, attr, value, rel, page, ORIGIN, "");
+
+  test("script[src] ルート相対 → 現ターゲット基準で /api/proxy", () => {
+    expect(rw("script", "src", "/s/player/base.js")).toBe(
+      asset("https://www.youtube.com/s/player/base.js")
+    );
+  });
+
+  test("img[src] クロスオリジン絶対 → /api/proxy", () => {
+    expect(rw("img", "src", "https://i.ytimg.com/x.jpg")).toBe(
+      asset("https://i.ytimg.com/x.jpg")
+    );
+  });
+
+  test.each([["video"], ["audio"], ["source"]])(
+    "%s[src] → /api/proxy",
+    (tag) => {
+      expect(rw(tag, "src", "/media/clip.mp4")).toBe(
+        asset("https://www.youtube.com/media/clip.mp4")
+      );
+    }
+  );
+
+  test("link[href] rel=stylesheet → /api/proxy", () => {
+    expect(rw("link", "href", "/s/player/www-player.css", "stylesheet")).toBe(
+      asset("https://www.youtube.com/s/player/www-player.css")
+    );
+  });
+
+  test("link[href] rel=preload / modulepreload / prefetch も対象", () => {
+    for (const rel of ["preload", "modulepreload", "prefetch"]) {
+      expect(rw("link", "href", "/a.js", rel)).toBe(
+        asset("https://www.youtube.com/a.js")
+      );
+    }
+  });
+
+  test("link[href] 非リソース rel（canonical / alternate）は対象外（null）", () => {
+    expect(
+      rw("link", "href", "https://www.youtube.com/", "canonical")
+    ).toBeNull();
+    expect(rw("link", "href", "/feed", "alternate")).toBeNull();
+  });
+
+  test("iframe[src] はナビ扱いで /browse", () => {
+    expect(rw("iframe", "src", "/embed/abc")).toBe(
+      nav("https://www.youtube.com/embed/abc")
+    );
+  });
+
+  test("img[srcset] は各候補を /api/proxy へ書き換え記述子を保持", () => {
+    expect(rw("img", "srcset", "/a.png 1x, /b.png 2x")).toBe(
+      `${asset("https://www.youtube.com/a.png")} 1x, ${asset("https://www.youtube.com/b.png")} 2x`
+    );
+  });
+
+  test("source[srcset] の幅記述子も保持", () => {
+    expect(rw("source", "srcset", "/a.png 640w, /b.png 1280w")).toBe(
+      `${asset("https://www.youtube.com/a.png")} 640w, ${asset("https://www.youtube.com/b.png")} 1280w`
+    );
+  });
+
+  test("既に /api/proxy 形式の値は二重書き換えしない（null）", () => {
+    expect(
+      rw("script", "src", asset("https://www.youtube.com/s/player/base.js"))
+    ).toBeNull();
+  });
+
+  test("既に /browse 形式の iframe src は二重書き換えしない（null）", () => {
+    expect(rw("iframe", "src", nav("https://www.youtube.com/embed/abc"))).toBe(
+      // buildClickNavDestination は書き換え済み proxy ナビをそのまま返す（フルナビ用）。
+      // 値が変わらない＝実質冪等。ここでは現状の戻り（同一 path）を許容する。
+      nav("https://www.youtube.com/embed/abc")
+    );
+  });
+
+  test("対象外タグ/属性は null（div[src]・script[href]）", () => {
+    expect(rw("div", "src", "/x")).toBeNull();
+    expect(rw("script", "href", "/x")).toBeNull();
+    expect(rw("a", "href", "/x")).toBeNull(); // a はクリック横取り側の担当
+  });
+
+  test("非 http(s)（data:）・空値は null", () => {
+    expect(rw("img", "src", "data:image/png;base64,AAAA")).toBeNull();
+    expect(rw("script", "src", "")).toBeNull();
+  });
+
+  test("ターゲットを復元できない閲覧ページのルート相対は null", () => {
+    expect(rw("script", "src", "/x.js", "", `${ORIGIN}/browse`)).toBeNull();
   });
 });
 

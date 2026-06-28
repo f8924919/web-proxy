@@ -24,7 +24,7 @@ src/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
 │       ├── browserFetch.ts   # ヘッドレスブラウザ中継（ブラウザバック中継・ティア判定・Cookie ウォーミング）
-│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り（keydown(Enter)・絶対クロスオリジン action 含む。#164）・クリックナビ横取り（history.pushState/replaceState 上書き・Navigation API navigate 横取り含む。#172）・document.domain シム・実行時リクエスト横取りシム（pg() フォールバック含む。#172）<script> 注入含む）
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り（keydown(Enter)・絶対クロスオリジン action 含む。#164）・クリックナビ横取り（history.pushState/replaceState 上書き・Navigation API navigate 横取り含む。#172）・document.domain シム・実行時リクエスト横取りシム（pg() フォールバック含む。#172／動的挿入要素の src 横取り＝buildElementSrcRewrite 含む。#174）<script> 注入含む）
 │       ├── proxyPath.ts      # アセット中継 URL スキーム（パス反映）の組み立て・復元（純粋関数。#100）
 │       ├── browsePath.ts     # ブラウズ URL スキーム（パス反映）の組み立て・復元（純粋関数。#115）
 │       ├── relayAsset.ts     # アセット中継の共通処理（両 route が共有。中継・CORS・OPTIONS）
@@ -519,6 +519,22 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 - **fetch / XHR / sendBeacon の配線**: `fetch` シムは `input` が文字列・`URL`・`Request` のいずれでも URL を取り出して書き換える（`Request` は新 `Request` で再構築）。XHR シムは `open(method, url)` の `url` を書き換える。`navigator.sendBeacon` シム（#168）は第 1 引数 URL を書き換え、第 2 引数 `data` はそのまま委譲し、戻り値の `boolean` も元実装の結果を返す（`navigator` を `this` として呼ぶ）。`navigator.sendBeacon` が無い環境では上書きしない。いずれも非 GET のメソッド・ボディ・ヘッダーを保持する。書き換え不要（`null`）なら元の `fetch` / `open` / `sendBeacon` を素通しする。
 - **`pg()` フォールバック（browse コンテキスト喪失への耐性・#172）**: 注入時（`location` は閲覧ページ＝reflect 形式）の URL を `initPage` にキャッシュし、各書き換えで `pg()` を `pageUrl` として渡す。`pg()` は現 `location.href` が `extractBrowseTarget` でターゲットを復元できればそれを、できなければ（SPA の `location.replace('/')` 等で枠を外れた状態）`initPage` を返す。これにより `location` が枠を外れた後のルート相対リクエストも正しく中継される。完全ページ遷移時はシムが再注入され `initPage` も更新される。
 - **テスト**: `isProxyOwnPath` / `buildRequestInterceptUrl`（純粋関数）を単体テスト対象とする。`window.fetch` / XHR の上書き配線・`pg()` フォールバック（ブラウザ I/O）は[テスト方針](../testing/policy.md)によりテスト対象外（方式B で実測検証）。
+
+### 動的挿入要素の src 横取り注入（SW 非依存・#174）
+
+> 関連仕様: [プロキシ機能仕様 §動的挿入要素の src 横取り](../spec/features/proxy.md#動的挿入要素の-src-横取りsw-非依存174)
+
+同じ `REQUEST_INTERCEPT_HTML`（`<head>` 最先頭注入）内で、JS が実行時に動的挿入・代入した要素のリソース属性（`src`/`href`/`srcset`）を、サーバー側 `rewriteHtml` と同一規則で中継 URL へ書き換える。`fetch`/XHR/sendBeacon を経由しない `<script>`/`<link>`/メディア/`<iframe>` の動的読み込みが初回ロードの SW ギャップで離脱するのを防ぐ。
+
+| 純粋関数                                                                         | 役割                                                                                                                                                                                                                                                                  |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `buildElementSrcRewrite(tagName, attr, value, rel, pageUrl, swOrigin, basePath)` | 要素 (tag, attr) 種別に応じて中継 URL を決める。`iframe[src]` は `buildClickNavDestination`（/browse）、それ以外のアセットは `buildRequestInterceptUrl`（/api/proxy）、`srcset` は候補ごとに書き換え。対象外タグ・非リソース `link`・既に proxy 枠・復元不能は `null` |
+
+- **共有ヘルパー**: `buildRequestInterceptUrl`（/api/proxy）・`buildClickNavDestination`（/browse・`browseNavPrefix`/`buildBrowseDest`/`extractBrowseTarget` 依存）を `toString()` で同シムに埋め込む。`pg()` を fetch/XHR/sendBeacon と共有してターゲット origin を復元する。
+- **横取り経路（重ねがけ）**: (1) 挿入メソッド（`Node.prototype.appendChild`/`insertBefore`/`replaceChild`、`Element.prototype.append`/`prepend`/`before`/`after`/`replaceWith`）で挿入ノード＋子孫を委譲前に書き換える（`<script>` は挿入時フェッチ＝主経路）、(2) `src`/`href`/`srcset` プロパティ setter、(3) `Element.prototype.setAttribute`、(4) `MutationObserver` バックストップ。いずれも `try/catch` で防御し、`buildElementSrcRewrite` が `null`（既に proxy 枠等）なら触らない（冪等）。
+- **`<script>` の SRI 除去**: `script[src]` を書き換える際は `integrity`/`crossorigin` を除去する（サーバー側書き換えと同じ。/api/proxy 経由でハッシュ不一致ブロックを防ぐ）。
+- **既知の制限**: 接続済みサブツリーへの `innerHTML` 直挿入は解析時フェッチが先行し、`MutationObserver` 補正が再フェッチになり得る（実害は二重リクエスト）。別オリジン iframe 内は当該フレームのシムが担う。CSS `url()`/`@import` は対象外。
+- **テスト**: `buildElementSrcRewrite`（純粋関数）を単体テスト対象とする。挿入メソッド/setter/setAttribute/MutationObserver の配線（ブラウザ I/O）は[テスト方針](../testing/policy.md)により単体対象外（jsdom で代表配線を確認しつつ、最終的に方式B で実測検証）。
 
 ---
 

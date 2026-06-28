@@ -543,6 +543,93 @@ export function buildRequestInterceptUrl(
   return toProxy(resolved);
 }
 
+// 動的挿入・代入された要素のリソース属性（src/href/srcset）の値を、サーバー側 rewriteHtml と
+// 同一規則で中継 URL へ書き換える純粋関数（#174）。書き換え後の文字列を返す。書き換え不要・不可
+// （対象外タグ/属性・非リソース link・既にプロキシ枠・復元不能・非 http(s)・空値）は null。
+//  - iframe[src]: ナビ扱い → /browse（buildClickNavDestination）
+//  - script/img/source/video/audio[src]・link[href]（resource rel のみ）: /api/proxy（buildRequestInterceptUrl）
+//  - img/source[srcset]: 各候補を /api/proxy（記述子は保持。1 つも変わらなければ null）
+// rel は <link> の rel 属性（他要素では ""）。srcset 解析は rewriteSrcset と同方式。
+// 注入スクリプトはこの関数と buildRequestInterceptUrl / buildClickNavDestination を toString() で
+// 埋め込むため、外部参照を持たず URL / 文字列処理のみで完結させる。
+// 仕様: docs/spec/features/proxy.md §動的挿入要素の src 横取り（SW 非依存・#174）
+export function buildElementSrcRewrite(
+  tagName: string,
+  attr: string,
+  value: string,
+  rel: string,
+  pageUrl: string,
+  swOrigin: string,
+  basePath: string
+): string | null {
+  if (!value) return null;
+  const tag = tagName.toLowerCase();
+
+  // iframe[src] はナビゲーション扱い（/browse）。
+  if (tag === "iframe" && attr === "src") {
+    return buildClickNavDestination(value, pageUrl);
+  }
+
+  // アセット系の対象 (tag, attr) のみ受け付ける。
+  const isAssetSrc =
+    attr === "src" &&
+    (tag === "img" ||
+      tag === "source" ||
+      tag === "video" ||
+      tag === "audio" ||
+      tag === "script");
+  const isSrcset = attr === "srcset" && (tag === "img" || tag === "source");
+  const isLinkHref = attr === "href" && tag === "link";
+  if (!isAssetSrc && !isSrcset && !isLinkHref) return null;
+
+  // <link> は fetch されるリソース rel のみ（canonical / alternate 等は対象外）。
+  if (isLinkHref) {
+    const rels = (rel || "").toLowerCase().split(/\s+/);
+    const RESOURCE_RELS = [
+      "stylesheet",
+      "preload",
+      "modulepreload",
+      "prefetch",
+    ];
+    if (!rels.some((r) => RESOURCE_RELS.includes(r))) return null;
+  }
+
+  if (isSrcset) {
+    // rewriteSrcset と同方式で候補を分解し、各 URL を buildRequestInterceptUrl で書き換える。
+    const isWs = (c: string) =>
+      c === " " || c === "\t" || c === "\n" || c === "\f" || c === "\r";
+    const out: string[] = [];
+    let changed = false;
+    let pos = 0;
+    const len = value.length;
+    while (pos < len) {
+      while (pos < len && (isWs(value[pos]) || value[pos] === ",")) pos++;
+      if (pos >= len) break;
+      const urlStart = pos;
+      while (pos < len && !isWs(value[pos])) pos++;
+      let url = value.slice(urlStart, pos);
+      let descriptor = "";
+      if (url.endsWith(",")) {
+        url = url.replace(/,+$/, "");
+      } else {
+        while (pos < len && isWs(value[pos])) pos++;
+        const descStart = pos;
+        while (pos < len && value[pos] !== ",") pos++;
+        descriptor = value.slice(descStart, pos).trim();
+        if (pos < len) pos++;
+      }
+      const r = buildRequestInterceptUrl(url, pageUrl, swOrigin, basePath);
+      const rewritten = r ?? url;
+      if (r) changed = true;
+      out.push(descriptor ? `${rewritten} ${descriptor}` : rewritten);
+    }
+    return changed ? out.join(", ") : null;
+  }
+
+  // script/img/source/video/audio[src]・link[href] → /api/proxy。
+  return buildRequestInterceptUrl(value, pageUrl, swOrigin, basePath);
+}
+
 // fetch の input（string / URL / Request）から URL 文字列を取り出す。取り出せなければ null。
 // URL オブジェクトは .url を持たない（.href を使う）ため、Request の .url と区別して扱う。
 // 注入スクリプトに toString() で埋め込むため、外部参照を持たず URL のみで完結させる。
@@ -626,6 +713,13 @@ const REQUEST_INTERCEPT_HTML =
   `var extractBrowseTarget=${extractBrowseTarget.toString()};` +
   `var fetchInputUrl=${fetchInputUrl.toString()};` +
   `var build=${buildRequestInterceptUrl.toString()};` +
+  // 動的挿入要素の src 横取り（#174）で使う純粋関数。buildElementSrcRewrite は
+  // buildRequestInterceptUrl（=build のエイリアス）と buildClickNavDestination を名前で参照する。
+  `var buildRequestInterceptUrl=build;` +
+  `var browseNavPrefix=${browseNavPrefix.toString()};` +
+  `var buildBrowseDest=${buildBrowseDest.toString()};` +
+  `var buildClickNavDestination=${buildClickNavDestination.toString()};` +
+  `var buildElementSrcRewrite=${buildElementSrcRewrite.toString()};` +
   // browse コンテキスト喪失への耐性（#172）。SPA は location.replace('/') 等（location.* は
   // フック不能）や Navigation API で URL を proxy origin 直下へ書き換え、location が browse
   // コンテキスト（…/browse/<scheme>/<host>/…）を失うことがある。その状態で発行される
@@ -654,6 +748,43 @@ const REQUEST_INTERCEPT_HTML =
   `if(_sb){navigator.sendBeacon=function(url){try{` +
   `var dest=build(url,pg(),origin,bp);if(dest){arguments[0]=dest;}` +
   `}catch(e){}return _sb.apply(navigator,arguments);};}` +
+  // 動的挿入要素の src 横取り（#174）。fetch/XHR/sendBeacon を経由しない要素のリソース読み込み
+  // （<script>/<link>/メディア/<iframe>）を、代入・挿入の時点で buildElementSrcRewrite で
+  // 中継 URL へ書き換える。挿入メソッド・プロパティ setter・setAttribute・MutationObserver を重ねる。
+  // 元の setAttribute を保持（rwEl から再帰せず使うため・自身の上書きにも使う）。
+  `var _setAttr=Element.prototype.setAttribute;` +
+  // リソース属性を持つ要素タグ → 主属性のマップ。
+  `var RES={SCRIPT:'src',IMG:'src',SOURCE:'src',VIDEO:'src',AUDIO:'src',LINK:'href',IFRAME:'src'};` +
+  // 1 要素の src/href（＋ img/source の srcset）を書き換える。script は SRI 属性を除去。
+  `var rwEl=function(el){try{if(!el||el.nodeType!==1)return;var tag=el.tagName;var attr=RES[tag];if(!attr)return;` +
+  `var rel=tag==='LINK'?(el.getAttribute('rel')||''):'';` +
+  `var v=el.getAttribute(attr);` +
+  `if(v){var d=buildElementSrcRewrite(tag,attr,v,rel,pg(),origin,bp);if(d!=null&&d!==v){if(tag==='SCRIPT'){el.removeAttribute('integrity');el.removeAttribute('crossorigin');}_setAttr.call(el,attr,d);}}` +
+  `if(tag==='IMG'||tag==='SOURCE'){var ss=el.getAttribute('srcset');if(ss){var d2=buildElementSrcRewrite(tag,'srcset',ss,'',pg(),origin,bp);if(d2!=null&&d2!==ss){_setAttr.call(el,'srcset',d2);}}}` +
+  `}catch(_){}};` +
+  // ノード＋子孫（挿入サブツリー）をまとめて書き換える。
+  `var rwTree=function(node){try{if(!node||node.nodeType!==1)return;rwEl(node);` +
+  `if(node.querySelectorAll){var ns=node.querySelectorAll('script,img,source,video,audio,link,iframe');for(var i=0;i<ns.length;i++)rwEl(ns[i]);}}catch(_){}};` +
+  // (1) 挿入メソッド: 挿入されるノードを委譲前に書き換える（<script> は挿入時フェッチ＝主経路）。
+  `var hookIns=function(proto,name){var o=proto&&proto[name];if(!o)return;` +
+  `proto[name]=function(){try{for(var i=0;i<arguments.length;i++)rwTree(arguments[i]);}catch(_){}return o.apply(this,arguments);};};` +
+  `hookIns(Node.prototype,'appendChild');hookIns(Node.prototype,'insertBefore');hookIns(Node.prototype,'replaceChild');` +
+  `if(typeof Element!=='undefined'){var insN=['append','prepend','before','after','replaceWith'];for(var k=0;k<insN.length;k++)hookIns(Element.prototype,insN[k]);}` +
+  // (2) src/href/srcset プロパティ setter: 接続済み要素への代入を代入時点で書き換える。
+  `var hookProp=function(ctor,name){try{if(typeof ctor==='undefined'||!ctor)return;var p=ctor.prototype;var dsc=Object.getOwnPropertyDescriptor(p,name);if(!dsc||!dsc.set)return;` +
+  `Object.defineProperty(p,name,{configurable:true,enumerable:dsc.enumerable,get:dsc.get,set:function(v){var nv=v;try{var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
+  `var d=buildElementSrcRewrite(tag,name,String(v),rel,pg(),origin,bp);if(d!=null){if(tag==='SCRIPT'&&name==='src'){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}nv=d;}}catch(_){}return dsc.set.call(this,nv);}});}catch(_){}};` +
+  `hookProp(window.HTMLScriptElement,'src');hookProp(window.HTMLImageElement,'src');hookProp(window.HTMLImageElement,'srcset');` +
+  `hookProp(window.HTMLMediaElement,'src');hookProp(window.HTMLSourceElement,'src');hookProp(window.HTMLSourceElement,'srcset');` +
+  `hookProp(window.HTMLLinkElement,'href');hookProp(window.HTMLIFrameElement,'src');` +
+  // (3) setAttribute: src/href/srcset 属性の代入を書き換える。
+  `Element.prototype.setAttribute=function(name,value){try{if(name==='src'||name==='href'||name==='srcset'){` +
+  `var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
+  `var d=buildElementSrcRewrite(tag,name,String(value),rel,pg(),origin,bp);if(d!=null){arguments[1]=d;if(tag==='SCRIPT'&&name==='src'){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}}}}catch(_){}return _setAttr.apply(this,arguments);};` +
+  // (4) MutationObserver バックストップ: innerHTML 直挿入等を事後に書き換える（ベストエフォート）。
+  `try{if(typeof MutationObserver!=='undefined'){var mo=new MutationObserver(function(muts){for(var i=0;i<muts.length;i++){var a=muts[i].addedNodes;for(var j=0;j<a.length;j++)rwTree(a[j]);}});` +
+  `var startMO=function(){try{mo.observe(document.documentElement||document,{childList:true,subtree:true});}catch(_){}};` +
+  `if(document.documentElement){startMO();}else{document.addEventListener('readystatechange',startMO);}}}catch(_){}` +
   `})()</script>`;
 
 // 実行時リクエスト横取り Service Worker（public/sw.js）の登録スニペット。
