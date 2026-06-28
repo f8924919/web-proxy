@@ -579,3 +579,149 @@ describe("実行時リクエスト横取りシム: navigator.sendBeacon（注入
     expect(calls).toEqual([["/api/proxy/https/x.com/y", undefined]]);
   });
 });
+
+describe("動的挿入要素の src 横取りシム（注入実行・#174）", () => {
+  // 仕様: docs/spec/features/proxy.md §動的挿入要素の src 横取り
+  // REQUEST_INTERCEPT_HTML（buildElementSrcRewrite を含む head シム）を eval して代表配線を検証する。
+  // 純粋ロジック（buildElementSrcRewrite）の網羅検証は rewrite.test.ts（node）が担当。
+  // jsdom location は …/browse?url=https://www.google.com/（ファイル冒頭）。
+  // シムは Node/Element prototype・各要素 ctor の src/href/srcset・fetch/XHR/sendBeacon を
+  // グローバルに上書きするため、注入前に控えて afterEach で復元する（他テストへ波及させない）。
+  const NODE_METHODS = ["appendChild", "insertBefore", "replaceChild"] as const;
+  const EL_METHODS = [
+    "append",
+    "prepend",
+    "before",
+    "after",
+    "replaceWith",
+    "setAttribute",
+  ] as const;
+  const CTOR_PROPS: [string, string][] = [
+    ["HTMLScriptElement", "src"],
+    ["HTMLImageElement", "src"],
+    ["HTMLImageElement", "srcset"],
+    ["HTMLMediaElement", "src"],
+    ["HTMLSourceElement", "src"],
+    ["HTMLLinkElement", "href"],
+    ["HTMLIFrameElement", "src"],
+  ];
+
+  let savedNode: Record<string, unknown>;
+  let savedEl: Record<string, unknown>;
+  let savedDesc: Array<[string, string, PropertyDescriptor | undefined]>;
+  let savedFetch: typeof window.fetch;
+  let savedOpen: typeof XMLHttpRequest.prototype.open;
+  let savedBeacon: typeof navigator.sendBeacon | undefined;
+
+  function injectElementShim() {
+    const out = rewriteHtml(
+      `<html><head></head><body></body></html>`,
+      "https://www.google.com/"
+    );
+    const m = out.match(
+      /<script>((?:(?!<\/script>)[\s\S])*buildElementSrcRewrite[\s\S]*?)<\/script>/
+    );
+    expect(m).not.toBeNull();
+    // eslint-disable-next-line no-eval
+    eval((m as RegExpMatchArray)[1]);
+  }
+
+  beforeEach(() => {
+    savedNode = {};
+    for (const n of NODE_METHODS)
+      savedNode[n] = (Node.prototype as unknown as Record<string, unknown>)[n];
+    savedEl = {};
+    for (const n of EL_METHODS)
+      savedEl[n] = (Element.prototype as unknown as Record<string, unknown>)[n];
+    savedDesc = CTOR_PROPS.map(([c, p]) => [
+      c,
+      p,
+      Object.getOwnPropertyDescriptor(
+        (window as unknown as Record<string, { prototype: object }>)[c]
+          .prototype,
+        p
+      ),
+    ]);
+    savedFetch = window.fetch;
+    savedOpen = XMLHttpRequest.prototype.open;
+    savedBeacon = navigator.sendBeacon;
+    injectElementShim();
+  });
+
+  afterEach(() => {
+    for (const n of NODE_METHODS)
+      (Node.prototype as unknown as Record<string, unknown>)[n] = savedNode[n];
+    for (const n of EL_METHODS)
+      (Element.prototype as unknown as Record<string, unknown>)[n] = savedEl[n];
+    for (const [c, p, d] of savedDesc) {
+      if (d)
+        Object.defineProperty(
+          (window as unknown as Record<string, { prototype: object }>)[c]
+            .prototype,
+          p,
+          d
+        );
+    }
+    window.fetch = savedFetch;
+    XMLHttpRequest.prototype.open = savedOpen;
+    if (savedBeacon) navigator.sendBeacon = savedBeacon;
+  });
+
+  test("innerHTML 生成 + appendChild の <script> を /api/proxy へ書き換え、SRI 属性を除去する（主経路）", () => {
+    // innerHTML は parser が src を設定する（setAttribute/setter を経由しない）。
+    // appendChild フックが委譲前に書き換える。
+    const tmp = document.createElement("div");
+    tmp.innerHTML =
+      '<script src="/s/player/base.js" integrity="sha256-x" crossorigin="anonymous"></script>';
+    const script = tmp.firstChild as HTMLScriptElement;
+    document.head.appendChild(script);
+    expect(script.getAttribute("src")).toBe(
+      "/api/proxy/https/www.google.com/s/player/base.js"
+    );
+    expect(script.hasAttribute("integrity")).toBe(false);
+    expect(script.hasAttribute("crossorigin")).toBe(false);
+  });
+
+  test("img.src プロパティ代入を /api/proxy へ書き換える", () => {
+    const img = document.createElement("img");
+    img.src = "/logo.png";
+    expect(img.getAttribute("src")).toBe(
+      "/api/proxy/https/www.google.com/logo.png"
+    );
+  });
+
+  test("link[rel=stylesheet].setAttribute('href') を /api/proxy へ書き換える", () => {
+    const link = document.createElement("link");
+    link.setAttribute("rel", "stylesheet");
+    link.setAttribute("href", "/s/player/www-player.css");
+    expect(link.getAttribute("href")).toBe(
+      "/api/proxy/https/www.google.com/s/player/www-player.css"
+    );
+  });
+
+  test("非リソース rel（canonical）の link[href] は書き換えない", () => {
+    const link = document.createElement("link");
+    link.setAttribute("rel", "canonical");
+    link.setAttribute("href", "/canon");
+    expect(link.getAttribute("href")).toBe("/canon");
+  });
+
+  test("iframe.src はナビ扱いで /browse 形式へ書き換える", () => {
+    const f = document.createElement("iframe");
+    f.setAttribute("src", "/embed/abc");
+    const got = f.getAttribute("src") ?? "";
+    expect(got).not.toBe("/embed/abc");
+    expect(got).toContain("/browse/https/www.google.com/embed/abc");
+  });
+
+  test("MutationObserver が接続済みサブツリーへの innerHTML 直挿入を事後に書き換える", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host); // 接続（div は src を持たず append 時は no-op）
+    host.innerHTML = '<img src="/mo.png">'; // parser が接続済みサブツリーへ挿入 → MO が観測
+    await new Promise((r) => setTimeout(r, 0)); // MO コールバック（microtask）を流す
+    const img = host.querySelector("img") as HTMLImageElement;
+    expect(img.getAttribute("src")).toBe(
+      "/api/proxy/https/www.google.com/mo.png"
+    );
+  });
+});

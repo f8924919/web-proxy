@@ -253,7 +253,7 @@ SPA（YouTube 等）は `location.replace('/')` / `location.assign(...)` 等の 
 | ユーザー操作由来（`userInitiated`）・ハッシュのみ・ダウンロード・フォーム送信  | 介入しない（ブラウザ標準・自前 UI／ホーム導線を尊重）      |
 | クロスオリジン・既にプロキシ枠保持・プロキシ自前インフラ資産パス               | 介入しない（`buildNavApiRedirect` が `null`）              |
 
-- **スコープ外・制限**: Navigation API は Chromium 系のみで、未対応ブラウザ（Firefox / Safari）では本横取りは働かない（feature-detect で additive。未対応時はリクエストシムの `pg()` フォールバックが離脱を抑える）。要素 src（`<script>` / `<link>` / メディア）のルート相対動的挿入は本シムの対象外で、Service Worker（初回ロードはギャップあり）に委ねる。完全対応は RBI [#72](https://github.com/f8924919/web-proxy/issues/72)。
+- **スコープ外・制限**: Navigation API は Chromium 系のみで、未対応ブラウザ（Firefox / Safari）では本横取りは働かない（feature-detect で additive。未対応時はリクエストシムの `pg()` フォールバックが離脱を抑える）。要素 src（`<script>` / `<link>` / メディア）のルート相対動的挿入は本セクションの対象外で、[§動的挿入要素の src 横取り](#動的挿入要素の-src-横取りsw-非依存174)が別途カバーする（#174）。完全対応は RBI [#72](https://github.com/f8924919/web-proxy/issues/72)。
 
 ### `document.domain` ドメインガードの無効化
 
@@ -378,7 +378,31 @@ SW は登録後 `clients.claim()` で既存クライアントを制御下に置�
 - **対象 / スコープ外**: ナビゲーション（`location` 代入・フォーム送信）は対象外（[クライアント側ナビゲーション横取り](#クライアント側ナビゲーションの横取り)・[GET フォーム送信の横取り](#get-フォーム送信の横取り)・サーバー書き換えに委ねる）。`fetch(Request)` 形式は `Request` の URL を書き換えて再構築する。非 GET はメソッド・ボディ・ヘッダーを保持する。同一オリジン化により[CORS プリフライト](#cors-プリフライト対応)も発生しない。
 - **`navigator.sendBeacon`（テレメトリ等の POST ping・#168）**: 多くのサイトは `navigator.sendBeacon('/gen_204', ...)` 等のルート相対 beacon で計測・死活情報を送る。これは `fetch` / XHR を経由しないため、上記 2 つの上書きだけでは初回ロードの SW ギャップで取りこぼし、プロキシ origin に着地して **404** になる。シムは `navigator.sendBeacon` も同じ規則（`buildRequestInterceptUrl`）で第 1 引数 URL を書き換える。第 2 引数 `data` はそのまま元実装へ委譲し、戻り値（送信キュー投入可否の `boolean`）も元実装の結果を返す。書き換え不要（自前ルート・復元不能・`null`）なら元の `sendBeacon` を素通しする。`navigator.sendBeacon` を持たない環境では上書きしない。
 - **browse コンテキスト喪失への耐性（`pg()` フォールバック・#172）**: ターゲット origin の復元には閲覧ページ URL（`extractBrowseTarget(pageUrl)`）が要る。SPA が `location.replace('/')`（[§Navigation API 駆動の離脱の復元](#navigation-api-駆動の離脱の復元172)）等で `location` をプロキシ origin 直下へ書き換えると、その時点の `location.href` から origin を復元できず素通し＝離脱する。これを防ぐため、シムは**注入時（`location` は閲覧ページ＝reflect 形式）の URL をキャッシュ**し、書き換え時に現 `location.href` が browse コンテキストを保持していればそれを、失っていればキャッシュを `pageUrl`（基準ページ）として用いる。これにより `location` が枠を外れた後のルート相対リクエストも正しく中継される。完全ページ遷移（実ナビゲーション）時はシムが再注入されキャッシュも更新される。
-- **位置づけ**: SW を置き換えるものではなく、初回ロードの制御ギャップを埋める**フォールバック**。SW 制御が確立した以降のリクエストは従来どおり SW でも横取りされる（結果は同一）。要素 src（`<script>` / `<link>` / メディア）の動的挿入は本シムの対象外で SW に委ねる（初回ロードはギャップが残る既知の制限）。
+- **位置づけ**: SW を置き換えるものではなく、初回ロードの制御ギャップを埋める**フォールバック**。SW 制御が確立した以降のリクエストは従来どおり SW でも横取りされる（結果は同一）。要素 src（`<script>` / `<link>` / メディア）の動的挿入は[§動的挿入要素の src 横取り](#動的挿入要素の-src-横取りsw-非依存174)で別途カバーする（#174）。
+
+### 動的挿入要素の src 横取り（SW 非依存・#174）
+
+[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)は `fetch` / XHR / `sendBeacon` を対象とするが、**JS が実行時に動的挿入した要素のサブリソース**（`<script src>` / `<link href>` / `<img src|srcset>` / `<source src|srcset>` / `<video src>` / `<audio src>` / `<iframe src>`）はこれらを経由せず、初回ロードの SW ギャップ中はプロキシ origin 直下へ漏れて **404／誤った 200** になる（例: YouTube は `innerHTML` で生成した `<script src="/s/player/...">` を `appendChild` で挿入し、`<audio>` は `.src` 代入、`www-player.css` は `<link>.href` 代入で読み込む。#174）。サーバー側 `rewriteHtml` は**初期 HTML のみ**、SW は**初回ロードで未制御**のため、いずれも取りこぼす。
+
+これを補うため、同じ `<head>` 最先頭シムで**要素のリソース属性（`src` / `href` / `srcset`）を代入・挿入の時点で書き換える**。書き換え規則はサーバー側 `rewriteHtml` と同一にする。
+
+| 要素・属性                                                                      | 書き換え後                                                               |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `script[src]` / `img[src]` / `source[src]` / `video[src]` / `audio[src]`        | `/api/proxy/<scheme>/<host>/<path>`（`buildRequestInterceptUrl`）        |
+| `img[srcset]` / `source[srcset]`                                                | 各候補を `/api/proxy/...` へ（記述子は保持）                             |
+| `link[href]`（`rel` が `stylesheet`/`preload`/`modulepreload`/`prefetch` のみ） | `/api/proxy/...`                                                         |
+| `iframe[src]`                                                                   | `/browse/<scheme>/<host>/<path>`（ナビ扱い・`buildClickNavDestination`） |
+
+横取りは次の経路を**重ねて**張る（純粋関数 `buildElementSrcRewrite` が判定の正本）:
+
+- **挿入メソッド**（`Node.prototype.appendChild` / `insertBefore` / `replaceChild`、`Element.prototype.append` / `prepend` / `before` / `after` / `replaceWith`）: 挿入される要素**およびその子孫**のリソース属性を、元メソッド委譲の**前**に書き換える。`<script>` は挿入時にフェッチされるため、`innerHTML` 等で `src` 付きで生成された要素もここで間に合う（YouTube の主経路）。
+- **プロパティ setter**（`HTMLScriptElement`/`HTMLImageElement`/`HTMLMediaElement`/`HTMLSourceElement`/`HTMLLinkElement`/`HTMLIFrameElement` の `src`/`href`/`srcset`）: 接続済み要素への代入（`.src=` 等）を代入時点で書き換える。
+- **`setAttribute`**（`Element.prototype.setAttribute`）: `src`/`href`/`srcset` 属性の代入を書き換える。
+- **`MutationObserver` バックストップ**: 上記を経由せず接続済みサブツリーへ `innerHTML` で直接挿入された要素を事後に書き換える（ベストエフォート）。
+
+- **`<script>` の SRI 除去**: `script[src]` を書き換える際は `integrity` / `crossorigin` を除去する（中継レスポンスは `/api/proxy` 経由でハッシュが一致せずブロックされ、同一オリジン化で crossorigin も不要なため。サーバー側書き換えと同じ。[§サブリソース整合性（SRI）属性の除去](#サブリソース整合性sri属性の除去)）。
+- **`pg()` フォールバック・冪等性**: ターゲット復元は[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)と同じ `pg()` を共有する。既に `/api/proxy`・`/browse` 形式（`buildRequestInterceptUrl` / `buildClickNavDestination` が `null` を返す）なら書き換えない（SW・他経路との二重適用を防ぐ）。
+- **スコープ外・既知の制限**: 接続済みサブツリーへの `innerHTML` 直挿入は、ブラウザが解析時にフェッチを開始するため、`MutationObserver` 補正が**最初の誤フェッチに間に合わず再フェッチ**になり得る（実害は二重リクエストのみ）。別オリジンの iframe 内の動的挿入は当該フレームに注入されたシムが担う。CSS の `url()` / `@import`・インラインスタイルの動的設定は対象外（サーバー側 CSS 書き換え・SW に委ねる）。
 
 ---
 
