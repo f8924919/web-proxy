@@ -24,7 +24,7 @@ src/
 │   └── proxy/
 │       ├── fetch.ts          # SSRF チェック付き fetch
 │       ├── browserFetch.ts   # ヘッドレスブラウザ中継（ブラウザバック中継・ティア判定・Cookie ウォーミング）
-│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り（keydown(Enter)・絶対クロスオリジン action 含む。#164）・クリックナビ横取り・document.domain シム・実行時リクエスト横取りシム <script> 注入含む）
+│       ├── rewrite.ts        # HTML / CSS URL 書き換え（SW 登録・GET フォーム横取り（keydown(Enter)・絶対クロスオリジン action 含む。#164）・クリックナビ横取り（history.pushState/replaceState 上書き・Navigation API navigate 横取り含む。#172）・document.domain シム・実行時リクエスト横取りシム（pg() フォールバック含む。#172）<script> 注入含む）
 │       ├── proxyPath.ts      # アセット中継 URL スキーム（パス反映）の組み立て・復元（純粋関数。#100）
 │       ├── browsePath.ts     # ブラウズ URL スキーム（パス反映）の組み立て・復元（純粋関数。#115）
 │       ├── relayAsset.ts     # アセット中継の共通処理（両 route が共有。中継・CORS・OPTIONS）
@@ -450,9 +450,9 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 > 関連仕様: [プロキシ機能仕様 §クライアント側ナビゲーションの横取り](../spec/features/proxy.md#クライアント側ナビゲーションの横取り)
 
-`rewriteHtml` は `<body>` 直後（GET フォーム横取りに続けて）に、`<a>` クリックによるナビゲーションを横取りする `<script>` を注入する。サーバー側 `<a href>` 書き換えは初期 HTML を一度書き換えるだけで、(1) JS が動的描画したリンク（生の絶対/相対 URL）は対象外、(2) SPA（React 等）が `<a>` クリックを onClick ルーターで奪い `history.pushState` で遷移する、のいずれでも実サイトへ離脱するため、それを補う（#82）。`location`/`history` API はブラウザ仕様で改変不能（[機能仕様 §クライアント側ナビゲーションの横取り](../spec/features/proxy.md#クライアント側ナビゲーションの横取り)）なので、フックではなく**クリックの主導権を奪う**方式を採る。
+`rewriteHtml` は `<body>` 直後（GET フォーム横取りに続けて）に、`<a>` クリックによるナビゲーションを横取りする `<script>`（`CLICK_NAV_INTERCEPT_HTML`）を注入する。サーバー側 `<a href>` 書き換えは初期 HTML を一度書き換えるだけで、(1) JS が動的描画したリンク（生の絶対/相対 URL）は対象外、(2) SPA（React 等）が `<a>` クリックを onClick ルーターで奪い `history.pushState` で遷移する、のいずれでも実サイトへ離脱するため、それを補う（#82）。`location` API はブラウザ仕様で改変不能（[機能仕様 §クライアント側ナビゲーションの横取り](../spec/features/proxy.md#クライアント側ナビゲーションの横取り)）なので、`<a>` クリックはフックではなく**クリックの主導権を奪う**方式を採る。一方 `history.pushState` / `history.replaceState` は `History.prototype` のメソッドで上書き可能なため、**同じ注入スクリプト内で両メソッドを上書き**して URL を書き換える（#172。下記）。
 
-振り向け先 URL の決定は純粋関数 **`buildClickNavDestination(href, pageUrl)`** に分離し、`GET_FORM_INTERCEPT_HTML` と同様 `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
+振り向け先 URL の決定は純粋関数 **`buildClickNavDestination(href, pageUrl)`** に分離し、`GET_FORM_INTERCEPT_HTML` と同様 `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。同スクリプトは history（`buildClickNavDestination` 再利用）・Navigation API（純粋関数 **`buildNavApiRedirect(destUrl, pageUrl)`**）の横取りも担う（#172。下記）。
 
 ```
 document に click を capture で委任（動的リンクにも効き、SPA の onClick より先に発火）:
@@ -472,9 +472,26 @@ document に click を capture で委任（動的リンクにも効き、SPA の
    - パス反映プレフィックス（BASE_PATH 込みの …/browse/）は location から再利用
 4. dest があれば preventDefault + stopImmediatePropagation（SPA ルーターの横取り阻止）し
    location.href = dest で遷移
+
+同じ <script> 内で history.pushState / replaceState も上書き（#172。同関数 build= buildClickNavDestination を再利用）:
+  function wrap(orig){ return function(state,title,url){
+    url != null のとき: dest = build(String(url), location.href);
+      dest あり → orig.call(this, state, title, dest)（パス反映ナビ形式へ書き換えて委譲）
+    それ以外（url 省略・# アンカー・非 http・復元不能）→ orig.apply(this, arguments)（素通し）
+  }}
+  history.pushState / history.replaceState が在れば各々 wrap で置換（無い環境は据え置き）
+
+同じ <script> 内で Navigation API（window.navigation）の navigate イベントも横取り（#172。純粋関数 buildNavApiRedirect 再利用）:
+  navigation.addEventListener('navigate', e => {
+    userInitiated / hashChange / downloadRequest / formData / !canIntercept / !cancelable → 介入しない
+    dest = buildNavApiRedirect(e.destination.url, location.href)（クロスオリジン・枠保持・自前資産は null）
+    dest かつ dest !== 現在地(path+search+hash)（=別ページ）→ e.preventDefault(); location.href = dest
+    dest が現在地と同一（自己遷移）→ 介入しない（preventDefault はサイトの e.intercept() 描画も
+      巻き込むため。離脱はリクエストシムの pg() フォールバックが担保）
+  })  // window.navigation 非対応（Firefox/Safari）では据え置き
 ```
 
-`BASE_PATH` とパス反映プレフィックスは `window.location` から再利用することで保持される（GET フォーム横取りと同方式）。リンククリックを伴わない `location`/`history` API 駆動の JS 遷移は依然対象外（ブラウザ仕様上フック不能。完全対応は RBI #72）。本方式は同一サイト内の SPA クライアントルーティングもフルナビゲーション化するトレードオフを持つ（spec 参照）。
+`BASE_PATH` とパス反映プレフィックスは `window.location` から再利用することで保持される（GET フォーム横取りと同方式）。`location.*`（`assign` / `href` setter）自体はフック不能だが、結果生じる navigation を Navigation API の navigate イベントで捕捉し、**別ページへのプログラム遷移**は reflect 形式へ振り向ける（#172。Chromium 系のみ・feature-detect で additive）。**自己遷移は妨げず**、その後 `location` が browse コンテキストを失っても[実行時リクエスト横取りシム](#実行時リクエスト横取りシム注入sw-非依存124)の `pg()` フォールバックが中継を担保する。`history.pushState` / `history.replaceState` は上書きで URL をパス反映ナビ形式に保つ。クリック横取りは同一サイト内の SPA クライアントルーティングもフルナビゲーション化するトレードオフを持つが、history 上書きは URL 書き換えのみでナビゲーションを伴わない（spec 参照）。
 
 ### `document.domain` ドメインガード無効化シム注入
 
@@ -490,7 +507,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 > 関連仕様: [プロキシ機能仕様 §実行時リクエスト横取りシム](../spec/features/proxy.md#実行時リクエスト横取りシムsw-非依存124)
 
-`rewriteHtml` は、`window.fetch` ・ `XMLHttpRequest.prototype.open` ・ `navigator.sendBeacon` を上書きしてリクエスト URL を `/api/proxy/<scheme>/<host>/<path>` へ書き換える横取りシム `<script>` を、ページ内スクリプトより先に実行されるよう **`<head>` 最先頭**へ注入する（`document.domain` シムと同様）。SW は初回ロードで `clients.claim()` 確立前のサブリソース要求を横取りできず、同一オリジン相対は 404・クロスオリジン XHR は CORS 失敗する。本シムは SW 制御の有無に依らずこのギャップを埋める。
+`rewriteHtml` は、`window.fetch` ・ `XMLHttpRequest.prototype.open` ・ `navigator.sendBeacon` を上書きしてリクエスト URL を `/api/proxy/<scheme>/<host>/<path>` へ書き換える横取りシム `<script>`（`REQUEST_INTERCEPT_HTML`）を、ページ内スクリプトより先に実行されるよう **`<head>` 最先頭**へ注入する（`document.domain` シムと同様）。SW は初回ロードで `clients.claim()` 確立前のサブリソース要求を横取りできず、同一オリジン相対は 404・クロスオリジン XHR は CORS 失敗する。本シムは SW 制御の有無に依らずこのギャップを埋める。
 
 | 純粋関数                                                            | 役割                                                                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -500,7 +517,8 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 - **共有ヘルパー**: ターゲット復元は既存の純粋関数 `extractBrowseTarget` を再利用する。`buildRequestInterceptUrl` / `isProxyOwnPath` / `extractBrowseTarget` を `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
 - **SW との非競合**: シムの振り向け先（同一オリジンの `/api/proxy/...`）は SW が自前ルートと判定して素通しするため二重書き換えにならない。判定規則は `public/sw.js` と揃え、差分が出ないよう対で保守する（SW は `importScripts` 不可のためロジック共有はできず、両ファイルに同等実装を持つ）。
 - **fetch / XHR / sendBeacon の配線**: `fetch` シムは `input` が文字列・`URL`・`Request` のいずれでも URL を取り出して書き換える（`Request` は新 `Request` で再構築）。XHR シムは `open(method, url)` の `url` を書き換える。`navigator.sendBeacon` シム（#168）は第 1 引数 URL を書き換え、第 2 引数 `data` はそのまま委譲し、戻り値の `boolean` も元実装の結果を返す（`navigator` を `this` として呼ぶ）。`navigator.sendBeacon` が無い環境では上書きしない。いずれも非 GET のメソッド・ボディ・ヘッダーを保持する。書き換え不要（`null`）なら元の `fetch` / `open` / `sendBeacon` を素通しする。
-- **テスト**: `isProxyOwnPath` / `buildRequestInterceptUrl`（純粋関数）を単体テスト対象とする。`window.fetch` / XHR の上書き配線（ブラウザ I/O）は[テスト方針](../testing/policy.md)によりテスト対象外。
+- **`pg()` フォールバック（browse コンテキスト喪失への耐性・#172）**: 注入時（`location` は閲覧ページ＝reflect 形式）の URL を `initPage` にキャッシュし、各書き換えで `pg()` を `pageUrl` として渡す。`pg()` は現 `location.href` が `extractBrowseTarget` でターゲットを復元できればそれを、できなければ（SPA の `location.replace('/')` 等で枠を外れた状態）`initPage` を返す。これにより `location` が枠を外れた後のルート相対リクエストも正しく中継される。完全ページ遷移時はシムが再注入され `initPage` も更新される。
+- **テスト**: `isProxyOwnPath` / `buildRequestInterceptUrl`（純粋関数）を単体テスト対象とする。`window.fetch` / XHR の上書き配線・`pg()` フォールバック（ブラウザ I/O）は[テスト方針](../testing/policy.md)によりテスト対象外（方式B で実測検証）。
 
 ---
 

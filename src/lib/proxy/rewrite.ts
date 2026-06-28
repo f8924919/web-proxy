@@ -409,6 +409,55 @@ export function buildClickNavDestination(
   return buildBrowseDest(dest.href, prefix);
 }
 
+// Navigation API（window.navigation）の navigate イベントで、プロキシ枠を外れる同一オリジンの
+// プログラム遷移を、現ターゲット基準のパス反映ナビ形式へ復元する振り向け先を決める純粋関数。
+// location.replace('/') 等の location.* 駆動遷移は setter 自体がフック不能だが、その結果生じる
+// navigation は navigate イベントとして捕捉・キャンセルできる。プロキシ配下では サイトが意図する
+// 自オリジン相対パス（例 '/'）が proxy origin 直下へ解決され、コミットされると location が browse
+// コンテキスト（ターゲット origin）を喪失して以降のルート相対リクエストが離脱するため、ここで
+// 現ターゲット基準のパス反映ナビ形式へ復元する。介入しない場合は null を返す:
+//   - クロスオリジンの dest（同一オリジン＝プロキシ枠内に解決された遷移のみ扱う）
+//   - 既にプロキシ枠を保持している遷移（パス反映 …/browse/<scheme>/<host>/… ＝復元可能）
+//   - プロキシ自前のインフラ資産パス（/api/proxy・/_next/・/sw.js 等）。ホーム '/' は除外しない
+//     （サイトのルート離脱＝最も多い離脱パターンを捕捉するため）
+// 注入スクリプトはこの関数と buildClickNavDestination / extractBrowseTarget を toString() で
+// 埋め込むため、外部参照を持たず URL のみで完結させる。userInitiated 判定・現在地との一致による
+// ループ防止（cancel）は注入スクリプト側（navigate イベント・live location 依存）で行う。
+// 仕様: docs/spec/features/proxy.md §Navigation API 駆動の離脱の復元（#172）
+export function buildNavApiRedirect(
+  destUrl: string,
+  pageUrl: string
+): string | null {
+  let dest: URL;
+  let page: URL;
+  try {
+    dest = new URL(destUrl);
+    page = new URL(pageUrl);
+  } catch {
+    return null;
+  }
+  // 同一オリジン（プロキシ枠内へ解決された遷移）のみ扱う。
+  if (dest.origin !== page.origin) return null;
+  // 既にプロキシ枠を保持している遷移（パス反映 …/browse/<scheme>/<host>/…）は介入しない。
+  if (extractBrowseTarget(dest.href) !== null) return null;
+  // プロキシ自前のインフラ資産パスは触らない（ホーム '/' は除外しない）。/_next/image は
+  // ターゲット（Next.js 製サイト）側エンドポイントのため自前から除外する（#102。isProxyOwnPath と整合）。
+  const p = dest.pathname;
+  const isNextImage = p === "/_next/image" || p.startsWith("/_next/image/");
+  if (
+    p === "/sw.js" ||
+    p === "/unlock" ||
+    p === "/favicon.ico" ||
+    p === "/api/proxy" ||
+    p.startsWith("/api/proxy/") ||
+    (p.startsWith("/_next/") && !isNextImage)
+  ) {
+    return null;
+  }
+  // browse コンテキストを失っている → クリック横取りと同一規則で現ターゲット基準のパス反映へ。
+  return buildClickNavDestination(p + dest.search + dest.hash, pageUrl);
+}
+
 // 横取りしてはいけないプロキシ自前ルートか判定する（BASE_PATH を取り除いた上で判定）。
 // public/sw.js の同名関数と対の規則（SW は importScripts 不可のためロジック共有できず、
 // 両ファイルに同等実装を持つ。差分が出ないよう対で保守する）。
@@ -518,7 +567,9 @@ const CLICK_NAV_INTERCEPT_HTML =
   `var browseNavPrefix=${browseNavPrefix.toString()};` +
   `var extractBrowseTarget=${extractBrowseTarget.toString()};` +
   `var buildBrowseDest=${buildBrowseDest.toString()};` +
-  `var build=${buildClickNavDestination.toString()};` +
+  `var buildClickNavDestination=${buildClickNavDestination.toString()};` +
+  `var build=buildClickNavDestination;` +
+  `var buildNavApiRedirect=${buildNavApiRedirect.toString()};` +
   `document.addEventListener('click',function(e){` +
   `if(e.defaultPrevented||e.button!==0||e.metaKey||e.ctrlKey||e.shiftKey||e.altKey)return;` +
   `var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;` +
@@ -527,6 +578,36 @@ const CLICK_NAV_INTERCEPT_HTML =
   `var dest=build(a.getAttribute('href')||'',location.href);` +
   `if(dest){e.preventDefault();e.stopImmediatePropagation();location.href=dest;}` +
   `},true);` +
+  // history.pushState / replaceState 上書き（#172）。SPA は history API で URL を書き換えるが、
+  // これらは History.prototype のメソッドのため上書き可能（改変不能な location.* と異なる）。
+  // 第 3 引数 url を click ナビと同一規則（build=buildClickNavDestination）でパス反映ナビ形式へ
+  // 書き換えてから元実装へ委譲し、location が browse コンテキスト（ターゲット origin）を喪失して
+  // 以降のルート相対 fetch/XHR/sendBeacon が素通し＝離脱するのを防ぐ。url 省略（null/undefined）・
+  // # アンカー・非 http・復元不能は素通し。state/title はそのまま委譲しナビゲーションは発生させない。
+  `var wrap=function(orig){return function(state,title,url){` +
+  `if(url!=null){try{var dest=build(String(url),location.href);` +
+  `if(dest){return orig.call(this,state,title,dest);}}catch(_){}}` +
+  `return orig.apply(this,arguments);};};` +
+  `if(window.history){` +
+  `if(history.pushState){history.pushState=wrap(history.pushState);}` +
+  `if(history.replaceState){history.replaceState=wrap(history.replaceState);}` +
+  `}` +
+  // Navigation API による離脱の復元（#172）。location.replace('/') 等の location.* 駆動遷移は
+  // setter 自体がフック不能だが、結果生じる navigation は window.navigation の navigate イベントで
+  // 捕捉できる。プログラム起因（!userInitiated）・同一オリジンで、プロキシ枠を外れる**別ページ**への
+  // 遷移（buildNavApiRedirect が非 null かつ現在地と異なる）だけを reflect 形式へフルナビゲーションで
+  // 振り向ける。補正先が現在地と同一の自己遷移（YouTube の replace('/') 等）は preventDefault しない。
+  // preventDefault はサイト自身の e.intercept() ハンドラ（SPA の描画）も同時にキャンセルしてしまい
+  // 表示を壊すため。自己遷移後にコンテキストを失っても、リクエストシムの pg() フォールバックが
+  // ルート相対リクエストを正しく中継するため離脱しない。ユーザー操作由来は尊重し介入しない。
+  `if(window.navigation&&navigation.addEventListener){` +
+  `navigation.addEventListener('navigate',function(e){try{` +
+  `if(e.userInitiated||e.hashChange||e.downloadRequest!=null||e.formData)return;` +
+  `if(!e.canIntercept||!e.cancelable||!e.destination)return;` +
+  `var dest=buildNavApiRedirect(e.destination.url,location.href);` +
+  `if(dest&&dest!==location.pathname+location.search+location.hash){` +
+  `e.preventDefault();location.href=dest;}` +
+  `}catch(_){}});}` +
   `})()</script>`;
 
 // 実行時リクエスト横取りシム（SW 非依存・#124）。window.fetch / XMLHttpRequest.prototype.open を
@@ -545,25 +626,33 @@ const REQUEST_INTERCEPT_HTML =
   `var extractBrowseTarget=${extractBrowseTarget.toString()};` +
   `var fetchInputUrl=${fetchInputUrl.toString()};` +
   `var build=${buildRequestInterceptUrl.toString()};` +
+  // browse コンテキスト喪失への耐性（#172）。SPA は location.replace('/') 等（location.* は
+  // フック不能）や Navigation API で URL を proxy origin 直下へ書き換え、location が browse
+  // コンテキスト（…/browse/<scheme>/<host>/…）を失うことがある。その状態で発行される
+  // ルート相対 fetch/XHR/sendBeacon は build が対象 origin を復元できず素通し＝離脱する。
+  // そこで注入時（location は閲覧ページ＝reflect 形式）の URL をキャッシュし、現 location が
+  // コンテキストを失っていればキャッシュを基準ページとして用いる。pg() が build の pageUrl。
+  `var initPage=location.href;` +
+  `var pg=function(){try{return extractBrowseTarget(location.href)!=null?location.href:initPage;}catch(_){return location.href;}};` +
   // fetch 上書き（input は string / URL / Request を許容）。
   `var _fetch=window.fetch;` +
   `if(_fetch){window.fetch=function(input,init){try{` +
   `var url=fetchInputUrl(input);` +
-  `if(url!=null){var dest=build(url,location.href,origin,bp);if(dest){` +
+  `if(url!=null){var dest=build(url,pg(),origin,bp);if(dest){` +
   `if(typeof input==='string'||(typeof URL!=='undefined'&&input instanceof URL)){return _fetch(dest,init);}` +
   `return _fetch(new Request(dest,input),init);` +
   `}}}catch(e){}return _fetch(input,init);};}` +
   // XMLHttpRequest.open 上書き（第 2 引数 url を書き換える）。
   `var _open=XMLHttpRequest.prototype.open;` +
   `XMLHttpRequest.prototype.open=function(method,url){try{` +
-  `var dest=build(url,location.href,origin,bp);if(dest){arguments[1]=dest;}` +
+  `var dest=build(url,pg(),origin,bp);if(dest){arguments[1]=dest;}` +
   `}catch(e){}return _open.apply(this,arguments);};` +
   // navigator.sendBeacon 上書き（#168）。テレメトリ等の POST ping は fetch/XHR を
   // 経由しないため、ここで第 1 引数 url を書き換える。data（第 2 引数）はそのまま委譲し、
   // 戻り値（送信キュー投入可否の boolean）も元実装の結果を返す。navigator を this として呼ぶ。
   `var _sb=navigator.sendBeacon;` +
   `if(_sb){navigator.sendBeacon=function(url){try{` +
-  `var dest=build(url,location.href,origin,bp);if(dest){arguments[0]=dest;}` +
+  `var dest=build(url,pg(),origin,bp);if(dest){arguments[0]=dest;}` +
   `}catch(e){}return _sb.apply(navigator,arguments);};}` +
   `})()</script>`;
 

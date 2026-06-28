@@ -49,7 +49,7 @@ Next.js サーバー
 
 - **リダイレクトしない理由（#74）**: 以前はホーム（`${BASE_PATH}/`）へ 307 リダイレクトしていたが、リバースプロキシ（code-server のポート転送 `/proxy/3000`）配下では戻り先が **404** になっていた（Next は basePath 未使用でアプリのホーム実体は `/`。`/proxy/3000/` が末尾スラッシュ正規化で `/proxy/3000` に落ち 404）。リダイレクトを廃し、`/browse`（リバースプロキシが正しくプレフィックスを剥がす経路）で 200 ページを直接返すことでこの 404 を解消する。内部オリジン漏えい防止（旧 #55 の相対 `Location` 要件）は、そもそもリダイレクトを行わないため不要になる。
 - **案内ページの導線**: 既存のアドレスバー（`#proxy-addressbar`）を再利用する。フォーム submit は `${BASE_PATH}/browse?url=<入力>` へ遷移する（正しく解決される経路）。meta refresh / location 自動遷移は含めない。
-- **引き金（スコープ外）**: `url` 喪失の主因の一つは、Google 等の `location.assign` / `history` API による JS 駆動ナビゲーション（[§クライアント側ナビゲーションの横取り](#クライアント側ナビゲーションの横取り)の対象外）。本節はその場合に 404 ではなく案内ページを見せる対症であり、横取りの拡張は別課題。
+- **引き金（一部スコープ外）**: `url` 喪失の主因の一つは、Google 等の `location.assign` / `history` API による JS 駆動ナビゲーション。このうち `history.pushState` / `history.replaceState` は[§history.pushState / replaceState の横取り](#historypushstate--replacestate-の横取り172)で書き換えて喪失を防ぐ（#172）が、`location.*`（setter）は依然フック不能で対象外（[§クライアント側ナビゲーションの横取り](#クライアント側ナビゲーションの横取り)）。本節は喪失が起きた場合に 404 ではなく案内ページを見せる対症。
 - `POST /browse` の `url` 欠落・不正は、案内ページではなく **400** を返す（[§POST 中継](#post-中継)）。
 
 ---
@@ -193,7 +193,7 @@ ${BASE_PATH}/browse/<scheme>/<host>/<targetPath><?targetQuery>
 
 `rewriteHtml` の `<a href>` 書き換え（[書き換えルール](#書き換えルール)）は**サーバーが受信した初期 HTML を一度書き換えるだけ**で、JS（React 等）が**ページ読み込み後に動的描画した `<a href>`** は対象外となる。これらは生のターゲット URL（例 `https://news.yahoo.co.jp/articles/…`）のまま残り、クリックするとトップフレームのナビゲーションが**実サイトへ直行してプロキシから離脱**する。SW はナビゲーション（`request.mode === "navigate"`）を素通しし、かつ遷移先は別オリジンで SW スコープ外のため横取りもできない（[§Service Worker](#service-worker-による実行時リクエスト横取り)）。JS 主導でリンクを描画する SPA 系サイト（例 `www.yahoo.co.jp` トップのニュース記事リンク）で顕在化する。
 
-さらに、SPA（React 等）は `<a>` クリックを **自前の onClick ルーターで横取りし、`history.pushState` で実サイトのパスへ遷移**させる（例 `news.yahoo.co.jp` トップ → 個別記事）。サーバー書き換え済みの `href` があっても、ルーターがクリックを奪うとプロキシから離脱する。`location` / `history` API 自体はブラウザ仕様で改変できず（`location.assign` / `location.href` setter / `window.location` はいずれも上書き不能。[#82](https://github.com/f8924919/web-proxy/issues/82) で実機確認）フックでは防げないため、**クリックの主導権を奪う**方式で対処する。
+さらに、SPA（React 等）は `<a>` クリックを **自前の onClick ルーターで横取りし、`history.pushState` で実サイトのパスへ遷移**させる（例 `news.yahoo.co.jp` トップ → 個別記事）。サーバー書き換え済みの `href` があっても、ルーターがクリックを奪うとプロキシから離脱する。`location` API 自体はブラウザ仕様で改変できない（`location.assign` / `location.href` setter / `window.location` はいずれも上書き不能。[#82](https://github.com/f8924919/web-proxy/issues/82) で実機確認）ためフックでは防げず、`<a>` クリックは **クリックの主導権を奪う**方式で対処する。一方、`history.pushState` / `history.replaceState` は `History.prototype` のメソッドであり**上書き可能**なため、別途 [§history.pushState / replaceState の横取り](#historypushstate--replacestate-の横取り172) で URL を書き換えてプロキシ枠を保持する。
 
 これを補うため、`rewriteHtml` は閲覧ページの `<body>` 直後（GET フォーム横取りに続けて）に **クリックによるナビゲーションを横取りするスクリプト**を注入する。`document` への `click` イベント委任（**キャプチャ**）で捕捉するため、JS が実行時に追加したリンクにも効き、かつ SPA ルーターの onClick（バブル）より**先に**発火する。
 
@@ -217,9 +217,43 @@ ${BASE_PATH}/browse/<scheme>/<host>/<targetPath><?targetQuery>
   - **修飾キー付き / 中クリック / `target="_blank"`**: `Ctrl` / `⌘`(meta) / `Shift` / `Alt` 付きクリック・中クリック（補助ボタン）・別タブで開くリンクは素通しし、ブラウザ標準の新規タブ挙動を尊重する。**新規タブで開いた場合はプロキシを離脱する**（既知の制限）。
   - **既定動作が抑止済みのクリック**（`event.defaultPrevented`）: 他ハンドラが処理済みなら介入しない。
   - **`#` 同一ページアンカー・非 http スキーム**（`javascript:` / `mailto:` / `tel:` / `data:` 等）・`url=` が無い閲覧ページ上の相対リンク: 対象外（`null`）。
-  - **`location` / `history` API 経由の直接遷移**: リンククリックを伴わない `location.assign` / `history.pushState` 等の純粋な JS 駆動遷移は依然として対象外（ブラウザ仕様上フック不能。完全対応は RBI [#72](https://github.com/f8924919/web-proxy/issues/72)）。
+  - **`location` API 経由の直接遷移**: リンククリックを伴わない `location.assign` / `location.href` 代入等の純粋な JS 駆動遷移は依然として対象外（ブラウザ仕様上フック不能。完全対応は RBI [#72](https://github.com/f8924919/web-proxy/issues/72)）。`history.pushState` / `history.replaceState` は上書き可能なため別途横取りする（[§history.pushState / replaceState の横取り](#historypushstate--replacestate-の横取り172)）。
 
 > **トレードオフ**: 本方式はリンククリックの主導権をプロキシが握るため、**同一サイト内の SPA クライアントルーティング（部分描画）も全てフルナビゲーション（proxy 経由の再読み込み）になる**。プロキシ配下では SPA のクライアント描画はいずれにせよ正しく動かないため、フルナビゲーション化は離脱を防ぐうえで許容する設計とする。
+
+### history.pushState / replaceState の横取り（#172）
+
+SPA（YouTube 等）は描画後に **`history.pushState` / `history.replaceState`** で URL を書き換えてクライアントルーティングを行う。これらは前節の `location.*`（setter）と異なり **`History.prototype` のメソッドであり上書き可能**である。横取りせず放置すると、SPA が渡したルート相対 URL（例 `/watch?v=…`）がブラウザによって**プロキシ origin のルート相対**として `location` に反映され、閲覧ページの URL が `…/browse/<scheme>/<host>/…`（または `?url=`）形式から外れて **browse コンテキスト（ターゲット origin）を喪失**する。その結果、以降に発行されるルート相対の `fetch` / `XHR` / `sendBeacon` は[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)が `extractBrowseTarget(location.href)` でターゲット origin を復元できず、`/api/proxy/` を経由せずプロキシ origin 直下へ漏れて **404・離脱**する（YouTube で動画再生・サイト内ナビが崩壊する主因。#172）。
+
+これを防ぐため、[クライアント側ナビゲーションの横取り](#クライアント側ナビゲーションの横取り)と**同じ注入スクリプト**で `history.pushState` / `history.replaceState` を上書きし、第 3 引数 `url` を**クリック横取りと同一規則**（`buildClickNavDestination`）でパス反映ナビ形式 `${BASE_PATH}/browse/<scheme>/<host>/<path>` へ書き換えてから元実装へ委譲する。これにより URL バー（`location`）が常にプロキシ枠内に保たれ、後続のルート相対リクエストが正しく中継される。
+
+| 条件                                                        | 処理                                                                     |
+| ----------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `url` が proxy 中継対象（外部絶対・ルート相対・相対）       | パス反映ナビ形式へ書き換えて元実装へ委譲（`state` / `title` はそのまま） |
+| `url` 省略（`null` / `undefined`）                          | 書き換えず元実装へ委譲（現在の URL を維持）                              |
+| `url` が `#` 同一ページアンカー・非 http スキーム・復元不能 | 書き換えず元実装へ委譲（素通し）                                         |
+| 既にパス反映ナビ形式の `url`                                | 冪等にそのまま委譲（二重書き換えしない）                                 |
+
+- **ナビゲーションは発生させない**: 本横取りは URL 文字列の書き換えのみで、`history` API 本来の「ページ遷移を伴わない URL 更新」の挙動を変えない（クリック横取りのようなフルナビゲーション化はしない）。`state` / `title` は元の値のまま、戻り値・例外も元実装に準ずる。
+- **スコープ外・制限**: SPA が上書き前に `history.pushState` の参照を捕捉して呼ぶ稀なケースは効かない。`location.*` 駆動の遷移は[§Navigation API 駆動の離脱の復元](#navigation-api-駆動の離脱の復元172)で扱う。完全対応は RBI [#72](https://github.com/f8924919/web-proxy/issues/72)。
+
+### Navigation API 駆動の離脱の復元（#172）
+
+SPA（YouTube 等）は `location.replace('/')` / `location.assign(...)` 等の **`location.*` 駆動**でクライアントルーティングすることがある。`location.*`（`assign` / `href` setter / `window.location`）はブラウザ仕様で**上書き不能**だが、その結果生じる navigation は **`window.navigation`（Navigation API）の `navigate` イベント**として捕捉できる（Chromium 系）。プロキシ配下では、サイトが意図する自オリジン相対パス（例 `/`）が**プロキシ origin 直下**へ解決され、コミットされると `location` が browse コンテキストを失い、以降のルート相対リクエストが離脱する（YouTube が `location.replace('/')` で自ホームへ遷移しようとして発生する離脱が代表例。#172）。
+
+これを 2 段で緩和する。
+
+1. **別ページへのプログラム遷移の振り向け**: [クライアント側ナビゲーションの横取り](#クライアント側ナビゲーションの横取り)と同じ注入スクリプトで `navigation` の `navigate` イベントを購読し、**プログラム起因（`!userInitiated`）・同一オリジン・キャンセル可能**で、プロキシ枠を外れ、かつ**補正先が現在地と異なる**遷移だけを `preventDefault` してパス反映ナビ形式 `${BASE_PATH}/browse/<scheme>/<host>/<path>` へフルナビゲーションで振り向ける。振り向け先は純粋関数 `buildNavApiRedirect(destUrl, pageUrl)` が決める（クロスオリジン・既にプロキシ枠保持・プロキシ自前インフラ資産パスは `null`＝介入しない）。
+2. **自己遷移は妨げない（描画保護）**: 補正先が現在地と同一の自己遷移（YouTube の `replace('/')` 等）は `preventDefault` しない。Navigation API の `preventDefault` は**サイト自身の `e.intercept()` ハンドラ（SPA の再描画）も同時にキャンセル**してしまい、表示を壊すため。自己遷移後に `location` が browse コンテキストを失っても、[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)の **`pg()` フォールバック**がルート相対 `fetch` / `XHR` / `sendBeacon` を正しく中継するため離脱しない。
+
+| 条件                                                                           | 処理                                                       |
+| ------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| プログラム起因・同一オリジンで枠を外れ、補正先が現在地と**異なる**（別ページ） | `preventDefault` し reflect 形式へフルナビゲーション       |
+| プログラム起因・同一オリジンで枠を外れ、補正先が現在地と**同一**（自己遷移）   | 妨げない（描画保護。リクエストシムの `pg()` が中継を担保） |
+| ユーザー操作由来（`userInitiated`）・ハッシュのみ・ダウンロード・フォーム送信  | 介入しない（ブラウザ標準・自前 UI／ホーム導線を尊重）      |
+| クロスオリジン・既にプロキシ枠保持・プロキシ自前インフラ資産パス               | 介入しない（`buildNavApiRedirect` が `null`）              |
+
+- **スコープ外・制限**: Navigation API は Chromium 系のみで、未対応ブラウザ（Firefox / Safari）では本横取りは働かない（feature-detect で additive。未対応時はリクエストシムの `pg()` フォールバックが離脱を抑える）。要素 src（`<script>` / `<link>` / メディア）のルート相対動的挿入は本シムの対象外で、Service Worker（初回ロードはギャップあり）に委ねる。完全対応は RBI [#72](https://github.com/f8924919/web-proxy/issues/72)。
 
 ### `document.domain` ドメインガードの無効化
 
@@ -343,7 +377,8 @@ SW は登録後 `clients.claim()` で既存クライアントを制御下に置�
 - **SW との非競合・冪等**: シムが書き換えた先は同一オリジンの `/api/proxy/...`。SW が制御中でも、SW はこれを自前ルートと判定して素通しするため**二重書き換えにならない**。判定規則（自前ルート・ターゲット復元）は SW（`public/sw.js`）と揃える（純粋関数を共有できないため rewrite.ts 側に同等ロジックを持つ。差分が出ないよう両者を対で保守する）。
 - **対象 / スコープ外**: ナビゲーション（`location` 代入・フォーム送信）は対象外（[クライアント側ナビゲーション横取り](#クライアント側ナビゲーションの横取り)・[GET フォーム送信の横取り](#get-フォーム送信の横取り)・サーバー書き換えに委ねる）。`fetch(Request)` 形式は `Request` の URL を書き換えて再構築する。非 GET はメソッド・ボディ・ヘッダーを保持する。同一オリジン化により[CORS プリフライト](#cors-プリフライト対応)も発生しない。
 - **`navigator.sendBeacon`（テレメトリ等の POST ping・#168）**: 多くのサイトは `navigator.sendBeacon('/gen_204', ...)` 等のルート相対 beacon で計測・死活情報を送る。これは `fetch` / XHR を経由しないため、上記 2 つの上書きだけでは初回ロードの SW ギャップで取りこぼし、プロキシ origin に着地して **404** になる。シムは `navigator.sendBeacon` も同じ規則（`buildRequestInterceptUrl`）で第 1 引数 URL を書き換える。第 2 引数 `data` はそのまま元実装へ委譲し、戻り値（送信キュー投入可否の `boolean`）も元実装の結果を返す。書き換え不要（自前ルート・復元不能・`null`）なら元の `sendBeacon` を素通しする。`navigator.sendBeacon` を持たない環境では上書きしない。
-- **位置づけ**: SW を置き換えるものではなく、初回ロードの制御ギャップを埋める**フォールバック**。SW 制御が確立した以降のリクエストは従来どおり SW でも横取りされる（結果は同一）。
+- **browse コンテキスト喪失への耐性（`pg()` フォールバック・#172）**: ターゲット origin の復元には閲覧ページ URL（`extractBrowseTarget(pageUrl)`）が要る。SPA が `location.replace('/')`（[§Navigation API 駆動の離脱の復元](#navigation-api-駆動の離脱の復元172)）等で `location` をプロキシ origin 直下へ書き換えると、その時点の `location.href` から origin を復元できず素通し＝離脱する。これを防ぐため、シムは**注入時（`location` は閲覧ページ＝reflect 形式）の URL をキャッシュ**し、書き換え時に現 `location.href` が browse コンテキストを保持していればそれを、失っていればキャッシュを `pageUrl`（基準ページ）として用いる。これにより `location` が枠を外れた後のルート相対リクエストも正しく中継される。完全ページ遷移（実ナビゲーション）時はシムが再注入されキャッシュも更新される。
+- **位置づけ**: SW を置き換えるものではなく、初回ロードの制御ギャップを埋める**フォールバック**。SW 制御が確立した以降のリクエストは従来どおり SW でも横取りされる（結果は同一）。要素 src（`<script>` / `<link>` / メディア）の動的挿入は本シムの対象外で SW に委ねる（初回ロードはギャップが残る既知の制限）。
 
 ---
 

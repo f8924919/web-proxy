@@ -7,6 +7,7 @@ import {
   rewriteSrcset,
   buildGetFormDestination,
   buildClickNavDestination,
+  buildNavApiRedirect,
   browseNavPrefix,
   extractBrowseTarget,
   buildBrowseDest,
@@ -667,6 +668,65 @@ describe("buildClickNavDestination", () => {
     expect(
       buildClickNavDestination("https://news.yahoo.co.jp/x", "not a url")
     ).toBeNull();
+  });
+});
+
+describe("buildNavApiRedirect（Navigation API 駆動の離脱の復元・#172）", () => {
+  // 仕様: docs/spec/features/proxy.md §Navigation API 駆動の離脱の復元
+  const TARGET = "https://www.youtube.com/";
+  const PAGE = `https://proxy.test/proxy/3000${nav(TARGET)}`;
+  // dest はブラウザが proxy origin 基準で解決済みの絶対 URL（navigate イベントの destination.url）。
+  const PROXY = "https://proxy.test";
+
+  test("proxy origin ルート（'/'）への離脱を現ターゲットのパス反映ルートへ復元する", () => {
+    // location.replace('/') が proxy origin ルートへ解決された典型ケース（YouTube）。
+    expect(buildNavApiRedirect(`${PROXY}/`, PAGE)).toBe(
+      `/proxy/3000${nav("https://www.youtube.com/")}`
+    );
+  });
+
+  test("proxy origin のルート相対パスへの離脱を現ターゲット基準で復元する", () => {
+    expect(buildNavApiRedirect(`${PROXY}/watch?v=abc`, PAGE)).toBe(
+      `/proxy/3000${nav("https://www.youtube.com/watch?v=abc")}`
+    );
+  });
+
+  test("既にパス反映形式（proxy 枠保持）の dest は介入しない（null）", () => {
+    const dest = `${PROXY}/proxy/3000${nav("https://www.youtube.com/feed")}`;
+    expect(buildNavApiRedirect(dest, PAGE)).toBeNull();
+  });
+
+  test("クロスオリジンの dest は対象外（null）", () => {
+    expect(buildNavApiRedirect("https://evil.example/", PAGE)).toBeNull();
+  });
+
+  test.each([
+    ["/api/proxy/https/www.youtube.com/x"],
+    ["/_next/static/chunk.js"],
+    ["/sw.js"],
+    ["/favicon.ico"],
+    ["/unlock"],
+  ])("プロキシ自前インフラ資産パス %s は介入しない（null）", (p) => {
+    expect(buildNavApiRedirect(`${PROXY}${p}`, PAGE)).toBeNull();
+  });
+
+  test("/_next/image（ターゲット側エンドポイント）は復元対象", () => {
+    // /_next/image は自前ルートから除外される（#102）。ルート離脱として現ターゲットへ復元する。
+    // （url= クエリは extractBrowseTarget が復元扱いするため、ここではパスのみで検証する）
+    expect(
+      buildNavApiRedirect(`${PROXY}/_next/image/x.png`, PAGE)
+    ).not.toBeNull();
+  });
+
+  test("ターゲットを復元できない閲覧ページ（url= 無し）では null", () => {
+    expect(buildNavApiRedirect(`${PROXY}/`, "https://proxy.test/browse")).toBe(
+      null
+    );
+  });
+
+  test("destUrl / pageUrl が不正なら null", () => {
+    expect(buildNavApiRedirect("not a url", PAGE)).toBeNull();
+    expect(buildNavApiRedirect(`${PROXY}/`, "not a url")).toBeNull();
   });
 });
 
