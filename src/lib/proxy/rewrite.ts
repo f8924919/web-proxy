@@ -753,11 +753,11 @@ const REQUEST_INTERCEPT_HTML =
   `var _setAttr=Element.prototype.setAttribute;` +
   // リソース属性を持つ要素タグ → 主属性のマップ。
   `var RES={SCRIPT:'src',IMG:'src',SOURCE:'src',VIDEO:'src',AUDIO:'src',LINK:'href',IFRAME:'src'};` +
-  // 1 要素の src/href（＋ img/source の srcset）を書き換える。script は SRI 属性を除去。
+  // 1 要素の src/href（＋ img/source の srcset）を書き換える。script / link は SRI 属性を除去（#188）。
   `var rwEl=function(el){try{if(!el||el.nodeType!==1)return;var tag=el.tagName;var attr=RES[tag];if(!attr)return;` +
   `var rel=tag==='LINK'?(el.getAttribute('rel')||''):'';` +
   `var v=el.getAttribute(attr);` +
-  `if(v){var d=buildElementSrcRewrite(tag,attr,v,rel,pg(),origin,bp);if(d!=null&&d!==v){if(tag==='SCRIPT'){el.removeAttribute('integrity');el.removeAttribute('crossorigin');}_setAttr.call(el,attr,d);}}` +
+  `if(v){var d=buildElementSrcRewrite(tag,attr,v,rel,pg(),origin,bp);if(d!=null&&d!==v){if(tag==='SCRIPT'||tag==='LINK'){el.removeAttribute('integrity');el.removeAttribute('crossorigin');}_setAttr.call(el,attr,d);}}` +
   `if(tag==='IMG'||tag==='SOURCE'){var ss=el.getAttribute('srcset');if(ss){var d2=buildElementSrcRewrite(tag,'srcset',ss,'',pg(),origin,bp);if(d2!=null&&d2!==ss){_setAttr.call(el,'srcset',d2);}}}` +
   `if(tag==='VIDEO'){var ps=el.getAttribute('poster');if(ps){var d3=buildElementSrcRewrite(tag,'poster',ps,'',pg(),origin,bp);if(d3!=null&&d3!==ps){_setAttr.call(el,'poster',d3);}}}` +
   `}catch(_){}};` +
@@ -774,14 +774,14 @@ const REQUEST_INTERCEPT_HTML =
   // (2) src/href/srcset/poster プロパティ setter: 接続済み要素への代入を代入時点で書き換える。
   `var hookProp=function(ctor,name){try{if(typeof ctor==='undefined'||!ctor)return;var p=ctor.prototype;var dsc=Object.getOwnPropertyDescriptor(p,name);if(!dsc||!dsc.set)return;` +
   `Object.defineProperty(p,name,{configurable:true,enumerable:dsc.enumerable,get:dsc.get,set:function(v){var nv=v;try{var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
-  `var d=buildElementSrcRewrite(tag,name,String(v),rel,pg(),origin,bp);if(d!=null){if(tag==='SCRIPT'&&name==='src'){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}nv=d;}}catch(_){}return dsc.set.call(this,nv);}});}catch(_){}};` +
+  `var d=buildElementSrcRewrite(tag,name,String(v),rel,pg(),origin,bp);if(d!=null){if((tag==='SCRIPT'&&name==='src')||(tag==='LINK'&&name==='href')){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}nv=d;}}catch(_){}return dsc.set.call(this,nv);}});}catch(_){}};` +
   `hookProp(window.HTMLScriptElement,'src');hookProp(window.HTMLImageElement,'src');hookProp(window.HTMLImageElement,'srcset');` +
   `hookProp(window.HTMLMediaElement,'src');hookProp(window.HTMLSourceElement,'src');hookProp(window.HTMLSourceElement,'srcset');` +
   `hookProp(window.HTMLLinkElement,'href');hookProp(window.HTMLIFrameElement,'src');hookProp(window.HTMLVideoElement,'poster');` +
   // (3) setAttribute: src/href/srcset/poster 属性の代入を書き換える。
   `Element.prototype.setAttribute=function(name,value){try{if(name==='src'||name==='href'||name==='srcset'||name==='poster'){` +
   `var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
-  `var d=buildElementSrcRewrite(tag,name,String(value),rel,pg(),origin,bp);if(d!=null){arguments[1]=d;if(tag==='SCRIPT'&&name==='src'){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}}}}catch(_){}return _setAttr.apply(this,arguments);};` +
+  `var d=buildElementSrcRewrite(tag,name,String(value),rel,pg(),origin,bp);if(d!=null){arguments[1]=d;if((tag==='SCRIPT'&&name==='src')||(tag==='LINK'&&name==='href')){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}}}}catch(_){}return _setAttr.apply(this,arguments);};` +
   // (4) パーサ挿入（insertAdjacentHTML・innerHTML/outerHTML setter）の事前書き換え（#180）。
   // 接続済みサブツリーへのパーサ挿入は解析時に書き換え前 URL のフェッチが始まるため、
   // MutationObserver の事後補正では SW ギャップ中に離脱する。HTML 文字列をフック前の
@@ -974,6 +974,10 @@ export function rewriteHtml(html: string, baseUrl: string): string {
     if (!isResource) return;
     const href = el.getAttribute("href");
     if (href) el.setAttribute("href", assetUrl(href, effectiveBase));
+    // script[src] と同様、書換後は中継レスポンス（CSS は rewriteCss で内容も変化）となり
+    // SRI ハッシュが一致せずブロックされるため integrity / crossorigin を除去する（#188）。
+    el.removeAttribute("integrity");
+    el.removeAttribute("crossorigin");
   });
 
   // インライン <style> のテキストへ fetch した CSS と同一規則（rewriteCss）を適用する（#185）。

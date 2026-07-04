@@ -140,11 +140,11 @@ ${BASE_PATH}/browse/<scheme>/<host>/<targetPath><?targetQuery>
 
 ### サブリソース整合性（SRI）属性の除去
 
-`<script src>` をパス反映形式 `/api/proxy/<scheme>/<host>/<path>` へ書き換えると、ブラウザが実際に取得するのは**プロキシが中継したレスポンス**になる。元の `src` に `integrity`（SRI）属性が付いている場合、中継レスポンスは元 URL のバイト列と一致する保証がなく（ヘッダーサニタイズ・エンコーディング差異等）、**SRI ハッシュ不一致でスクリプトの実行がブロック**される。これを防ぐため、`src` を書き換える `<script>` からは `integrity` 属性を除去する。
+`<script src>` / `<link href>` をパス反映形式 `/api/proxy/<scheme>/<host>/<path>` へ書き換えると、ブラウザが実際に取得するのは**プロキシが中継したレスポンス**になる。元の要素に `integrity`（SRI）属性が付いている場合、中継レスポンスは元 URL のバイト列と一致する保証がなく（CSS は `rewriteCss` による url() 書き換えで内容自体が変化する。スクリプトもヘッダーサニタイズ・エンコーディング差異等）、**SRI ハッシュ不一致でリソースの適用がブロック**される。これを防ぐため、URL を書き換えた要素からは `integrity` 属性を除去する。
 
-- **対象**: `src` を書き換える `<script src>`。同時に `crossorigin` 属性も除去する（書換後は同一 origin の `/api/proxy` 経由となり、CORS モード指定が不整合・不要になるため）。
-- **対象外**: `src` を持たないインライン `<script>`、および `img` / `link` 等の他タグ（現状 SRI の実害が観測されていないため最小限に留める）。
-- **背景**: Google の enable JavaScript インタースティシャル等、SRI 付きスクリプトでチャレンジ JS をロードするサイトで、`solveSimpleChallenge is not defined` 等の未定義エラーを誘発し得る要因の一つ（Issue #67 / 調査 #52）。
+- **対象**: `src` を書き換える `<script src>`、および `href` を書き換える resource rel の `<link>`（stylesheet / preload 等。#188）。同時に `crossorigin` 属性も除去する（書換後は同一 origin の `/api/proxy` 経由となり、CORS モード指定が不整合・不要になるため）。
+- **対象外**: `src` を持たないインライン `<script>`、および `img` 等の他タグ（現状 SRI の実害が観測されていないため最小限に留める）。
+- **背景**: Google の enable JavaScript インタースティシャル等、SRI 付きスクリプトでチャレンジ JS をロードするサイトで、`solveSimpleChallenge is not defined` 等の未定義エラーを誘発し得る要因の一つ（Issue #67 / 調査 #52）。`<link>` は Qiita の cdnjs font-awesome CSS（integrity 付き stylesheet）が SRI 不一致でブロックされる実害を QA で確認した（Issue #188）。
 
 ### meta refresh の書き換え
 
@@ -406,7 +406,7 @@ SW は登録後 `clients.claim()` で既存クライアントを制御下に置�
 - **パーサ挿入（HTML 文字列）の事前書き換え（#180）**: `Element.prototype.insertAdjacentHTML`・`innerHTML` / `outerHTML` setter を上書きし、HTML 文字列を **inert な `<template>` で解析**（template 内容は解析時フェッチが発生しない）→ 挿入メソッドと同じ規則でサブツリーの `src`/`href`/`srcset`/`poster` を書き換え → シリアライズした文字列を元実装へ委譲する。接続済みサブツリーへのパーサ挿入は解析時に**書き換え前の URL でフェッチが開始**されるため、事後補正（MutationObserver）では初回ロードの SW ギャップ中に**プロキシ外へ直接ロード＝離脱**し（実測: GitHub のテーマ CSS・Qiita のスタイルシートが CDN へ直行）、制限環境では初回表示が崩れる。これを挿入前の同期書き換えで防ぐ。template 解析・シリアライズには**フック前の元 setter / getter** を用い再帰を避ける。書き換えが 1 件も無い場合は元の文字列をそのまま委譲する（ラウンドトリップによる差異を持ち込まない）。
 - **`MutationObserver` バックストップ**: 上記を経由しない挿入経路（`document.write` 等）で接続済みサブツリーへ直接挿入された要素を事後に書き換える（ベストエフォート）。
 
-- **`<script>` の SRI 除去**: `script[src]` を書き換える際は `integrity` / `crossorigin` を除去する（中継レスポンスは `/api/proxy` 経由でハッシュが一致せずブロックされ、同一オリジン化で crossorigin も不要なため。サーバー側書き換えと同じ。[§サブリソース整合性（SRI）属性の除去](#サブリソース整合性sri属性の除去)）。
+- **`<script>` / `<link>` の SRI 除去**: `script[src]` / `link[href]` を書き換える際は `integrity` / `crossorigin` を除去する（中継レスポンスは `/api/proxy` 経由でハッシュが一致せずブロックされ、同一オリジン化で crossorigin も不要なため。サーバー側書き換えと同じ。#188。[§サブリソース整合性（SRI）属性の除去](#サブリソース整合性sri属性の除去)）。
 - **`pg()` フォールバック・冪等性**: ターゲット復元は[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)と同じ `pg()` を共有する。既に `/api/proxy`・`/browse` 形式（`buildRequestInterceptUrl` / `buildClickNavDestination` が `null` を返す）なら書き換えない（SW・他経路との二重適用を防ぐ）。
 - **スコープ外・既知の制限**: `document.write` / `document.writeln` によるパーサ挿入は対象外（現代サイトでの利用が稀なため。`MutationObserver` の事後補正のみ＝解析時の誤フェッチが先行し得る）。別オリジンの iframe 内の動的挿入は当該フレームに注入されたシムが担う。CSS の `url()` / `@import`・インラインスタイルの動的設定は対象外（サーバー側 CSS 書き換え・SW に委ねる）。
 
