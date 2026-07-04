@@ -539,12 +539,13 @@ export function buildRequestInterceptUrl(
   return toProxy(resolved);
 }
 
-// 動的挿入・代入された要素のリソース属性（src/href/srcset）の値を、サーバー側 rewriteHtml と
+// 動的挿入・代入された要素のリソース属性（src/href/srcset/poster）の値を、サーバー側 rewriteHtml と
 // 同一規則で中継 URL へ書き換える純粋関数（#174）。書き換え後の文字列を返す。書き換え不要・不可
 // （対象外タグ/属性・非リソース link・既にプロキシ枠・復元不能・非 http(s)・空値）は null。
 //  - iframe[src]: ナビ扱い → /browse（buildClickNavDestination）
 //  - script/img/source/video/audio[src]・link[href]（resource rel のみ）: /api/proxy（buildRequestInterceptUrl）
 //  - img/source[srcset]: 各候補を /api/proxy（記述子は保持。1 つも変わらなければ null）
+//  - video[poster]: /api/proxy（#183）
 // rel は <link> の rel 属性（他要素では ""）。srcset 解析は rewriteSrcset と同方式。
 // 注入スクリプトはこの関数と buildRequestInterceptUrl / buildClickNavDestination を toString() で
 // 埋め込むため、外部参照を持たず URL / 文字列処理のみで完結させる。
@@ -576,7 +577,8 @@ export function buildElementSrcRewrite(
       tag === "script");
   const isSrcset = attr === "srcset" && (tag === "img" || tag === "source");
   const isLinkHref = attr === "href" && tag === "link";
-  if (!isAssetSrc && !isSrcset && !isLinkHref) return null;
+  const isVideoPoster = attr === "poster" && tag === "video"; // #183
+  if (!isAssetSrc && !isSrcset && !isLinkHref && !isVideoPoster) return null;
 
   // <link> は fetch されるリソース rel のみ（canonical / alternate 等は対象外）。
   if (isLinkHref) {
@@ -622,7 +624,7 @@ export function buildElementSrcRewrite(
     return changed ? out.join(", ") : null;
   }
 
-  // script/img/source/video/audio[src]・link[href] → /api/proxy。
+  // script/img/source/video/audio[src]・link[href]・video[poster] → /api/proxy。
   return buildRequestInterceptUrl(value, pageUrl, swOrigin, basePath);
 }
 
@@ -757,6 +759,7 @@ const REQUEST_INTERCEPT_HTML =
   `var v=el.getAttribute(attr);` +
   `if(v){var d=buildElementSrcRewrite(tag,attr,v,rel,pg(),origin,bp);if(d!=null&&d!==v){if(tag==='SCRIPT'){el.removeAttribute('integrity');el.removeAttribute('crossorigin');}_setAttr.call(el,attr,d);}}` +
   `if(tag==='IMG'||tag==='SOURCE'){var ss=el.getAttribute('srcset');if(ss){var d2=buildElementSrcRewrite(tag,'srcset',ss,'',pg(),origin,bp);if(d2!=null&&d2!==ss){_setAttr.call(el,'srcset',d2);}}}` +
+  `if(tag==='VIDEO'){var ps=el.getAttribute('poster');if(ps){var d3=buildElementSrcRewrite(tag,'poster',ps,'',pg(),origin,bp);if(d3!=null&&d3!==ps){_setAttr.call(el,'poster',d3);}}}` +
   `}catch(_){}};` +
   // ノード＋子孫（挿入サブツリー）をまとめて書き換える。
   `var rwTree=function(node){try{if(!node||node.nodeType!==1)return;rwEl(node);` +
@@ -768,15 +771,15 @@ const REQUEST_INTERCEPT_HTML =
   // insertAdjacentElement は第 1 引数が位置文字列だが、rwTree は要素ノード以外を無視するため
   // 他の挿入メソッドと同じフックで安全に処理できる（#180）。
   `if(typeof Element!=='undefined'){var insN=['append','prepend','before','after','replaceWith','insertAdjacentElement'];for(var k=0;k<insN.length;k++)hookIns(Element.prototype,insN[k]);}` +
-  // (2) src/href/srcset プロパティ setter: 接続済み要素への代入を代入時点で書き換える。
+  // (2) src/href/srcset/poster プロパティ setter: 接続済み要素への代入を代入時点で書き換える。
   `var hookProp=function(ctor,name){try{if(typeof ctor==='undefined'||!ctor)return;var p=ctor.prototype;var dsc=Object.getOwnPropertyDescriptor(p,name);if(!dsc||!dsc.set)return;` +
   `Object.defineProperty(p,name,{configurable:true,enumerable:dsc.enumerable,get:dsc.get,set:function(v){var nv=v;try{var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
   `var d=buildElementSrcRewrite(tag,name,String(v),rel,pg(),origin,bp);if(d!=null){if(tag==='SCRIPT'&&name==='src'){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}nv=d;}}catch(_){}return dsc.set.call(this,nv);}});}catch(_){}};` +
   `hookProp(window.HTMLScriptElement,'src');hookProp(window.HTMLImageElement,'src');hookProp(window.HTMLImageElement,'srcset');` +
   `hookProp(window.HTMLMediaElement,'src');hookProp(window.HTMLSourceElement,'src');hookProp(window.HTMLSourceElement,'srcset');` +
-  `hookProp(window.HTMLLinkElement,'href');hookProp(window.HTMLIFrameElement,'src');` +
-  // (3) setAttribute: src/href/srcset 属性の代入を書き換える。
-  `Element.prototype.setAttribute=function(name,value){try{if(name==='src'||name==='href'||name==='srcset'){` +
+  `hookProp(window.HTMLLinkElement,'href');hookProp(window.HTMLIFrameElement,'src');hookProp(window.HTMLVideoElement,'poster');` +
+  // (3) setAttribute: src/href/srcset/poster 属性の代入を書き換える。
+  `Element.prototype.setAttribute=function(name,value){try{if(name==='src'||name==='href'||name==='srcset'||name==='poster'){` +
   `var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
   `var d=buildElementSrcRewrite(tag,name,String(value),rel,pg(),origin,bp);if(d!=null){arguments[1]=d;if(tag==='SCRIPT'&&name==='src'){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}}}}catch(_){}return _setAttr.apply(this,arguments);};` +
   // (4) パーサ挿入（insertAdjacentHTML・innerHTML/outerHTML setter）の事前書き換え（#180）。
@@ -926,6 +929,14 @@ export function rewriteHtml(html: string, baseUrl: string): string {
       if (src) el.setAttribute("src", assetUrl(src, effectiveBase));
     });
   }
+
+  // <video poster>: ポスター画像も /api/proxy へ。未書き換えだと初回ロードの SW ギャップ中に
+  // 素の URL へ直接ロード＝プロキシ離脱する（プロトコル相対値では http/https の二重リクエスト
+  // にもなる）（#183）。
+  root.querySelectorAll("video[poster]").forEach((el) => {
+    const poster = el.getAttribute("poster");
+    if (poster) el.setAttribute("poster", assetUrl(poster, effectiveBase));
+  });
 
   // <img> / <source> の srcset を書き換える。src だけ書き換えて srcset を放置すると
   // ブラウザが srcset 側の未書き換え候補を採用してしまう（#98）。

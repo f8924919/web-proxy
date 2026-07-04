@@ -609,6 +609,8 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
     // パーサ挿入の事前書き換え（#180）が defineProperty で上書きする descriptor
     ["Element", "innerHTML"],
     ["Element", "outerHTML"],
+    // <video poster> の書き換え（#183）が defineProperty で上書きする descriptor
+    ["HTMLVideoElement", "poster"],
   ];
 
   let savedNode: Record<string, unknown>;
@@ -709,6 +711,35 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
     link.setAttribute("rel", "canonical");
     link.setAttribute("href", "/canon");
     expect(link.getAttribute("href")).toBe("/canon");
+  });
+
+  test("video.poster プロパティ代入を /api/proxy へ書き換える（#183）", () => {
+    const v = document.createElement("video");
+    v.poster = "/thumb.jpg";
+    expect(v.getAttribute("poster")).toBe(
+      "/api/proxy/https/www.google.com/thumb.jpg"
+    );
+  });
+
+  test("video.setAttribute('poster') を /api/proxy へ書き換える（#183）", () => {
+    const v = document.createElement("video");
+    v.setAttribute("poster", "//cdn.example.net/t.jpg");
+    expect(v.getAttribute("poster")).toBe(
+      "/api/proxy/https/cdn.example.net/t.jpg"
+    );
+  });
+
+  test("innerHTML 生成 + appendChild の <video poster> を書き換える（#183）", () => {
+    const tmp = document.createElement("div");
+    tmp.innerHTML = '<video poster="/p.jpg" src="/m.mp4"></video>';
+    const video = tmp.firstChild as HTMLVideoElement;
+    document.body.appendChild(video);
+    expect(video.getAttribute("poster")).toBe(
+      "/api/proxy/https/www.google.com/p.jpg"
+    );
+    expect(video.getAttribute("src")).toBe(
+      "/api/proxy/https/www.google.com/m.mp4"
+    );
   });
 
   test("iframe.src はナビ扱いで /browse 形式へ書き換える", () => {

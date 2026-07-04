@@ -104,17 +104,18 @@ ${BASE_PATH}/browse/<scheme>/<host>/<targetPath><?targetQuery>
 
 相対パスはターゲットサイトのオリジンを基準に絶対 URL へ変換し、いずれも上記 §プロキシ URL スキームのパス反映形式へ書き換える。ナビゲーション系（`<a>` / `<form>`）は `/browse/<scheme>/<host>/<path>`（#115）、アセット系（`<img>` / `<link>` / `<script>` / `srcset`）は `/api/proxy/<scheme>/<host>/<path>`（#100）。
 
-| 対象タグ / 属性                    | 遷移先ルート                                    | 理由                                                       |
-| ---------------------------------- | ----------------------------------------------- | ---------------------------------------------------------- |
-| `<a href>`                         | `/browse/<scheme>/<host>/<path>`（パス反映）    | リンク先もブラウズ画面で開く（#115）                       |
-| `<form action>`                    | `/browse/<scheme>/<host>/<path>`（パス反映）    | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）   |
-| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（パス反映）    | 埋め込みページもブラウズ画面で開く（枠外離脱防止・#135）   |
-| `<img src>`                        | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継（UI 不要）                                        |
-| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | メディアの透過中継（#135）                                 |
-| `<source src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | `<picture>`／`<video>`／`<audio>` 内ソースの透過中継       |
-| `<img srcset>` / `<source srcset>` | 各候補 URL をパス反映形式                       | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照） |
-| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                   |
-| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                   |
+| 対象タグ / 属性                    | 遷移先ルート                                    | 理由                                                                                                                                                  |
+| ---------------------------------- | ----------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<a href>`                         | `/browse/<scheme>/<host>/<path>`（パス反映）    | リンク先もブラウズ画面で開く（#115）                                                                                                                  |
+| `<form action>`                    | `/browse/<scheme>/<host>/<path>`（パス反映）    | フォーム送信もプロキシ経由（GET は下記スクリプトで補完）                                                                                              |
+| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（パス反映）    | 埋め込みページもブラウズ画面で開く（枠外離脱防止・#135）                                                                                              |
+| `<img src>`                        | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継（UI 不要）                                                                                                                                   |
+| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | メディアの透過中継（#135）                                                                                                                            |
+| `<video poster>`                   | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | ポスター画像の透過中継。未書き換えだと SW ギャップ中に素の URL へ直接ロード＝離脱し、プロトコル相対値では http/https の二重リクエストにもなる（#183） |
+| `<source src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | `<picture>`／`<video>`／`<audio>` 内ソースの透過中継                                                                                                  |
+| `<img srcset>` / `<source srcset>` | 各候補 URL をパス反映形式                       | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照）                                                                                            |
+| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                                                                                                              |
+| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                                                                                                              |
 
 > パス反映形式の組み立て・`%2F`／非 ASCII の percent-encoding 保持は上記 §プロキシ URL スキーム（パス反映）を参照。
 
@@ -382,13 +383,14 @@ SW は登録後 `clients.claim()` で既存クライアントを制御下に置�
 
 ### 動的挿入要素の src 横取り（SW 非依存・#174）
 
-[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)は `fetch` / XHR / `sendBeacon` を対象とするが、**JS が実行時に動的挿入した要素のサブリソース**（`<script src>` / `<link href>` / `<img src|srcset>` / `<source src|srcset>` / `<video src>` / `<audio src>` / `<iframe src>`）はこれらを経由せず、初回ロードの SW ギャップ中はプロキシ origin 直下へ漏れて **404／誤った 200** になる（例: YouTube は `innerHTML` で生成した `<script src="/s/player/...">` を `appendChild` で挿入し、`<audio>` は `.src` 代入、`www-player.css` は `<link>.href` 代入で読み込む。#174）。サーバー側 `rewriteHtml` は**初期 HTML のみ**、SW は**初回ロードで未制御**のため、いずれも取りこぼす。
+[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)は `fetch` / XHR / `sendBeacon` を対象とするが、**JS が実行時に動的挿入した要素のサブリソース**（`<script src>` / `<link href>` / `<img src|srcset>` / `<source src|srcset>` / `<video src|poster>` / `<audio src>` / `<iframe src>`）はこれらを経由せず、初回ロードの SW ギャップ中はプロキシ origin 直下へ漏れて **404／誤った 200** になる（例: YouTube は `innerHTML` で生成した `<script src="/s/player/...">` を `appendChild` で挿入し、`<audio>` は `.src` 代入、`www-player.css` は `<link>.href` 代入で読み込む。#174）。サーバー側 `rewriteHtml` は**初期 HTML のみ**、SW は**初回ロードで未制御**のため、いずれも取りこぼす。
 
-これを補うため、同じ `<head>` 最先頭シムで**要素のリソース属性（`src` / `href` / `srcset`）を代入・挿入の時点で書き換える**。書き換え規則はサーバー側 `rewriteHtml` と同一にする。
+これを補うため、同じ `<head>` 最先頭シムで**要素のリソース属性（`src` / `href` / `srcset` / `poster`）を代入・挿入の時点で書き換える**。書き換え規則はサーバー側 `rewriteHtml` と同一にする。
 
 | 要素・属性                                                                      | 書き換え後                                                               |
 | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | `script[src]` / `img[src]` / `source[src]` / `video[src]` / `audio[src]`        | `/api/proxy/<scheme>/<host>/<path>`（`buildRequestInterceptUrl`）        |
+| `video[poster]`（#183）                                                         | `/api/proxy/...`                                                         |
 | `img[srcset]` / `source[srcset]`                                                | 各候補を `/api/proxy/...` へ（記述子は保持）                             |
 | `link[href]`（`rel` が `stylesheet`/`preload`/`modulepreload`/`prefetch` のみ） | `/api/proxy/...`                                                         |
 | `iframe[src]`                                                                   | `/browse/<scheme>/<host>/<path>`（ナビ扱い・`buildClickNavDestination`） |
@@ -396,9 +398,9 @@ SW は登録後 `clients.claim()` で既存クライアントを制御下に置�
 横取りは次の経路を**重ねて**張る（純粋関数 `buildElementSrcRewrite` が判定の正本）:
 
 - **挿入メソッド**（`Node.prototype.appendChild` / `insertBefore` / `replaceChild`、`Element.prototype.append` / `prepend` / `before` / `after` / `replaceWith` / `insertAdjacentElement`〔#180〕）: 挿入される要素**およびその子孫**のリソース属性を、元メソッド委譲の**前**に書き換える。`<script>` は挿入時にフェッチされるため、`innerHTML` 等で `src` 付きで生成された要素もここで間に合う（YouTube の主経路）。
-- **プロパティ setter**（`HTMLScriptElement`/`HTMLImageElement`/`HTMLMediaElement`/`HTMLSourceElement`/`HTMLLinkElement`/`HTMLIFrameElement` の `src`/`href`/`srcset`）: 接続済み要素への代入（`.src=` 等）を代入時点で書き換える。
-- **`setAttribute`**（`Element.prototype.setAttribute`）: `src`/`href`/`srcset` 属性の代入を書き換える。
-- **パーサ挿入（HTML 文字列）の事前書き換え（#180）**: `Element.prototype.insertAdjacentHTML`・`innerHTML` / `outerHTML` setter を上書きし、HTML 文字列を **inert な `<template>` で解析**（template 内容は解析時フェッチが発生しない）→ 挿入メソッドと同じ規則でサブツリーの `src`/`href`/`srcset` を書き換え → シリアライズした文字列を元実装へ委譲する。接続済みサブツリーへのパーサ挿入は解析時に**書き換え前の URL でフェッチが開始**されるため、事後補正（MutationObserver）では初回ロードの SW ギャップ中に**プロキシ外へ直接ロード＝離脱**し（実測: GitHub のテーマ CSS・Qiita のスタイルシートが CDN へ直行）、制限環境では初回表示が崩れる。これを挿入前の同期書き換えで防ぐ。template 解析・シリアライズには**フック前の元 setter / getter** を用い再帰を避ける。書き換えが 1 件も無い場合は元の文字列をそのまま委譲する（ラウンドトリップによる差異を持ち込まない）。
+- **プロパティ setter**（`HTMLScriptElement`/`HTMLImageElement`/`HTMLMediaElement`/`HTMLSourceElement`/`HTMLLinkElement`/`HTMLIFrameElement` の `src`/`href`/`srcset`、`HTMLVideoElement` の `poster`〔#183〕）: 接続済み要素への代入（`.src=` 等）を代入時点で書き換える。
+- **`setAttribute`**（`Element.prototype.setAttribute`）: `src`/`href`/`srcset`/`poster` 属性の代入を書き換える。
+- **パーサ挿入（HTML 文字列）の事前書き換え（#180）**: `Element.prototype.insertAdjacentHTML`・`innerHTML` / `outerHTML` setter を上書きし、HTML 文字列を **inert な `<template>` で解析**（template 内容は解析時フェッチが発生しない）→ 挿入メソッドと同じ規則でサブツリーの `src`/`href`/`srcset`/`poster` を書き換え → シリアライズした文字列を元実装へ委譲する。接続済みサブツリーへのパーサ挿入は解析時に**書き換え前の URL でフェッチが開始**されるため、事後補正（MutationObserver）では初回ロードの SW ギャップ中に**プロキシ外へ直接ロード＝離脱**し（実測: GitHub のテーマ CSS・Qiita のスタイルシートが CDN へ直行）、制限環境では初回表示が崩れる。これを挿入前の同期書き換えで防ぐ。template 解析・シリアライズには**フック前の元 setter / getter** を用い再帰を避ける。書き換えが 1 件も無い場合は元の文字列をそのまま委譲する（ラウンドトリップによる差異を持ち込まない）。
 - **`MutationObserver` バックストップ**: 上記を経由しない挿入経路（`document.write` 等）で接続済みサブツリーへ直接挿入された要素を事後に書き換える（ベストエフォート）。
 
 - **`<script>` の SRI 除去**: `script[src]` を書き換える際は `integrity` / `crossorigin` を除去する（中継レスポンスは `/api/proxy` 経由でハッシュが一致せずブロックされ、同一オリジン化で crossorigin も不要なため。サーバー側書き換えと同じ。[§サブリソース整合性（SRI）属性の除去](#サブリソース整合性sri属性の除去)）。
