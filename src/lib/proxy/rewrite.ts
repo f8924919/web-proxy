@@ -976,6 +976,17 @@ export function rewriteHtml(html: string, baseUrl: string): string {
     if (href) el.setAttribute("href", assetUrl(href, effectiveBase));
   });
 
+  // インライン <style> のテキストへ fetch した CSS と同一規則（rewriteCss）を適用する（#185）。
+  // 未書き換えだと絶対 / プロトコル相対の url() が初回ロードの SW ギャップ中に素の URL へ
+  // 直接ロード＝プロキシ離脱する。テキストノードの rawText を直接差し替え、CSS 中の
+  // < 等を HTML として再解釈させない（style 属性・CSSOM 動的操作は対象外）。
+  root.querySelectorAll("style").forEach((el) => {
+    const node = el.firstChild as { rawText?: string } | undefined;
+    if (!node || typeof node.rawText !== "string" || !node.rawText) return;
+    const rewrittenCss = rewriteCss(node.rawText, effectiveBase);
+    if (rewrittenCss !== node.rawText) node.rawText = rewrittenCss;
+  });
+
   const rewritten = root.toString();
   const bar = ADDRESS_BAR_HTML(baseUrl);
   const withBody = rewritten.replace(

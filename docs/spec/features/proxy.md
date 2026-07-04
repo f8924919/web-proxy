@@ -301,7 +301,7 @@ POST 時もリクエストの `Cookie` / `Authorization` を転送する（[§�
 
 ## CSS URL 書き換え
 
-`Content-Type: text/css` のレスポンスに対して、正規表現で `url(...)` を書き換える。
+`Content-Type: text/css` のレスポンス、および **HTML 内のインライン `<style>` ブロック**（#185）に対して、正規表現で `url(...)` を書き換える。
 
 **対象パターン**
 
@@ -317,6 +317,9 @@ url("/api/proxy/<scheme>/<host>/<path>")
 ```
 
 `@import` も同様にパス反映形式（[§プロキシ URL スキーム](#プロキシ-url-スキームパス反映)）へ変換する。
+
+- **インライン `<style>` の書き換え（#185）**: `rewriteHtml` が `<style>` 要素のテキストに fetch した CSS と同一規則（`rewriteCss`）を適用する。未書き換えだと、絶対 / プロトコル相対の `url()` 参照が初回ロードの SW ギャップ中に素の URL へ直接ロード＝プロキシ離脱する（実測: en.wikipedia.org のインライン `<style>` 内 `url("//upload.wikimedia.org/...")`）。`data:` 等の非 http(s) URL は素通しする（`assetUrl` の既存挙動）。
+- **既知の制限**: `style` **属性**（インラインスタイル）の `url()` と、JS による動的なスタイル設定（`element.style.*` / CSSOM 操作）は対象外（SW 制御確立後は SW が横取りする。[§動的挿入要素の src 横取り](#動的挿入要素の-src-横取りsw-非依存174) のスコープ外記述と整合）。
 
 ---
 

@@ -127,6 +127,46 @@ describe("rewriteHtml", () => {
     });
   });
 
+  describe("インライン <style> の CSS 書き換え（#185）", () => {
+    // 仕様: docs/spec/features/proxy.md §CSS URL 書き換え（インライン <style>）
+    test("プロトコル相対の url() を /api/proxy へ書き換える（Wikipedia 実測パターン）", () => {
+      const html = `<style>.id-lock-free a{background:url("//upload.wikimedia.org/x/Lock-green.svg")right 0.1em center/9px no-repeat}</style>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `url("/api/proxy/https/upload.wikimedia.org/x/Lock-green.svg")`
+      );
+      expect(result).not.toContain(`url("//upload.wikimedia.org`);
+    });
+
+    test("ルート相対・絶対の url() と @import も書き換える", () => {
+      const html = `<style>@import "/theme.css"; a{background:url(/bg.png)} b{background:url('https://cdn.example.net/c.png')}</style>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`@import "${asset("/theme.css")}"`);
+      expect(result).toContain(`url("${asset("/bg.png")}")`);
+      expect(result).toContain(`url("/api/proxy/https/cdn.example.net/c.png")`);
+    });
+
+    test("data: URL は書き換えない", () => {
+      const html = `<style>a{background:url(data:image/png;base64,AAAA)}</style>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`url("data:image/png;base64,AAAA")`);
+      expect(result).not.toContain("/api/proxy/data");
+    });
+
+    test("CSS 中の < を含むテキストを HTML として壊さない", () => {
+      const html = `<style>b::after{content:"a<b"} i{background:url(/x.png)}</style>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`content:"a<b"`);
+      expect(result).toContain(`url("${asset("/x.png")}")`);
+    });
+
+    test("url() を含まない <style> は変更しない", () => {
+      const html = `<style>p{color:red}</style>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`<style>p{color:red}</style>`);
+    });
+  });
+
   describe("srcset の書き換え（#98）", () => {
     const proxied = (path: string) => asset(path);
 

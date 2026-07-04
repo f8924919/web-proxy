@@ -373,19 +373,20 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 相対 URL は `baseUrl` を基準に絶対 URL へ変換してからエンコードする。
 
-| 対象                               | 書き換え先                                                      |
-| ---------------------------------- | --------------------------------------------------------------- |
-| `<a href>`                         | `/browse/<scheme>/<host>/<path>`                                |
-| `<form action>`                    | `/browse/<scheme>/<host>/<path>`                                |
-| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（#135）                        |
-| `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                             |
-| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（#135）                     |
-| `<video poster>`                   | `/api/proxy/<scheme>/<host>/<path>`（#183）                     |
-| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持） |
-| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`                             |
-| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                             |
-| `<meta http-equiv=refresh>`        | `/browse/<scheme>/<host>/<path>`                                |
-| `<base href>`                      | 解決基点へ取り込み後に `href` を除去（#135）                    |
+| 対象                               | 書き換え先                                                          |
+| ---------------------------------- | ------------------------------------------------------------------- |
+| `<a href>`                         | `/browse/<scheme>/<host>/<path>`                                    |
+| `<form action>`                    | `/browse/<scheme>/<host>/<path>`                                    |
+| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（#135）                            |
+| `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                                 |
+| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（#135）                         |
+| `<video poster>`                   | `/api/proxy/<scheme>/<host>/<path>`（#183）                         |
+| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持）     |
+| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`                                 |
+| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                                 |
+| `<meta http-equiv=refresh>`        | `/browse/<scheme>/<host>/<path>`                                    |
+| `<base href>`                      | 解決基点へ取り込み後に `href` を除去（#135）                        |
+| インライン `<style>` のテキスト    | `rewriteCss` を適用（`url()` / `@import` を `/api/proxy` へ・#185） |
 
 > アセット系（`<img>`/`<link>`/`<script>`/`srcset`/CSS）は `assetUrl()` → `proxyPath.ts` の `buildProxyPath()`（`/api/proxy/...`・#100）、ナビゲーション系（`<a>`/`<form>`/meta refresh）は `browseUrl()` → `browsePath.ts` の `buildBrowsePath()`（`/browse/...`・#115）でパス反映形式に組み立てる（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)）。両者は同形のスキームで、`%2F`/非 ASCII の percent-encoding を保持する（#111）。
 
@@ -400,6 +401,8 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 ### CSS 書き換え
 
 正規表現で `url(...)` と `@import` を `assetUrl()`（パス反映形式 `/api/proxy/<scheme>/<host>/<path>`）へ置換。
+
+`rewriteCss` は fetch した `text/css`（`relayAsset`）に加え、`rewriteHtml` がインライン `<style>` 要素のテキストにも適用する（#185）。未書き換えだと絶対 / プロトコル相対の `url()` が初回ロードの SW ギャップ中に素の URL へ直接ロード＝離脱する（実測: en.wikipedia.org の外部リンクアイコン）。テキストの差し替えは `node-html-parser` のテキストノード置換で行い、CSS 中の `<` 等を HTML として再解釈させない。`style` 属性・CSSOM 動的操作は対象外（[機能仕様 §CSS URL 書き換え](../spec/features/proxy.md#css-url-書き換え)の既知の制限）。
 
 ### アドレスバー注入
 
