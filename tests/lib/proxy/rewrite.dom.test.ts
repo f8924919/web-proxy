@@ -752,6 +752,22 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
     expect(link.getAttribute("href")).toBe("/canon");
   });
 
+  test("link[rel=icon].setAttribute('href') を /api/proxy へ書き換える（#189）", () => {
+    const link = document.createElement("link");
+    link.setAttribute("rel", "icon");
+    link.setAttribute("href", "https://cdn.example.net/favicon.ico");
+    expect(link.getAttribute("href")).toBe(
+      "/api/proxy/https/cdn.example.net/favicon.ico"
+    );
+  });
+
+  test("link[rel=preconnect] の href は書き換えない（#189）", () => {
+    const link = document.createElement("link");
+    link.setAttribute("rel", "preconnect");
+    link.setAttribute("href", "https://cdn.example.net");
+    expect(link.getAttribute("href")).toBe("https://cdn.example.net");
+  });
+
   test("video.poster プロパティ代入を /api/proxy へ書き換える（#183）", () => {
     const v = document.createElement("video");
     v.poster = "/thumb.jpg";

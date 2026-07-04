@@ -373,20 +373,20 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 相対 URL は `baseUrl` を基準に絶対 URL へ変換してからエンコードする。
 
-| 対象                               | 書き換え先                                                          |
-| ---------------------------------- | ------------------------------------------------------------------- |
-| `<a href>`                         | `/browse/<scheme>/<host>/<path>`                                    |
-| `<form action>`                    | `/browse/<scheme>/<host>/<path>`                                    |
-| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（#135）                            |
-| `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                                 |
-| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（#135）                         |
-| `<video poster>`                   | `/api/proxy/<scheme>/<host>/<path>`（#183）                         |
-| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持）     |
-| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`                                 |
-| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                                 |
-| `<meta http-equiv=refresh>`        | `/browse/<scheme>/<host>/<path>`                                    |
-| `<base href>`                      | 解決基点へ取り込み後に `href` を除去（#135）                        |
-| インライン `<style>` のテキスト    | `rewriteCss` を適用（`url()` / `@import` を `/api/proxy` へ・#185） |
+| 対象                               | 書き換え先                                                                                                                                                                                                                                                                                               |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `<a href>`                         | `/browse/<scheme>/<host>/<path>`                                                                                                                                                                                                                                                                         |
+| `<form action>`                    | `/browse/<scheme>/<host>/<path>`                                                                                                                                                                                                                                                                         |
+| `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（#135）                                                                                                                                                                                                                                                                 |
+| `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                                                                                                                                                                                                                                                                      |
+| `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（#135）                                                                                                                                                                                                                                                              |
+| `<video poster>`                   | `/api/proxy/<scheme>/<host>/<path>`（#183）                                                                                                                                                                                                                                                              |
+| `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持）                                                                                                                                                                                                                                          |
+| `<link href>`                      | rel 別: 書き換え系 rel（stylesheet/preload 系・icon 系/manifest）は `/api/proxy/<scheme>/<host>/<path>`、接続ヒント系（preconnect/dns-prefetch/compression-dictionary）は要素ごと削除、情報系は維持（#189。[機能仕様 §`<link>` の rel 別取り扱い](../spec/features/proxy.md#link-の-rel-別取り扱い189)） |
+| `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                                                                                                                                                                                                                                                                      |
+| `<meta http-equiv=refresh>`        | `/browse/<scheme>/<host>/<path>`                                                                                                                                                                                                                                                                         |
+| `<base href>`                      | 解決基点へ取り込み後に `href` を除去（#135）                                                                                                                                                                                                                                                             |
+| インライン `<style>` のテキスト    | `rewriteCss` を適用（`url()` / `@import` を `/api/proxy` へ・#185）                                                                                                                                                                                                                                      |
 
 > アセット系（`<img>`/`<link>`/`<script>`/`srcset`/CSS）は `assetUrl()` → `proxyPath.ts` の `buildProxyPath()`（`/api/proxy/...`・#100）、ナビゲーション系（`<a>`/`<form>`/meta refresh）は `browseUrl()` → `browsePath.ts` の `buildBrowsePath()`（`/browse/...`・#115）でパス反映形式に組み立てる（[機能仕様 §プロキシ URL スキーム](../spec/features/proxy.md#プロキシ-url-スキームパス反映)）。両者は同形のスキームで、`%2F`/非 ASCII の percent-encoding を保持する（#111）。
 

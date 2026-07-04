@@ -114,10 +114,23 @@ ${BASE_PATH}/browse/<scheme>/<host>/<targetPath><?targetQuery>
 | `<video poster>`                   | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | ポスター画像の透過中継。未書き換えだと SW ギャップ中に素の URL へ直接ロード＝離脱し、プロトコル相対値では http/https の二重リクエストにもなる（#183） |
 | `<source src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | `<picture>`／`<video>`／`<audio>` 内ソースの透過中継                                                                                                  |
 | `<img srcset>` / `<source srcset>` | 各候補 URL をパス反映形式                       | 透過中継（記述子 `1x` / `2x` / `640w` 等は保持。下記参照）                                                                                            |
-| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                                                                                                              |
+| `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継（`rel` により書き換え / 削除 / 維持を分ける。下記 §`<link>` の rel 別取り扱い）                                                              |
 | `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`（パス反映） | 透過中継                                                                                                                                              |
 
 > パス反映形式の組み立て・`%2F`／非 ASCII の percent-encoding 保持は上記 §プロキシ URL スキーム（パス反映）を参照。
+
+### `<link>` の rel 別取り扱い（#189）
+
+[`Link` ヘッダーの書き換え（#181）](#link-ヘッダーの書き換え181)と対称の規則で、HTML の `<link>` 要素を `rel` により処理を分ける。
+
+| `rel`                                                                                           | 処理                                                                                                                                                                                                            |
+| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `stylesheet` / `preload` / `modulepreload` / `prefetch`                                         | `href` を `/api/proxy` 形式へ書き換えて維持                                                                                                                                                                     |
+| `icon` / `apple-touch-icon` / `apple-touch-icon-precomposed` / `mask-icon` / `manifest`（#189） | `href` を `/api/proxy` 形式へ書き換えて維持。favicon / manifest は**ブラウザ UI が Service Worker を経由せず直接取得**するため、未書き換えだと利用者のブラウザから対象ホストへ直接アクセスが発生する（IP 露出） |
+| `preconnect` / `dns-prefetch` / `compression-dictionary`（#189）                                | **要素ごと削除**。接続先はプロキシ自身になるためヒントとして意味を成さず、素の URL を残すと利用者のブラウザが対象ホストへ直接 DNS 解決・TCP/TLS 接続を張る                                                      |
+| その他（`canonical` / `alternate` 等）                                                          | フェッチを誘発しない情報系のためそのまま維持                                                                                                                                                                    |
+
+- **動的挿入（シム側）**: [§動的挿入要素の src 横取り（#174）](#動的挿入要素の-src-横取りsw-非依存174)の `link[href]` 書き換え対象 rel にも同じ書き換え系 rel を用いる。削除系 rel（`preconnect` 等）の動的挿入はシムでは削除しない（接続ヒントのみでコンテンツ取得を伴わず、挿入フックでの要素削除は呼び出し元の DOM 操作と競合し得るため。スコープ外）。
 
 ### `<base href>` の処理（枠外離脱防止・#135）
 
@@ -390,13 +403,13 @@ SW は登録後 `clients.claim()` で既存クライアントを制御下に置�
 
 これを補うため、同じ `<head>` 最先頭シムで**要素のリソース属性（`src` / `href` / `srcset` / `poster`）を代入・挿入の時点で書き換える**。書き換え規則はサーバー側 `rewriteHtml` と同一にする。
 
-| 要素・属性                                                                      | 書き換え後                                                               |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
-| `script[src]` / `img[src]` / `source[src]` / `video[src]` / `audio[src]`        | `/api/proxy/<scheme>/<host>/<path>`（`buildRequestInterceptUrl`）        |
-| `video[poster]`（#183）                                                         | `/api/proxy/...`                                                         |
-| `img[srcset]` / `source[srcset]`                                                | 各候補を `/api/proxy/...` へ（記述子は保持）                             |
-| `link[href]`（`rel` が `stylesheet`/`preload`/`modulepreload`/`prefetch` のみ） | `/api/proxy/...`                                                         |
-| `iframe[src]`                                                                   | `/browse/<scheme>/<host>/<path>`（ナビ扱い・`buildClickNavDestination`） |
+| 要素・属性                                                                                             | 書き換え後                                                               |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `script[src]` / `img[src]` / `source[src]` / `video[src]` / `audio[src]`                               | `/api/proxy/<scheme>/<host>/<path>`（`buildRequestInterceptUrl`）        |
+| `video[poster]`（#183）                                                                                | `/api/proxy/...`                                                         |
+| `img[srcset]` / `source[srcset]`                                                                       | 各候補を `/api/proxy/...` へ（記述子は保持）                             |
+| `link[href]`（[§`<link>` の rel 別取り扱い（#189）](#link-の-rel-別取り扱い189)の書き換え系 rel のみ） | `/api/proxy/...`                                                         |
+| `iframe[src]`                                                                                          | `/browse/<scheme>/<host>/<path>`（ナビ扱い・`buildClickNavDestination`） |
 
 横取りは次の経路を**重ねて**張る（純粋関数 `buildElementSrcRewrite` が判定の正本）:
 
