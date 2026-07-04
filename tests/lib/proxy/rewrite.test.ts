@@ -321,6 +321,30 @@ describe("rewriteHtml", () => {
       expect(result).toContain("var a = 1;");
       expect(result).toContain(`integrity="sha256-keep"`);
     });
+
+    test("href を書き換える link[rel=stylesheet] から integrity / crossorigin を除去する（#188）", () => {
+      const html = `<link rel="stylesheet" href="https://cdn.example.net/fa.css" integrity="sha512-abc" crossorigin="anonymous">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `href="/api/proxy/https/cdn.example.net/fa.css"`
+      );
+      expect(result).not.toContain("integrity=");
+      expect(result).not.toContain("crossorigin=");
+    });
+
+    test("href を書き換える link[rel=preload] からも integrity を除去する（#188）", () => {
+      const html = `<link rel="preload" as="style" href="/theme.css" integrity="sha384-def">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`href="${asset("/theme.css")}"`);
+      expect(result).not.toContain("integrity=");
+    });
+
+    test("書き換え対象外 rel（canonical）の link の属性は触らない", () => {
+      const html = `<link rel="canonical" href="https://example.com/page" crossorigin="anonymous">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`href="https://example.com/page"`);
+      expect(result).toContain(`crossorigin="anonymous"`);
+    });
   });
 
   describe("inline meta CSP の除去（A2）", () => {

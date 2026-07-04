@@ -706,6 +706,45 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
     );
   });
 
+  test("link[rel=stylesheet].setAttribute('href') で integrity / crossorigin を除去する（#188）", () => {
+    const link = document.createElement("link");
+    link.setAttribute("rel", "stylesheet");
+    link.setAttribute("integrity", "sha512-x");
+    link.setAttribute("crossorigin", "anonymous");
+    link.setAttribute("href", "https://cdn.example.net/fa.css");
+    expect(link.getAttribute("href")).toBe(
+      "/api/proxy/https/cdn.example.net/fa.css"
+    );
+    expect(link.hasAttribute("integrity")).toBe(false);
+    expect(link.hasAttribute("crossorigin")).toBe(false);
+  });
+
+  test("link.href プロパティ代入で integrity / crossorigin を除去する（#188）", () => {
+    const link = document.createElement("link");
+    link.setAttribute("rel", "stylesheet");
+    link.setAttribute("integrity", "sha512-x");
+    link.setAttribute("crossorigin", "anonymous");
+    link.href = "/theme.css";
+    expect(link.getAttribute("href")).toBe(
+      "/api/proxy/https/www.google.com/theme.css"
+    );
+    expect(link.hasAttribute("integrity")).toBe(false);
+    expect(link.hasAttribute("crossorigin")).toBe(false);
+  });
+
+  test("innerHTML 直挿入の link[integrity] も挿入時点で除去する（#188）", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.innerHTML =
+      '<link rel="stylesheet" href="https://cdn.example.net/fa.css" integrity="sha512-x" crossorigin="anonymous">';
+    const link = host.querySelector("link");
+    expect(link?.getAttribute("href")).toBe(
+      "/api/proxy/https/cdn.example.net/fa.css"
+    );
+    expect(link?.hasAttribute("integrity")).toBe(false);
+    expect(link?.hasAttribute("crossorigin")).toBe(false);
+  });
+
   test("非リソース rel（canonical）の link[href] は書き換えない", () => {
     const link = document.createElement("link");
     link.setAttribute("rel", "canonical");
