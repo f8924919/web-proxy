@@ -705,7 +705,6 @@ describe("buildNavApiRedirect（Navigation API 駆動の離脱の復元・#172�
 
   test.each([
     ["/api/proxy/https/www.youtube.com/x"],
-    ["/_next/static/chunk.js"],
     ["/sw.js"],
     ["/favicon.ico"],
     ["/unlock"],
@@ -713,13 +712,15 @@ describe("buildNavApiRedirect（Navigation API 駆動の離脱の復元・#172�
     expect(buildNavApiRedirect(`${PROXY}${p}`, PAGE)).toBeNull();
   });
 
-  test("/_next/image（ターゲット側エンドポイント）は復元対象", () => {
-    // /_next/image は自前ルートから除外される（#102）。ルート離脱として現ターゲットへ復元する。
-    // （url= クエリは extractBrowseTarget が復元扱いするため、ここではパスのみで検証する）
-    expect(
-      buildNavApiRedirect(`${PROXY}/_next/image/x.png`, PAGE)
-    ).not.toBeNull();
-  });
+  test.each([["/_next/image/x.png"], ["/_next/static/chunk.js"]])(
+    "/_next/*（ターゲット側資産）%s は復元対象（#102・#178）",
+    (p) => {
+      // /_next/* は自前ルートから除外される（#102 を #178 で一般化）。ルート離脱として
+      // 現ターゲットへ復元する。
+      // （url= クエリは extractBrowseTarget が復元扱いするため、ここではパスのみで検証する）
+      expect(buildNavApiRedirect(`${PROXY}${p}`, PAGE)).not.toBeNull();
+    }
+  );
 
   test("ターゲットを復元できない閲覧ページ（url= 無し）では null", () => {
     expect(buildNavApiRedirect(`${PROXY}/`, "https://proxy.test/browse")).toBe(
@@ -958,9 +959,11 @@ describe("isProxyOwnPath（#124）", () => {
     ["/browse/https/x.com/y", true, "browse 配下"],
     ["/api/proxy", true, "api/proxy 完全一致"],
     ["/api/proxy/https/x.com/y", true, "api/proxy 配下"],
-    ["/_next/static/chunk.js", true, "_next static"],
-    ["/_next/image", false, "_next/image 例外"],
-    ["/_next/image/x", false, "_next/image 配下例外"],
+    // /_next/* はターゲット（Next.js 製）の資産なので自前ルート扱いしない（#102 を #178 で一般化）
+    ["/_next/static/chunk.js", false, "_next static はターゲット資産（#178）"],
+    ["/_next/image", false, "_next/image（#102）"],
+    ["/_next/image/x", false, "_next/image 配下（#102）"],
+    ["/_next/data/build/x.json", false, "_next data はターゲット資産（#178）"],
     ["/api/personalized-articles", false, "ターゲット API"],
     ["/cb_pc.gif", false, "ターゲット相対画像"],
     ["/images/x.png", false, "ターゲット画像"],
@@ -1064,6 +1067,38 @@ describe("buildRequestInterceptUrl（#124）", () => {
         "https://news.yahoo.co.jp/_next/image?url=https%3A%2F%2Fext%2Fa.png&w=64"
       )
     );
+  });
+
+  test("_next/static・_next/data もターゲット origin へ（#178）", () => {
+    expect(
+      buildRequestInterceptUrl(
+        `${ORIGIN}/_next/static/chunks/x.js`,
+        PAGE,
+        ORIGIN,
+        ""
+      )
+    ).toBe(proxy("https://news.yahoo.co.jp/_next/static/chunks/x.js"));
+    expect(
+      buildRequestInterceptUrl(
+        `${ORIGIN}/_next/data/buildId/learn.json?p=learn`,
+        PAGE,
+        ORIGIN,
+        ""
+      )
+    ).toBe(
+      proxy("https://news.yahoo.co.jp/_next/data/buildId/learn.json?p=learn")
+    );
+  });
+
+  test("ターゲット不明ページの _next/static は素通し（null）＝プロキシ自身の資産提供を壊さない", () => {
+    expect(
+      buildRequestInterceptUrl(
+        `${ORIGIN}/_next/static/chunks/x.js`,
+        `${ORIGIN}/`,
+        ORIGIN,
+        ""
+      )
+    ).toBeNull();
   });
 
   test("basePath を保持して振り向ける（同一オリジン相対・クロスオリジン）", () => {

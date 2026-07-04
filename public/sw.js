@@ -33,16 +33,13 @@
     // 完全一致＋パス境界で判定する（ターゲット側の /browser や /api/proxyData を誤判定しない）
     if (p === "/browse" || p.startsWith("/browse/")) return true;
     if (p === "/api/proxy" || p.startsWith("/api/proxy/")) return true;
-    if (p.startsWith("/_next/")) {
-      // /_next/image はターゲット（Next.js 製サイト）の画像最適化エンドポイント。
-      // クライアント hydration が再生成する /_next/image?url=<外部> をプロキシ自身の
-      // 最適化エンドポイントに当てると外部ドメインが remotePatterns 未許可で 400 になる。
-      // 自前ルートから除外し、rewriteRequestUrl のフォールバックでターゲット origin の
-      // /_next/image へ振り向ける（#102。サーバー描画分の srcset 書き換えは #98）。
-      // それ以外の /_next/（static チャンク・data 等）はプロキシ自身の資産として素通し。
-      if (p === "/_next/image" || p.startsWith("/_next/image/")) return false;
-      return true;
-    }
+    // /_next/* は自前ルート扱いにしない（#102 の /_next/image 特例を #178 で一般化）。
+    // Next.js 製ターゲットのクライアントランタイムは /_next/image?url=<外部>（hydration の
+    // srcset 再生成 → 400。#102）に加え、/_next/static/* 遅延チャンク・/_next/data/*（SPA
+    // クライアント遷移のページデータ）をプロキシ origin 直下へ要求し、素通しするとプロキシ
+    // 自身の Next.js サーバーに 404 着地して SPA 遷移が空白になる（#178）。rewriteRequestUrl
+    // のフォールバックでターゲット origin へ解決し、ターゲット不明（ホーム等）は素通しに
+    // 落ちるためプロキシ自身の /_next 資産提供には影響しない。
     if (p === "/favicon.ico") return true;
     return false;
   }
