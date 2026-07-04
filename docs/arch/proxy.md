@@ -511,7 +511,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 | 純粋関数                                                            | 役割                                                                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `isProxyOwnPath(pathname, basePath)`                                | 横取りしてはいけないプロキシ自前ルート（`/browse`・`/api/proxy/*`・`/_next/*`〔`/_next/image` を除く〕・`/sw.js`・`/favicon.ico`・ホーム）か判定する（`public/sw.js` の同名関数と対の規則）                                                                          |
+| `isProxyOwnPath(pathname, basePath)`                                | 横取りしてはいけないプロキシ自前ルート（`/browse`・`/api/proxy/*`・`/sw.js`・`/favicon.ico`・ホーム。`/_next/*` は自前扱いしない〔#178〕）か判定する（`public/sw.js` の同名関数と対の規則）                                                                          |
 | `buildRequestInterceptUrl(requestUrl, pageUrl, swOrigin, basePath)` | リクエスト URL を SW の `rewriteRequestUrl` と同一規則で `/api/proxy/<scheme>/<host>/<path>` へ書き換える。クロスオリジン絶対 URL はそのまま中継、同一オリジン非自前パスは閲覧ページからターゲット origin を復元して解決、自前ルート・非 http(s) は `null`（素通し） |
 
 - **共有ヘルパー**: ターゲット復元は既存の純粋関数 `extractBrowseTarget` を再利用する。`buildRequestInterceptUrl` / `isProxyOwnPath` / `extractBrowseTarget` を `toString()` で `<script>` に埋め込む（外部参照を持たず `URL` のみで完結）。
@@ -558,13 +558,13 @@ document に click を capture で委任（動的リンクにも効き、SPA の
      を組み立て、Response.redirect(dest, 302) で振り向ける（dest が null〔自前ルート・非 http(s)・
      ターゲット不明〕なら fetch(req) 素通し）。#162
    - それ以外（destination=document のトップレベル遷移）→ 素通し（ページ遷移・フォーム送信に委ねる）
-2. 同一オリジンの自前ルート（/browse・/api/proxy・/_next/* 等。ただし /_next/image を除く）→ 素通し
+2. 同一オリジンの自前ルート（/browse・/api/proxy 等。/_next/* は自前扱いしない〔#178〕）→ 素通し
 3. clientId から要求元ページ URL（パス反映 /browse/<scheme>/<host>/<path>・後方互換 /browse?url=<target>）を取得し、extractTarget でターゲットを復元する
 4. rewriteRequestUrl(requestUrl, pageUrl, swOrigin, basePath) で振り向け先を決定
    （振り向け先はパス反映形式 /api/proxy/<scheme>/<host>/<path>。#100）
    - クロスオリジンの絶対 URL → /api/proxy/<scheme>/<host>/<path>
    - 同一オリジンのルート絶対パス（自前ルート以外）→ ターゲット origin に解決し /api/proxy/<scheme>/<host>/<path>
-   - 同一オリジンの /_next/image → ターゲット origin の /_next/image に解決し /api/proxy/<scheme>/<host>/_next/image?...（#102）
+   - 同一オリジンの /_next/*（static チャンク・data・image 等）→ ターゲット origin に解決し /api/proxy/<scheme>/<host>/_next/...（#102・#178）
    - 自前ルート（パス反映済みの相対 import /api/proxy/* を含む）→ 素通し（null）
 5. 振り向け先があれば fetch で応答（非 GET はメソッド・ボディ・リクエストヘッダーを保持、
    credentials: "same-origin"）。なければ素通し。振り向け fetch が失敗しても未処理 reject に
@@ -575,7 +575,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 **サブフレーム（iframe）ナビゲーションの横取り（#162）**: ランタイムで動的生成された `<iframe>` の root 相対 / 絶対 src は `mode=navigate` になり、トップレベル遷移と同じく素通しするとプロキシ自身の origin へ 404 着地する（実測: Dailymotion のプレイヤー iframe `/player/xtv3w.html`）。これを防ぐため、`destination` が `iframe` / `frame` の navigate のみ純粋関数 `rewriteSubframeNavUrl(requestUrl, pageUrl, swOrigin, basePath)` で `/browse/<scheme>/<host>/<path>` を組み立て、`Response.redirect(dest, 302)` で振り向ける。`rewriteSubframeNavUrl` は `rewriteRequestUrl` と対称だが、出力が `/api/proxy`（アセット）ではなく `/browse`（ブラウズ中継）である点が異なる。これにより iframe はブラウズ中継経路で読み込まれ、中継・書き換え・SW 登録・シム注入がフル適用される。クロスオリジン絶対 URL はそのまま `/browse` へ、同一オリジン root 相対パスは `extractTarget(pageUrl)` でターゲット origin を復元してから解決する。自前ルート（`/browse`・`/api/proxy` 等）・非 http(s)（`about:blank`・`data:` 等）・ターゲット不明は `null` を返し素通し（リダイレクト再帰・スキーム破壊・誤振り向けを防ぐ）。トップレベル（`destination=document`）の素通しは不変。
 
-`isProxyOwnPath` は `/_next/` を原則プロキシ自身の資産として素通し扱いにするが、`/_next/image` だけは「自前ルートでない」と判定し、`rewriteRequestUrl` の既存フォールバック（同一オリジンの非自前パス → ターゲット origin に解決）へ委ねる。Next.js 製ターゲットのクライアント hydration が再生成する `/_next/image?url=<外部>` をターゲット自身の最適化エンドポイントへ中継して 400 を防ぐ（#102。サーバー描画分の `srcset` は #98 で対応済み）。ターゲット不明のページ（ホーム等）では `extractTarget` が `null` を返し素通しされるため、プロキシ自身の `/_next/image` 利用には影響しない（[機能仕様 §Service Worker](../spec/features/proxy.md#service-worker-による実行時リクエスト横取り)）。
+`isProxyOwnPath` は `/_next/*` を**自前ルート扱いにしない**（#178。#102 の `/_next/image` 特例を一般化）。`rewriteRequestUrl` の既存フォールバック（同一オリジンの非自前パス → ターゲット origin に解決）に委ね、Next.js 製ターゲットのクライアントランタイムが発行する `/_next/image?url=<外部>`（hydration の srcset 再生成 → 400 回避。#102）・`/_next/static/*` 遅延チャンク・`/_next/data/<buildId>/*.json`（SPA クライアント遷移のページデータ → 404・空白ページ回避。#178。実測: react.dev）をターゲット自身の `/_next` へ中継する。ターゲット不明のページ（ホーム等）では `extractTarget` が `null` を返し素通しされるため、プロキシ自身の `/_next` 資産提供には影響しない（プロキシ経由の閲覧ページはプロキシ自身の `/_next` 資産を使わない: アドレスバー UI・各シムはインライン注入。[機能仕様 §Service Worker](../spec/features/proxy.md#service-worker-による実行時リクエスト横取り)）。
 
 ### 純粋ロジックの分離とテスト
 

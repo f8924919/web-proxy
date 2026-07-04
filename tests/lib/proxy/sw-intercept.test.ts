@@ -47,10 +47,11 @@ describe("isProxyOwnPath", () => {
     ["/", true],
     ["/browse", true],
     ["/api/proxy", true],
-    ["/_next/static/x.js", true],
-    // /_next/image はターゲット（Next.js 製）の最適化エンドポイントなので自前ルート扱いしない（#102）
+    // /_next/* はターゲット（Next.js 製）の資産（static チャンク・data・image）なので
+    // 自前ルート扱いしない（#102 の /_next/image 特例を #178 で一般化）
+    ["/_next/static/x.js", false],
     ["/_next/image", false],
-    ["/_next/data/build/x.json", true],
+    ["/_next/data/build/x.json", false],
     ["/sw.js", true],
     ["/unlock", true],
     ["/images/nav_logo229.png", false],
@@ -67,7 +68,7 @@ describe("isProxyOwnPath", () => {
     ["/proxy/3000/browse", true],
     ["/proxy/3000/api/proxy", true],
     ["/proxy/3000/", true],
-    ["/proxy/3000/_next/static/x.js", true],
+    ["/proxy/3000/_next/static/x.js", false],
     ["/proxy/3000/_next/image", false],
     ["/images/x.png", false],
     ["/proxy/3000/api/proxy/https/example.com/_main/nuxt/x.js", true],
@@ -138,13 +139,12 @@ describe("rewriteRequestUrl", () => {
   test.each([
     [`${SW_ORIGIN}/api/proxy?url=x`, "api/proxy 自身"],
     [`${SW_ORIGIN}/browse?url=x`, "browse 自身"],
-    [`${SW_ORIGIN}/_next/static/x.js`, "_next アセット"],
     [`${SW_ORIGIN}/`, "ホーム"],
   ])("自前ルート %s（%s）→ null（素通し）", (reqUrl) => {
     expect(rewriteRequestUrl(reqUrl, page, SW_ORIGIN, "")).toBeNull();
   });
 
-  describe("/_next/image の振り向け（#102）", () => {
+  describe("/_next/* の振り向け（#102・#178）", () => {
     const inner = "https://s.yimg.jp/i/kids/x.png";
     const nextImg = (basePath = "") =>
       `${SW_ORIGIN}${basePath}/_next/image?url=${encodeURIComponent(inner)}&w=256&q=75`;
@@ -173,11 +173,35 @@ describe("rewriteRequestUrl", () => {
       ).toBeNull();
     });
 
-    test("/_next/static は引き続き自前ルートとして素通し（回帰防止）", () => {
+    test("/_next/static（遅延チャンク）はターゲット origin へ振り向ける（#178）", () => {
       expect(
         rewriteRequestUrl(
           `${SW_ORIGIN}/_next/static/chunks/x.js`,
           kidsPage(),
+          SW_ORIGIN,
+          ""
+        )
+      ).toBe(PROXY("https://kids.yahoo.co.jp/_next/static/chunks/x.js"));
+    });
+
+    test("/_next/data（SPA クライアント遷移のページデータ）はターゲット origin へ振り向ける（#178）", () => {
+      expect(
+        rewriteRequestUrl(
+          `${SW_ORIGIN}/_next/data/buildId/learn.json?p=learn`,
+          kidsPage(),
+          SW_ORIGIN,
+          ""
+        )
+      ).toBe(
+        PROXY("https://kids.yahoo.co.jp/_next/data/buildId/learn.json?p=learn")
+      );
+    });
+
+    test("ターゲット不明ページの /_next/static は素通し（null）＝プロキシ自身の資産提供を壊さない", () => {
+      expect(
+        rewriteRequestUrl(
+          `${SW_ORIGIN}/_next/static/chunks/x.js`,
+          `${SW_ORIGIN}/`,
           SW_ORIGIN,
           ""
         )
@@ -297,7 +321,6 @@ describe("rewriteSubframeNavUrl（サブフレーム iframe ナビゲーショ�
     [`${SW_ORIGIN}/browse/https/example.com/`, "browse 自身（再帰防止）"],
     [`${SW_ORIGIN}/api/proxy/https/example.com/x`, "api/proxy 自身"],
     [`${SW_ORIGIN}/`, "ホーム"],
-    [`${SW_ORIGIN}/_next/static/x.js`, "_next アセット"],
   ])("自前ルート %s（%s）→ null（素通し）", (reqUrl) => {
     expect(rewriteSubframeNavUrl(reqUrl, page, SW_ORIGIN, "")).toBeNull();
   });

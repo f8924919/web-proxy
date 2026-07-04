@@ -440,17 +440,16 @@ export function buildNavApiRedirect(
   if (dest.origin !== page.origin) return null;
   // 既にプロキシ枠を保持している遷移（パス反映 …/browse/<scheme>/<host>/…）は介入しない。
   if (extractBrowseTarget(dest.href) !== null) return null;
-  // プロキシ自前のインフラ資産パスは触らない（ホーム '/' は除外しない）。/_next/image は
-  // ターゲット（Next.js 製サイト）側エンドポイントのため自前から除外する（#102。isProxyOwnPath と整合）。
+  // プロキシ自前のインフラ資産パスは触らない（ホーム '/' は除外しない）。/_next/* は
+  // ターゲット（Next.js 製サイト）側の資産のため自前から除外する（#102 を #178 で一般化。
+  // isProxyOwnPath と整合）。
   const p = dest.pathname;
-  const isNextImage = p === "/_next/image" || p.startsWith("/_next/image/");
   if (
     p === "/sw.js" ||
     p === "/unlock" ||
     p === "/favicon.ico" ||
     p === "/api/proxy" ||
-    p.startsWith("/api/proxy/") ||
-    (p.startsWith("/_next/") && !isNextImage)
+    p.startsWith("/api/proxy/")
   ) {
     return null;
   }
@@ -473,12 +472,9 @@ export function isProxyOwnPath(pathname: string, basePath: string): boolean {
   // 完全一致＋パス境界で判定（ターゲット側の /browser や /api/proxyData を誤判定しない）
   if (p === "/browse" || p.startsWith("/browse/")) return true;
   if (p === "/api/proxy" || p.startsWith("/api/proxy/")) return true;
-  if (p.startsWith("/_next/")) {
-    // /_next/image はターゲット（Next.js 製サイト）の最適化エンドポイント（#102）。
-    // 自前ルートから除外し、ターゲット origin の /_next/image へ振り向ける。
-    if (p === "/_next/image" || p.startsWith("/_next/image/")) return false;
-    return true;
-  }
+  // /_next/* は自前ルート扱いにしない（#102 の /_next/image 特例を #178 で一般化）。
+  // ターゲット（Next.js 製サイト）の image・static チャンク・data をターゲット origin へ
+  // 解決させる。ターゲット不明ページでは呼び出し側が素通しに落とす。
   if (p === "/favicon.ico") return true;
   return false;
 }
