@@ -192,6 +192,28 @@ describe("rewriteHtml", () => {
       );
       expect(result).toContain(`src="${asset("/movie.webm")}"`);
     });
+
+    // 仕様: docs/spec/features/proxy.md §書き換えルール（<video poster>・#183）
+    test.each([
+      ["ルート相対", "/thumb.jpg", asset("/thumb.jpg")],
+      ["相対", "thumb.jpg", asset("/thumb.jpg")],
+      [
+        "絶対",
+        "https://cdn.example.com/t.jpg",
+        "/api/proxy/https/cdn.example.com/t.jpg",
+      ],
+      [
+        "プロトコル相対",
+        "//cdn.example.com/t.jpg",
+        "/api/proxy/https/cdn.example.com/t.jpg",
+      ],
+    ])("<video poster>（%s）を /api/proxy に書き換える", (_label, src, out) => {
+      const result = rewriteHtml(
+        `<video poster="${src}" src="/movie.mp4"></video>`,
+        BASE
+      );
+      expect(result).toContain(`poster="${out}"`);
+    });
   });
 
   describe("<base href> の処理（枠外離脱防止・#135）", () => {
@@ -767,6 +789,19 @@ describe("buildElementSrcRewrite（動的挿入要素の src 横取り・#174）
       );
     }
   );
+
+  test("video[poster] → /api/proxy（#183）", () => {
+    expect(rw("video", "poster", "//i.ytimg.com/t.jpg")).toBe(
+      asset("https://i.ytimg.com/t.jpg")
+    );
+    expect(rw("video", "poster", "/t.jpg")).toBe(
+      asset("https://www.youtube.com/t.jpg")
+    );
+  });
+
+  test("video 以外の poster は対象外（null）", () => {
+    expect(rw("img", "poster", "/t.jpg")).toBeNull();
+  });
 
   test("link[href] rel=stylesheet → /api/proxy", () => {
     expect(rw("link", "href", "/s/player/www-player.css", "stylesheet")).toBe(

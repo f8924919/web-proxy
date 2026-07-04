@@ -380,6 +380,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 | `<iframe src>`                     | `/browse/<scheme>/<host>/<path>`（#135）                        |
 | `<img src>` / `<source src>`       | `/api/proxy/<scheme>/<host>/<path>`                             |
 | `<video src>` / `<audio src>`      | `/api/proxy/<scheme>/<host>/<path>`（#135）                     |
+| `<video poster>`                   | `/api/proxy/<scheme>/<host>/<path>`（#183）                     |
 | `<img srcset>` / `<source srcset>` | 各候補 URL を `/api/proxy/<scheme>/<host>/<path>`（記述子保持） |
 | `<link href>`                      | `/api/proxy/<scheme>/<host>/<path>`                             |
 | `<script src>`                     | `/api/proxy/<scheme>/<host>/<path>`                             |
@@ -394,7 +395,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 `src` を書き換える `<script>` からは `integrity` / `crossorigin` 属性を除去する。書換後は `/api/proxy` 経由の中継レスポンスとなり SRI ハッシュが一致せずブロックされるため（[機能仕様 §SRI 属性の除去](../spec/features/proxy.md#サブリソース整合性sri属性の除去)）。あわせて inline の `<meta http-equiv="Content-Security-Policy">`（enforce のみ。`...-Report-Only` は残す）を除去し、注入スクリプト・書換 src が CSP でブロックされるのを防ぐ（[機能仕様 §inline CSP（meta）の除去](../spec/features/proxy.md#inline-cspmetaの除去)）。
 
-`<base href>` は書き換えの最初に処理する。文書内の最初の `<base href>` を `baseUrl` 基準で解決し、http(s) に解決できればそれを以降の全書き換えの実効解決基点（`effectiveBase`）として用いてから、すべての `<base>` 要素の `href` を除去する。残すと取りこぼし属性・実行時生成の相対 URL がブラウザによって `<base href>` 基準で解決され、プロキシ枠を外れた実サイト直アクセスを誘発し得るため（注入シムは `location.href` 基準で `<base>` を参照しない。[機能仕様 §`<base href>` の処理](../spec/features/proxy.md#base-href-の処理枠外離脱防止135)）。`<iframe src>` は `<a href>` と同じ `browseUrl()`（埋め込みページもブラウズ画面で開く）、`<video src>` / `<audio src>` は `<img src>` と同じ `assetUrl()` で書き換える（#135）。
+`<base href>` は書き換えの最初に処理する。文書内の最初の `<base href>` を `baseUrl` 基準で解決し、http(s) に解決できればそれを以降の全書き換えの実効解決基点（`effectiveBase`）として用いてから、すべての `<base>` 要素の `href` を除去する。残すと取りこぼし属性・実行時生成の相対 URL がブラウザによって `<base href>` 基準で解決され、プロキシ枠を外れた実サイト直アクセスを誘発し得るため（注入シムは `location.href` 基準で `<base>` を参照しない。[機能仕様 §`<base href>` の処理](../spec/features/proxy.md#base-href-の処理枠外離脱防止135)）。`<iframe src>` は `<a href>` と同じ `browseUrl()`（埋め込みページもブラウズ画面で開く）、`<video src>` / `<audio src>`・`<video poster>` は `<img src>` と同じ `assetUrl()` で書き換える（#135・#183）。
 
 ### CSS 書き換え
 
@@ -526,12 +527,12 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 同じ `REQUEST_INTERCEPT_HTML`（`<head>` 最先頭注入）内で、JS が実行時に動的挿入・代入した要素のリソース属性（`src`/`href`/`srcset`）を、サーバー側 `rewriteHtml` と同一規則で中継 URL へ書き換える。`fetch`/XHR/sendBeacon を経由しない `<script>`/`<link>`/メディア/`<iframe>` の動的読み込みが初回ロードの SW ギャップで離脱するのを防ぐ。
 
-| 純粋関数                                                                         | 役割                                                                                                                                                                                                                                                                  |
-| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `buildElementSrcRewrite(tagName, attr, value, rel, pageUrl, swOrigin, basePath)` | 要素 (tag, attr) 種別に応じて中継 URL を決める。`iframe[src]` は `buildClickNavDestination`（/browse）、それ以外のアセットは `buildRequestInterceptUrl`（/api/proxy）、`srcset` は候補ごとに書き換え。対象外タグ・非リソース `link`・既に proxy 枠・復元不能は `null` |
+| 純粋関数                                                                         | 役割                                                                                                                                                                                                                                                                                                |
+| -------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `buildElementSrcRewrite(tagName, attr, value, rel, pageUrl, swOrigin, basePath)` | 要素 (tag, attr) 種別に応じて中継 URL を決める。`iframe[src]` は `buildClickNavDestination`（/browse）、それ以外のアセット（`video[poster]` 含む・#183）は `buildRequestInterceptUrl`（/api/proxy）、`srcset` は候補ごとに書き換え。対象外タグ・非リソース `link`・既に proxy 枠・復元不能は `null` |
 
 - **共有ヘルパー**: `buildRequestInterceptUrl`（/api/proxy）・`buildClickNavDestination`（/browse・`browseNavPrefix`/`buildBrowseDest`/`extractBrowseTarget` 依存）を `toString()` で同シムに埋め込む。`pg()` を fetch/XHR/sendBeacon と共有してターゲット origin を復元する。
-- **横取り経路（重ねがけ）**: (1) 挿入メソッド（`Node.prototype.appendChild`/`insertBefore`/`replaceChild`、`Element.prototype.append`/`prepend`/`before`/`after`/`replaceWith`/`insertAdjacentElement`〔#180〕）で挿入ノード＋子孫を委譲前に書き換える（`<script>` は挿入時フェッチ＝主経路）、(2) `src`/`href`/`srcset` プロパティ setter、(3) `Element.prototype.setAttribute`、(4) パーサ挿入（`insertAdjacentHTML`・`innerHTML`/`outerHTML` setter）の事前書き換え（#180。下記）、(5) `MutationObserver` バックストップ。いずれも `try/catch` で防御し、`buildElementSrcRewrite` が `null`（既に proxy 枠等）なら触らない（冪等）。
+- **横取り経路（重ねがけ）**: (1) 挿入メソッド（`Node.prototype.appendChild`/`insertBefore`/`replaceChild`、`Element.prototype.append`/`prepend`/`before`/`after`/`replaceWith`/`insertAdjacentElement`〔#180〕）で挿入ノード＋子孫を委譲前に書き換える（`<script>` は挿入時フェッチ＝主経路）、(2) `src`/`href`/`srcset`/`poster` プロパティ setter（#183）、(3) `Element.prototype.setAttribute`、(4) パーサ挿入（`insertAdjacentHTML`・`innerHTML`/`outerHTML` setter）の事前書き換え（#180。下記）、(5) `MutationObserver` バックストップ。いずれも `try/catch` で防御し、`buildElementSrcRewrite` が `null`（既に proxy 枠等）なら触らない（冪等）。
 - **パーサ挿入の事前書き換え（#180）**: HTML 文字列を**フック前の元 `innerHTML` descriptor** で inert な `<template>` に解析し（template 内容は解析時フェッチなし）、`rwTree` 相当でサブツリーを書き換え、元 getter でシリアライズした文字列を元実装へ委譲する（再帰防止のため template 操作は元 descriptor 経由）。書き換えが 1 件も無ければ元の文字列をそのまま委譲する（ラウンドトリップ差異を持ち込まない）。接続済みサブツリーへのパーサ挿入は解析時に書き換え前 URL のフェッチが開始されるため、`MutationObserver` の事後補正では初回ロードの SW ギャップ中に離脱していた（#180。実測: GitHub テーマ CSS・Qiita スタイルシートの CDN 直行）。
 - **`<script>` の SRI 除去**: `script[src]` を書き換える際は `integrity`/`crossorigin` を除去する（サーバー側書き換えと同じ。/api/proxy 経由でハッシュ不一致ブロックを防ぐ）。
 - **既知の制限**: `document.write` / `document.writeln` は対象外（`MutationObserver` の事後補正のみ＝解析時の誤フェッチが先行し得る）。別オリジン iframe 内は当該フレームのシムが担う。CSS `url()`/`@import` は対象外。
