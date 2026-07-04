@@ -581,6 +581,7 @@ export function buildElementSrcRewrite(
   if (!isAssetSrc && !isSrcset && !isLinkHref && !isVideoPoster) return null;
 
   // <link> は fetch されるリソース rel のみ（canonical / alternate 等は対象外）。
+  // icon 系 / manifest はブラウザ UI が SW を経由せず直接取得するため書き換え対象（#189）。
   if (isLinkHref) {
     const rels = (rel || "").toLowerCase().split(/\s+/);
     const RESOURCE_RELS = [
@@ -588,6 +589,11 @@ export function buildElementSrcRewrite(
       "preload",
       "modulepreload",
       "prefetch",
+      "icon",
+      "apple-touch-icon",
+      "apple-touch-icon-precomposed",
+      "mask-icon",
+      "manifest",
     ];
     if (!rels.some((r) => RESOURCE_RELS.includes(r))) return null;
   }
@@ -959,19 +965,35 @@ export function rewriteHtml(html: string, baseUrl: string): string {
     el.removeAttribute("crossorigin");
   });
 
+  // <link> の rel 別取り扱い（#189。Link ヘッダー #181 と対称）。書き換え系 rel は
+  // href を /api/proxy 形式へ、接続ヒント系 rel は要素ごと削除（接続先はプロキシ自身に
+  // なるためヒントとして意味を成さず、素の URL を残すと利用者のブラウザが対象ホストへ
+  // 直接 DNS/TLS 接続を張る）。icon 系 / manifest はブラウザ UI が SW を経由せず直接
+  // 取得するため、未書き換えだと対象ホストへの直接アクセス（IP 露出）になる。
+  // 仕様: docs/spec/features/proxy.md §<link> の rel 別取り扱い（#189）
   const RESOURCE_LINK_RELS = new Set([
     "stylesheet",
     "preload",
     "modulepreload",
     "prefetch",
+    "icon",
+    "apple-touch-icon",
+    "apple-touch-icon-precomposed",
+    "mask-icon",
+    "manifest",
+  ]);
+  const CONNECTION_LINK_RELS = new Set([
+    "preconnect",
+    "dns-prefetch",
+    "compression-dictionary",
   ]);
   root.querySelectorAll("link[href]").forEach((el) => {
-    const rel = el.getAttribute("rel") ?? "";
-    const isResource = rel
-      .toLowerCase()
-      .split(/\s+/)
-      .some((r) => RESOURCE_LINK_RELS.has(r));
-    if (!isResource) return;
+    const rels = (el.getAttribute("rel") ?? "").toLowerCase().split(/\s+/);
+    if (rels.some((r) => CONNECTION_LINK_RELS.has(r))) {
+      el.remove();
+      return;
+    }
+    if (!rels.some((r) => RESOURCE_LINK_RELS.has(r))) return;
     const href = el.getAttribute("href");
     if (href) el.setAttribute("href", assetUrl(href, effectiveBase));
     // script[src] と同様、書換後は中継レスポンス（CSS は rewriteCss で内容も変化）となり

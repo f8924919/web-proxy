@@ -127,6 +127,52 @@ describe("rewriteHtml", () => {
     });
   });
 
+  describe("<link> の rel 別取り扱い（#189）", () => {
+    // 仕様: docs/spec/features/proxy.md §<link> の rel 別取り扱い（#189）
+    test("rel=icon / apple-touch-icon / manifest の href を /api/proxy へ書き換える", () => {
+      const html =
+        `<link rel="icon" href="https://cdn.example.net/favicon.ico">` +
+        `<link rel="apple-touch-icon" href="/apple-touch-icon.png">` +
+        `<link rel="manifest" href="/site.webmanifest">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(
+        `href="/api/proxy/https/cdn.example.net/favicon.ico"`
+      );
+      expect(result).toContain(`href="${asset("/apple-touch-icon.png")}"`);
+      expect(result).toContain(`href="${asset("/site.webmanifest")}"`);
+    });
+
+    test("rel='shortcut icon'（複数トークン）も書き換える", () => {
+      const html = `<link rel="shortcut icon" href="/favicon.ico">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`href="${asset("/favicon.ico")}"`);
+    });
+
+    test("rel=preconnect / dns-prefetch / compression-dictionary の link 要素を削除する", () => {
+      const html =
+        `<link href="https://ads.example.net" rel="preconnect">` +
+        `<link href="https://cdn.example.net" rel="dns-prefetch">` +
+        `<link href="https://dict.example.net/d" rel="compression-dictionary">` +
+        `<p>keep</p>`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).not.toContain("preconnect");
+      expect(result).not.toContain("dns-prefetch");
+      expect(result).not.toContain("compression-dictionary");
+      expect(result).not.toContain("ads.example.net");
+      expect(result).not.toContain("dict.example.net");
+      expect(result).toContain("<p>keep</p>");
+    });
+
+    test("情報系 rel（canonical / alternate）は URL を変えずに維持する", () => {
+      const html =
+        `<link rel="canonical" href="https://example.com/page">` +
+        `<link rel="alternate" hreflang="en" href="https://example.com/en">`;
+      const result = rewriteHtml(html, BASE);
+      expect(result).toContain(`href="https://example.com/page"`);
+      expect(result).toContain(`href="https://example.com/en"`);
+    });
+  });
+
   describe("インライン <style> の CSS 書き換え（#185）", () => {
     // 仕様: docs/spec/features/proxy.md §CSS URL 書き換え（インライン <style>）
     test("プロトコル相対の url() を /api/proxy へ書き換える（Wikipedia 実測パターン）", () => {
@@ -886,6 +932,33 @@ describe("buildElementSrcRewrite（動的挿入要素の src 横取り・#174）
       rw("link", "href", "https://www.youtube.com/", "canonical")
     ).toBeNull();
     expect(rw("link", "href", "/feed", "alternate")).toBeNull();
+  });
+
+  test("link[href] icon 系 / manifest rel も対象（#189）", () => {
+    // ルート相対 /favicon.ico はプロキシ自前パス（isProxyOwnPath）のため素通しになる
+    // 既存ルールがある。ここでは自前パスと衝突しないパスで書き換えを検証する。
+    for (const rel of [
+      "icon",
+      "shortcut icon",
+      "apple-touch-icon",
+      "apple-touch-icon-precomposed",
+      "mask-icon",
+      "manifest",
+    ]) {
+      expect(rw("link", "href", "/icons/fav.ico", rel)).toBe(
+        asset("https://www.youtube.com/icons/fav.ico")
+      );
+    }
+  });
+
+  test("link[href] 接続ヒント系 rel（preconnect 等）は書き換え対象外（null）", () => {
+    for (const rel of [
+      "preconnect",
+      "dns-prefetch",
+      "compression-dictionary",
+    ]) {
+      expect(rw("link", "href", "https://cdn.example.net", rel)).toBeNull();
+    }
   });
 
   test("iframe[src] はナビ扱いで /browse", () => {
