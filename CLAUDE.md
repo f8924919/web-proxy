@@ -42,6 +42,8 @@ GitHub Issue は「起票・仕様・受け入れ条件の正本」、`docs/task
 - **ブランチ命名**: `feature/<issue>-<desc>` / `bugfix/<issue>-<desc>` / `hotfix/<issue>-<desc>`、Issue を伴わない作業は `refactor/<desc>` / `docs/<desc>` / `chore/<desc>`。
 - コミットメッセージは常に日本語。Issue 本文・PR の本文・コメントは[言語ルール](#言語ルール)に従い、原則日本語・既存スレッドが日本語以外なら当該言語に合わせる。
 - **評価ゲート（evaluator）モード**: `always`（`always` / `auto` / `off`）。`feature` / `bugfix` / `hotfix` で受け入れ条件・spec の充足を独立評価する `evaluator` の起動可否を決める単一の正本。定義・auto の閾値・`always` への昇格手順は [docs/git-workflow.md](docs/git-workflow.md) §5.2。
+- **設計レビュー（design-review）モード**: `auto`（`always` / `auto` / `off`）。実装前に設計案の妥当性を点検する `design-review`（Opus）の起動可否を決める単一の正本。`auto` は [docs/git-workflow.md](docs/git-workflow.md) §5.5 の構造トリガで発火する。定義・モード表は §5.2。
+- **受け入れ条件レビュー（criteria-review）**: 実装前に受け入れ条件そのものの妥当性を点検する `criteria-review`（Sonnet）は、安価な常時運用の助言として `feature` / `bugfix` / `hotfix`（受け入れ条件を持つ作業）で用いる（モードなし。§5.2）。
 
 > ホスティングが GitHub 以外の場合は、キックオフ時に `gh` / Issue 起票の記述を読み替える（[docs/git-workflow.md](docs/git-workflow.md) の冒頭注記）。
 
