@@ -395,14 +395,15 @@ SW は登録後 `clients.claim()` で既存クライアントを制御下に置�
 
 横取りは次の経路を**重ねて**張る（純粋関数 `buildElementSrcRewrite` が判定の正本）:
 
-- **挿入メソッド**（`Node.prototype.appendChild` / `insertBefore` / `replaceChild`、`Element.prototype.append` / `prepend` / `before` / `after` / `replaceWith`）: 挿入される要素**およびその子孫**のリソース属性を、元メソッド委譲の**前**に書き換える。`<script>` は挿入時にフェッチされるため、`innerHTML` 等で `src` 付きで生成された要素もここで間に合う（YouTube の主経路）。
+- **挿入メソッド**（`Node.prototype.appendChild` / `insertBefore` / `replaceChild`、`Element.prototype.append` / `prepend` / `before` / `after` / `replaceWith` / `insertAdjacentElement`〔#180〕）: 挿入される要素**およびその子孫**のリソース属性を、元メソッド委譲の**前**に書き換える。`<script>` は挿入時にフェッチされるため、`innerHTML` 等で `src` 付きで生成された要素もここで間に合う（YouTube の主経路）。
 - **プロパティ setter**（`HTMLScriptElement`/`HTMLImageElement`/`HTMLMediaElement`/`HTMLSourceElement`/`HTMLLinkElement`/`HTMLIFrameElement` の `src`/`href`/`srcset`）: 接続済み要素への代入（`.src=` 等）を代入時点で書き換える。
 - **`setAttribute`**（`Element.prototype.setAttribute`）: `src`/`href`/`srcset` 属性の代入を書き換える。
-- **`MutationObserver` バックストップ**: 上記を経由せず接続済みサブツリーへ `innerHTML` で直接挿入された要素を事後に書き換える（ベストエフォート）。
+- **パーサ挿入（HTML 文字列）の事前書き換え（#180）**: `Element.prototype.insertAdjacentHTML`・`innerHTML` / `outerHTML` setter を上書きし、HTML 文字列を **inert な `<template>` で解析**（template 内容は解析時フェッチが発生しない）→ 挿入メソッドと同じ規則でサブツリーの `src`/`href`/`srcset` を書き換え → シリアライズした文字列を元実装へ委譲する。接続済みサブツリーへのパーサ挿入は解析時に**書き換え前の URL でフェッチが開始**されるため、事後補正（MutationObserver）では初回ロードの SW ギャップ中に**プロキシ外へ直接ロード＝離脱**し（実測: GitHub のテーマ CSS・Qiita のスタイルシートが CDN へ直行）、制限環境では初回表示が崩れる。これを挿入前の同期書き換えで防ぐ。template 解析・シリアライズには**フック前の元 setter / getter** を用い再帰を避ける。書き換えが 1 件も無い場合は元の文字列をそのまま委譲する（ラウンドトリップによる差異を持ち込まない）。
+- **`MutationObserver` バックストップ**: 上記を経由しない挿入経路（`document.write` 等）で接続済みサブツリーへ直接挿入された要素を事後に書き換える（ベストエフォート）。
 
 - **`<script>` の SRI 除去**: `script[src]` を書き換える際は `integrity` / `crossorigin` を除去する（中継レスポンスは `/api/proxy` 経由でハッシュが一致せずブロックされ、同一オリジン化で crossorigin も不要なため。サーバー側書き換えと同じ。[§サブリソース整合性（SRI）属性の除去](#サブリソース整合性sri属性の除去)）。
 - **`pg()` フォールバック・冪等性**: ターゲット復元は[実行時リクエスト横取りシム](#実行時リクエスト横取りシムsw-非依存124)と同じ `pg()` を共有する。既に `/api/proxy`・`/browse` 形式（`buildRequestInterceptUrl` / `buildClickNavDestination` が `null` を返す）なら書き換えない（SW・他経路との二重適用を防ぐ）。
-- **スコープ外・既知の制限**: 接続済みサブツリーへの `innerHTML` 直挿入は、ブラウザが解析時にフェッチを開始するため、`MutationObserver` 補正が**最初の誤フェッチに間に合わず再フェッチ**になり得る（実害は二重リクエストのみ）。別オリジンの iframe 内の動的挿入は当該フレームに注入されたシムが担う。CSS の `url()` / `@import`・インラインスタイルの動的設定は対象外（サーバー側 CSS 書き換え・SW に委ねる）。
+- **スコープ外・既知の制限**: `document.write` / `document.writeln` によるパーサ挿入は対象外（現代サイトでの利用が稀なため。`MutationObserver` の事後補正のみ＝解析時の誤フェッチが先行し得る）。別オリジンの iframe 内の動的挿入は当該フレームに注入されたシムが担う。CSS の `url()` / `@import`・インラインスタイルの動的設定は対象外（サーバー側 CSS 書き換え・SW に委ねる）。
 
 ---
 

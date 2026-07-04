@@ -765,7 +765,9 @@ const REQUEST_INTERCEPT_HTML =
   `var hookIns=function(proto,name){var o=proto&&proto[name];if(!o)return;` +
   `proto[name]=function(){try{for(var i=0;i<arguments.length;i++)rwTree(arguments[i]);}catch(_){}return o.apply(this,arguments);};};` +
   `hookIns(Node.prototype,'appendChild');hookIns(Node.prototype,'insertBefore');hookIns(Node.prototype,'replaceChild');` +
-  `if(typeof Element!=='undefined'){var insN=['append','prepend','before','after','replaceWith'];for(var k=0;k<insN.length;k++)hookIns(Element.prototype,insN[k]);}` +
+  // insertAdjacentElement は第 1 引数が位置文字列だが、rwTree は要素ノード以外を無視するため
+  // 他の挿入メソッドと同じフックで安全に処理できる（#180）。
+  `if(typeof Element!=='undefined'){var insN=['append','prepend','before','after','replaceWith','insertAdjacentElement'];for(var k=0;k<insN.length;k++)hookIns(Element.prototype,insN[k]);}` +
   // (2) src/href/srcset プロパティ setter: 接続済み要素への代入を代入時点で書き換える。
   `var hookProp=function(ctor,name){try{if(typeof ctor==='undefined'||!ctor)return;var p=ctor.prototype;var dsc=Object.getOwnPropertyDescriptor(p,name);if(!dsc||!dsc.set)return;` +
   `Object.defineProperty(p,name,{configurable:true,enumerable:dsc.enumerable,get:dsc.get,set:function(v){var nv=v;try{var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
@@ -777,7 +779,24 @@ const REQUEST_INTERCEPT_HTML =
   `Element.prototype.setAttribute=function(name,value){try{if(name==='src'||name==='href'||name==='srcset'){` +
   `var tag=this.tagName;var rel=tag==='LINK'?(this.getAttribute('rel')||''):'';` +
   `var d=buildElementSrcRewrite(tag,name,String(value),rel,pg(),origin,bp);if(d!=null){arguments[1]=d;if(tag==='SCRIPT'&&name==='src'){this.removeAttribute('integrity');this.removeAttribute('crossorigin');}}}}catch(_){}return _setAttr.apply(this,arguments);};` +
-  // (4) MutationObserver バックストップ: innerHTML 直挿入等を事後に書き換える（ベストエフォート）。
+  // (4) パーサ挿入（insertAdjacentHTML・innerHTML/outerHTML setter）の事前書き換え（#180）。
+  // 接続済みサブツリーへのパーサ挿入は解析時に書き換え前 URL のフェッチが始まるため、
+  // MutationObserver の事後補正では SW ギャップ中に離脱する。HTML 文字列をフック前の
+  // 元 innerHTML descriptor で inert な <template> に解析（解析時フェッチなし）→ rwEl で
+  // サブツリーを書き換え → シリアライズして元実装へ委譲する。書き換えが無ければ元の
+  // 文字列をそのまま返し、シリアライズのラウンドトリップ差異を持ち込まない。
+  `var _ihDsc=Object.getOwnPropertyDescriptor(Element.prototype,'innerHTML');` +
+  `var rwHtml=function(html){try{if(typeof html!=='string'||html.indexOf('<')===-1||!_ihDsc||!_ihDsc.set||!_ihDsc.get)return html;` +
+  `var t=document.createElement('template');_ihDsc.set.call(t,html);` +
+  `var ns=t.content.querySelectorAll('script,img,source,video,audio,link,iframe');if(!ns.length)return html;` +
+  `var s0=_ihDsc.get.call(t);for(var i=0;i<ns.length;i++)rwEl(ns[i]);` +
+  `var s1=_ihDsc.get.call(t);return s1===s0?html:s1;}catch(_){return html;}};` +
+  `var _iah=Element.prototype.insertAdjacentHTML;` +
+  `if(_iah){Element.prototype.insertAdjacentHTML=function(pos,html){try{arguments[1]=rwHtml(html);}catch(_){}return _iah.apply(this,arguments);};}` +
+  `var hookHtmlProp=function(name){try{var dsc=Object.getOwnPropertyDescriptor(Element.prototype,name);if(!dsc||!dsc.set)return;` +
+  `Object.defineProperty(Element.prototype,name,{configurable:true,enumerable:dsc.enumerable,get:dsc.get,set:function(v){var nv=v;try{nv=rwHtml(v);}catch(_){nv=v;}return dsc.set.call(this,nv);}});}catch(_){}};` +
+  `hookHtmlProp('innerHTML');hookHtmlProp('outerHTML');` +
+  // (5) MutationObserver バックストップ: document.write 等の未フック経路を事後に書き換える（ベストエフォート）。
   `try{if(typeof MutationObserver!=='undefined'){var mo=new MutationObserver(function(muts){for(var i=0;i<muts.length;i++){var a=muts[i].addedNodes;for(var j=0;j<a.length;j++)rwTree(a[j]);}});` +
   `var startMO=function(){try{mo.observe(document.documentElement||document,{childList:true,subtree:true});}catch(_){}};` +
   `if(document.documentElement){startMO();}else{document.addEventListener('readystatechange',startMO);}}}catch(_){}` +

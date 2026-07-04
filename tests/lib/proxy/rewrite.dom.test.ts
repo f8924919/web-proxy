@@ -594,6 +594,8 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
     "before",
     "after",
     "replaceWith",
+    "insertAdjacentElement",
+    "insertAdjacentHTML",
     "setAttribute",
   ] as const;
   const CTOR_PROPS: [string, string][] = [
@@ -604,6 +606,9 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
     ["HTMLSourceElement", "src"],
     ["HTMLLinkElement", "href"],
     ["HTMLIFrameElement", "src"],
+    // パーサ挿入の事前書き換え（#180）が defineProperty で上書きする descriptor
+    ["Element", "innerHTML"],
+    ["Element", "outerHTML"],
   ];
 
   let savedNode: Record<string, unknown>;
@@ -714,10 +719,68 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
     expect(got).toContain("/browse/https/www.google.com/embed/abc");
   });
 
-  test("MutationObserver が接続済みサブツリーへの innerHTML 直挿入を事後に書き換える", async () => {
+  test("innerHTML 直挿入は挿入時点（同期）で書き換わる（#180）", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.innerHTML =
+      '<link rel="stylesheet" href="https://cdn.example.net/a.css"><img src="/b.png" srcset="/b-2x.png 2x">';
+    // MutationObserver を待たず、setter 委譲の時点で書き換え済み（SW ギャップ中の離脱防止）。
+    expect(host.querySelector("link")?.getAttribute("href")).toBe(
+      "/api/proxy/https/cdn.example.net/a.css"
+    );
+    expect(host.querySelector("img")?.getAttribute("src")).toBe(
+      "/api/proxy/https/www.google.com/b.png"
+    );
+    expect(host.querySelector("img")?.getAttribute("srcset")).toBe(
+      "/api/proxy/https/www.google.com/b-2x.png 2x"
+    );
+  });
+
+  test("insertAdjacentHTML は挿入時点（同期）で書き換わる（#180）", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.insertAdjacentHTML(
+      "beforeend",
+      '<script src="https://cdn.example.net/c.js" integrity="sha256-x"></script>'
+    );
+    const script = host.querySelector("script");
+    expect(script?.getAttribute("src")).toBe(
+      "/api/proxy/https/cdn.example.net/c.js"
+    );
+    expect(script?.hasAttribute("integrity")).toBe(false);
+  });
+
+  test("insertAdjacentElement で挿入した要素を書き換える（#180）", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const doc = document.implementation.createHTMLDocument("");
+    doc.body.innerHTML = '<img src="https://cdn.example.net/d.png">';
+    const img = document.importNode(
+      doc.body.firstChild as HTMLImageElement,
+      true
+    );
+    host.insertAdjacentElement("beforeend", img);
+    expect(img.getAttribute("src")).toBe(
+      "/api/proxy/https/cdn.example.net/d.png"
+    );
+  });
+
+  test("リソース要素を含まない HTML はそのまま挿入される（#180）", () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    host.innerHTML = '<p class="keep">plain <b>text</b></p>';
+    expect(host.querySelector("p.keep b")?.textContent).toBe("text");
+  });
+
+  test("MutationObserver が未フック経路の直挿入を事後に書き換える（バックストップ）", async () => {
     const host = document.createElement("div");
     document.body.appendChild(host); // 接続（div は src を持たず append 時は no-op）
-    host.innerHTML = '<img src="/mo.png">'; // parser が接続済みサブツリーへ挿入 → MO が観測
+    // #180 の innerHTML フックを経由しない挿入（document.write 等の未フック経路の模擬）は、
+    // 注入前に控えた元 descriptor の setter で行い、MO バックストップだけが観測する状態を作る。
+    const orig = savedDesc.find(
+      ([c, p]) => c === "Element" && p === "innerHTML"
+    );
+    (orig?.[2]?.set as (v: string) => void).call(host, '<img src="/mo.png">');
     await new Promise((r) => setTimeout(r, 0)); // MO コールバック（microtask）を流す
     const img = host.querySelector("img") as HTMLImageElement;
     expect(img.getAttribute("src")).toBe(

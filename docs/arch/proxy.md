@@ -531,10 +531,11 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 | `buildElementSrcRewrite(tagName, attr, value, rel, pageUrl, swOrigin, basePath)` | 要素 (tag, attr) 種別に応じて中継 URL を決める。`iframe[src]` は `buildClickNavDestination`（/browse）、それ以外のアセットは `buildRequestInterceptUrl`（/api/proxy）、`srcset` は候補ごとに書き換え。対象外タグ・非リソース `link`・既に proxy 枠・復元不能は `null` |
 
 - **共有ヘルパー**: `buildRequestInterceptUrl`（/api/proxy）・`buildClickNavDestination`（/browse・`browseNavPrefix`/`buildBrowseDest`/`extractBrowseTarget` 依存）を `toString()` で同シムに埋め込む。`pg()` を fetch/XHR/sendBeacon と共有してターゲット origin を復元する。
-- **横取り経路（重ねがけ）**: (1) 挿入メソッド（`Node.prototype.appendChild`/`insertBefore`/`replaceChild`、`Element.prototype.append`/`prepend`/`before`/`after`/`replaceWith`）で挿入ノード＋子孫を委譲前に書き換える（`<script>` は挿入時フェッチ＝主経路）、(2) `src`/`href`/`srcset` プロパティ setter、(3) `Element.prototype.setAttribute`、(4) `MutationObserver` バックストップ。いずれも `try/catch` で防御し、`buildElementSrcRewrite` が `null`（既に proxy 枠等）なら触らない（冪等）。
+- **横取り経路（重ねがけ）**: (1) 挿入メソッド（`Node.prototype.appendChild`/`insertBefore`/`replaceChild`、`Element.prototype.append`/`prepend`/`before`/`after`/`replaceWith`/`insertAdjacentElement`〔#180〕）で挿入ノード＋子孫を委譲前に書き換える（`<script>` は挿入時フェッチ＝主経路）、(2) `src`/`href`/`srcset` プロパティ setter、(3) `Element.prototype.setAttribute`、(4) パーサ挿入（`insertAdjacentHTML`・`innerHTML`/`outerHTML` setter）の事前書き換え（#180。下記）、(5) `MutationObserver` バックストップ。いずれも `try/catch` で防御し、`buildElementSrcRewrite` が `null`（既に proxy 枠等）なら触らない（冪等）。
+- **パーサ挿入の事前書き換え（#180）**: HTML 文字列を**フック前の元 `innerHTML` descriptor** で inert な `<template>` に解析し（template 内容は解析時フェッチなし）、`rwTree` 相当でサブツリーを書き換え、元 getter でシリアライズした文字列を元実装へ委譲する（再帰防止のため template 操作は元 descriptor 経由）。書き換えが 1 件も無ければ元の文字列をそのまま委譲する（ラウンドトリップ差異を持ち込まない）。接続済みサブツリーへのパーサ挿入は解析時に書き換え前 URL のフェッチが開始されるため、`MutationObserver` の事後補正では初回ロードの SW ギャップ中に離脱していた（#180。実測: GitHub テーマ CSS・Qiita スタイルシートの CDN 直行）。
 - **`<script>` の SRI 除去**: `script[src]` を書き換える際は `integrity`/`crossorigin` を除去する（サーバー側書き換えと同じ。/api/proxy 経由でハッシュ不一致ブロックを防ぐ）。
-- **既知の制限**: 接続済みサブツリーへの `innerHTML` 直挿入は解析時フェッチが先行し、`MutationObserver` 補正が再フェッチになり得る（実害は二重リクエスト）。別オリジン iframe 内は当該フレームのシムが担う。CSS `url()`/`@import` は対象外。
-- **テスト**: `buildElementSrcRewrite`（純粋関数）を単体テスト対象とする。挿入メソッド/setter/setAttribute/MutationObserver の配線（ブラウザ I/O）は[テスト方針](../testing/policy.md)により単体対象外（jsdom で代表配線を確認しつつ、最終的に方式B で実測検証）。
+- **既知の制限**: `document.write` / `document.writeln` は対象外（`MutationObserver` の事後補正のみ＝解析時の誤フェッチが先行し得る）。別オリジン iframe 内は当該フレームのシムが担う。CSS `url()`/`@import` は対象外。
+- **テスト**: `buildElementSrcRewrite`（純粋関数）を単体テスト対象とする。挿入メソッド/setter/setAttribute/パーサ挿入/MutationObserver の配線（ブラウザ I/O）は[テスト方針](../testing/policy.md)により単体対象外（jsdom で代表配線を確認しつつ、最終的に方式B で実測検証）。
 
 ---
 
