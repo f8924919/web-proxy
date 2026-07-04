@@ -3,6 +3,7 @@
 
 import {
   sanitizeHeaders,
+  rewriteLinkHeader,
   forwardableRequestHeaders,
   relayRequestHeaders,
   buildCorsPreflightHeaders,
@@ -85,6 +86,110 @@ describe("sanitizeHeaders", () => {
     headers.append("set-cookie", "session=abc; Path=/; Domain=example.com");
     const result = sanitizeHeaders(headers);
     expect(result.has("set-cookie")).toBe(false);
+  });
+
+  // #181: Link ヘッダーは targetUrl があれば書き換えて維持、無ければ除去（fail-closed）。
+  describe("Link ヘッダー（#181）", () => {
+    const TARGET = "https://qiita.com/";
+
+    test("targetUrl 付きなら rel=preload の URL を /api/proxy へ書き換えて維持する", () => {
+      const headers = new Headers({
+        link: "<https://cdn.qiita.com/a.css>; rel=preload; as=style; nopush",
+        "content-type": "text/html",
+      });
+      const result = sanitizeHeaders(headers, TARGET);
+      expect(result.get("link")).toBe(
+        "</api/proxy/https/cdn.qiita.com/a.css>; rel=preload; as=style; nopush"
+      );
+    });
+
+    test("targetUrl 無しなら Link を除去する（安全側デフォルト）", () => {
+      const headers = new Headers({
+        link: "<https://cdn.qiita.com/a.css>; rel=preload",
+      });
+      const result = sanitizeHeaders(headers);
+      expect(result.has("link")).toBe(false);
+    });
+
+    test("全エントリが削除対象（preconnect のみ）なら Link ごと除去する", () => {
+      const headers = new Headers({
+        link: "<https://cdn.qiita.com>; rel=preconnect",
+      });
+      const result = sanitizeHeaders(headers, TARGET);
+      expect(result.has("link")).toBe(false);
+    });
+  });
+});
+
+describe("rewriteLinkHeader（#181）", () => {
+  // 仕様: docs/spec/features/proxy.md §Link ヘッダーの書き換え
+  const TARGET = "https://qiita.com/items/abc";
+
+  test("rel=preload の絶対 URL をパス反映形式へ書き換える（qiita 実測パターン）", () => {
+    const value =
+      "<https://cdn.qiita.com/assets/home.min.css>; rel=preload; as=style; nopush," +
+      "<https://fonts.googleapis.com/css2?family=X:opsz,wght@24,500>; rel=preload; as=style; nopush";
+    expect(rewriteLinkHeader(value, TARGET)).toBe(
+      "</api/proxy/https/cdn.qiita.com/assets/home.min.css>; rel=preload; as=style; nopush, " +
+        "</api/proxy/https/fonts.googleapis.com/css2?family=X:opsz,wght@24,500>; rel=preload; as=style; nopush"
+    );
+  });
+
+  test.each([["prefetch"], ["modulepreload"]])(
+    "rel=%s も書き換えて維持する",
+    (rel) => {
+      expect(rewriteLinkHeader(`</next.js>; rel=${rel}`, TARGET)).toBe(
+        `</api/proxy/https/qiita.com/next.js>; rel=${rel}`
+      );
+    }
+  );
+
+  test("相対 URL はターゲット URL 基準で解決する", () => {
+    expect(rewriteLinkHeader("<style.css>; rel=preload", TARGET)).toBe(
+      "</api/proxy/https/qiita.com/items/style.css>; rel=preload"
+    );
+  });
+
+  test("rel が quoted / 複数値でもフェッチ系を判定する", () => {
+    expect(
+      rewriteLinkHeader('<https://cdn.x/a.js>; rel="modulepreload"', TARGET)
+    ).toBe('</api/proxy/https/cdn.x/a.js>; rel="modulepreload"');
+    expect(
+      rewriteLinkHeader('<https://cdn.x/a.css>; rel="preload next"', TARGET)
+    ).toBe('</api/proxy/https/cdn.x/a.css>; rel="preload next"');
+  });
+
+  test("preconnect / dns-prefetch エントリは削除する", () => {
+    expect(
+      rewriteLinkHeader(
+        "<https://cdn.qiita.com>; rel=preconnect, <https://cdn.qiita.com/a.css>; rel=preload; as=style",
+        TARGET
+      )
+    ).toBe("</api/proxy/https/cdn.qiita.com/a.css>; rel=preload; as=style");
+    expect(rewriteLinkHeader("<//cdn.x>; rel=dns-prefetch", TARGET)).toBeNull();
+  });
+
+  test("情報系 rel（canonical / alternate）はそのまま維持する", () => {
+    const value = '<https://qiita.com/items/abc>; rel="canonical"';
+    expect(rewriteLinkHeader(value, TARGET)).toBe(value);
+  });
+
+  test("quoted-string 内のカンマで誤分割しない", () => {
+    const value =
+      '<https://cdn.x/a.css>; rel=preload; title="a, b", <https://cdn.x/b.css>; rel=preload';
+    expect(rewriteLinkHeader(value, TARGET)).toBe(
+      '</api/proxy/https/cdn.x/a.css>; rel=preload; title="a, b", </api/proxy/https/cdn.x/b.css>; rel=preload'
+    );
+  });
+
+  test("http(s) に解決できないフェッチ系エントリは削除する", () => {
+    expect(rewriteLinkHeader("<data:text/css,a>; rel=preload", TARGET)).toBe(
+      null
+    );
+  });
+
+  test("解析不能なエントリは削除し、残りが無ければ null", () => {
+    expect(rewriteLinkHeader("garbage-without-brackets", TARGET)).toBeNull();
   });
 });
 

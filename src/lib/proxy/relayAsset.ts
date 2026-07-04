@@ -155,7 +155,7 @@ export async function relayAsset(
       new URL(finalUrl).origin,
       setCookiesFromHeaders(res.headers)
     );
-    const outHeaders = sanitizeHeaders(res.headers);
+    const outHeaders = sanitizeHeaders(res.headers, finalUrl);
     if (session.isNew) {
       outHeaders.append(
         "Set-Cookie",

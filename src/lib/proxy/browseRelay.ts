@@ -219,7 +219,7 @@ export async function relayBrowse(
     // baseUrl と揃える。#42）をキーに jar へ格納する（#151 Phase 1）。新規セッションなら
     // __pxy_sid を発行する。
     storeRelayCookies(session, finalUrl, res.headers);
-    let outHeaders = sanitizeHeaders(res.headers);
+    let outHeaders = sanitizeHeaders(res.headers, finalUrl);
     issueSessionCookie(session, outHeaders);
 
     try {
@@ -256,7 +256,7 @@ export async function relayBrowse(
           res = promoted.response;
           finalUrl = promoted.finalUrl;
           storeRelayCookies(session, finalUrl, res.headers);
-          outHeaders = sanitizeHeaders(res.headers);
+          outHeaders = sanitizeHeaders(res.headers, finalUrl);
           issueSessionCookie(session, outHeaders);
           html = await readTextWithLimit(res, maxBytes);
         } catch (err) {
