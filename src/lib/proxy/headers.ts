@@ -1,5 +1,7 @@
 import { targetFromBrowsePath } from "@/lib/proxy/browsePath";
-import { targetFromProxyPath } from "@/lib/proxy/proxyPath";
+import { targetFromProxyPath, buildProxyPath } from "@/lib/proxy/proxyPath";
+
+const BASE_PATH = process.env.NEXT_PUBLIC_BASE_PATH ?? "";
 
 const BLOCKED_HEADERS = new Set([
   "content-security-policy",
@@ -33,19 +35,97 @@ export function htmlUiHeaders(): Record<string, string> {
   };
 }
 
+// Link ヘッダー値（RFC 8288）のエントリ区切りカンマで分割する。<...> と quoted-string 内の
+// カンマは区切りとして扱わない。
+function splitLinkEntries(value: string): string[] {
+  const entries: string[] = [];
+  let depth = false; // <...> 内
+  let quoted = false; // "..." 内
+  let start = 0;
+  for (let i = 0; i < value.length; i++) {
+    const c = value[i];
+    if (quoted) {
+      if (c === "\\")
+        i++; // quoted-pair
+      else if (c === '"') quoted = false;
+    } else if (c === '"') quoted = true;
+    else if (c === "<") depth = true;
+    else if (c === ">") depth = false;
+    else if (c === "," && !depth) {
+      entries.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  entries.push(value.slice(start));
+  return entries.map((e) => e.trim()).filter((e) => e !== "");
+}
+
+// フェッチを誘発する rel（<URL> をターゲット基準で解決し /api/proxy へ書き換えて維持する）。
+const LINK_FETCH_RELS = new Set(["preload", "prefetch", "modulepreload"]);
+// 接続ヒント rel（接続先はプロキシ自身になり意味を成さないため削除する）。
+const LINK_CONNECTION_RELS = new Set(["preconnect", "dns-prefetch"]);
+
+// 上流の Link レスポンスヘッダーを書き換える純粋関数（#181）。素通しすると
+// rel=preload 等をブラウザがヘッダー起点で素の URL へ直接プリロードし、DOM 書き換え・
+// ランタイムシムが介在できず初回ロードの SW ギャップ中にプロキシ離脱する（実測: qiita.com）。
+// エントリ単位で処理し、残エントリが無ければ null（呼び出し側がヘッダーごと除去）。
+// 仕様: docs/spec/features/proxy.md §Link ヘッダーの書き換え（#181）
+export function rewriteLinkHeader(
+  value: string,
+  targetUrl: string
+): string | null {
+  const kept: string[] = [];
+  for (const entry of splitLinkEntries(value)) {
+    const m = entry.match(/^<([^>]*)>([\s\S]*)$/);
+    if (!m) continue; // 解析不能エントリは削除（素の URL を残さない）
+    const [, url, params] = m;
+    const relMatch = params.match(/;\s*rel\s*=\s*(?:"([^"]*)"|([^;\s]+))/i);
+    const rels = (relMatch?.[1] ?? relMatch?.[2] ?? "")
+      .toLowerCase()
+      .split(/\s+/)
+      .filter((r) => r !== "");
+    if (rels.some((r) => LINK_CONNECTION_RELS.has(r))) continue;
+    if (rels.some((r) => LINK_FETCH_RELS.has(r))) {
+      let resolved: string;
+      try {
+        resolved = new URL(url, targetUrl).href;
+      } catch {
+        continue;
+      }
+      if (!resolved.startsWith("http://") && !resolved.startsWith("https://"))
+        continue;
+      kept.push(`<${buildProxyPath(resolved, BASE_PATH)}>${params}`);
+      continue;
+    }
+    if (rels.length === 0) continue; // rel 無しは不正エントリとして削除
+    kept.push(entry); // 情報系 rel（canonical / alternate 等）はそのまま維持
+  }
+  return kept.length ? kept.join(", ") : null;
+}
+
 // レスポンスヘッダーをサニタイズする純粋関数。BLOCKED_HEADERS（Set-Cookie を含む）を除去する。
 // 中継 Cookie の保持は呼び出し側が cookieJar.store(...) で行うため、本関数は Set-Cookie を
 // 握り潰すだけ（ブラウザへ返さない・#151 Phase 1）。
+// Link ヘッダーは targetUrl があれば rewriteLinkHeader で書き換えて維持し、無ければ・
+// 書き換え結果が空なら除去する（素の URL を残さない fail-closed・#181）。
 // 仕様: docs/spec/features/proxy.md §レスポンスヘッダー処理 / §サイト間 Cookie アイソレーション
-export function sanitizeHeaders(headers: Headers): Headers {
+//       / §Link ヘッダーの書き換え（#181）
+export function sanitizeHeaders(headers: Headers, targetUrl?: string): Headers {
   const result = new Headers();
   headers.forEach((value, name) => {
-    if (!BLOCKED_HEADERS.has(name.toLowerCase())) {
-      try {
-        result.set(name, value);
-      } catch {
-        // 不正な値（改行文字など）を含むヘッダーはスキップ
+    const lower = name.toLowerCase();
+    if (BLOCKED_HEADERS.has(lower)) return;
+    try {
+      if (lower === "link") {
+        const rewritten = targetUrl
+          ? rewriteLinkHeader(value, targetUrl)
+          : null;
+        if (rewritten != null) result.set(name, rewritten);
+        return;
       }
+      result.set(name, value);
+    } catch {
+      // 不正な値（改行文字など）を含むヘッダーはスキップ
     }
   });
   return result;

@@ -606,11 +606,19 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 プロキシ自身が生成する HTML UI レスポンス用のヘッダーを組み立てる純粋関数。`Content-Type: text/html; charset=utf-8` に加えて `X-Frame-Options: DENY` を付与する。これを使うのは `browseRelay.ts` の `htmlResponse`（エラー）/ `loopGuidanceResponse`（ループ案内）と `browse/route.ts` の `url` 未指定案内ページ（`noUrlBrowseHtml`）。`sanitizeHeaders` が中継レスポンスから `X-Frame-Options` を**除去**する（iframe 埋め込み中継のため）のと対になり、UI レスポンスには逆に**付与**して枠外埋め込みを禁止する。ホーム `/` は React コンポーネントでレスポンスヘッダーを直接付与できないため、この関数ではなく `next.config.mjs` の `headers()`（`source: '/'` 限定）で付与する。
 
-### `sanitizeHeaders(headers)`
+### `sanitizeHeaders(headers, targetUrl?)`
 
-> 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization) / [§サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション)
+> 関連仕様: [プロキシ機能仕様 §認証情報の転送](../spec/features/proxy.md#認証情報の転送cookie--authorization) / [§サイト間 Cookie アイソレーション](../spec/features/proxy.md#サイト間-cookie-アイソレーション) / [§`Link` ヘッダーの書き換え](../spec/features/proxy.md#link-ヘッダーの書き換え181)
 
 レスポンスヘッダーをサニタイズする純粋関数。`BLOCKED_HEADERS`（`Content-Security-Policy` / `X-Frame-Options` / `Content-Encoding` / `Transfer-Encoding` / `Content-Length` / `Speculation-Rules`）に加えて **`Set-Cookie` を除去**し、中継 Cookie をブラウザへ返さない。`Set-Cookie` の保持は呼び出し側（`relayBrowse` / `relayAsset`）が `cookieJar.store(...)` で行うため、本関数は握り潰すだけ（#151 Phase 1）。`Set-Cookie` のスコープ化（旧 `sanitizeSetCookie` による名前接頭辞付与）は廃止した。
+
+**`Link` ヘッダー（#181）**: `targetUrl` が渡された場合は `rewriteLinkHeader(value, targetUrl)` で書き換えて維持し、渡されない・書き換え結果が空の場合は除去する（素の URL を残さない fail-closed）。
+
+### `rewriteLinkHeader(value, targetUrl)`
+
+> 関連仕様: [プロキシ機能仕様 §`Link` ヘッダーの書き換え](../spec/features/proxy.md#link-ヘッダーの書き換え181)
+
+上流 `Link:` ヘッダー値（RFC 8288）をエントリ単位で処理する純粋関数（#181）。`<...>`・quoted-string 内のカンマを区切りとして扱わない分割を行い、各エントリの `rel` で振り分ける: `preload` / `prefetch` / `modulepreload` は `<URL>` を `targetUrl` 基準で解決し `buildProxyPath`（`/api/proxy/<scheme>/<host>/<path>`・パス反映形式）へ書き換えて維持、`preconnect` / `dns-prefetch` は削除、その他（`canonical` 等）はそのまま維持。http(s) に解決できないフェッチ系エントリは削除。残エントリが無ければ `null`（呼び出し側がヘッダーごと除去）。
 
 ### `authorizationAllowed(incoming, targetOrigin)` / `originFromProxiedReferer(referer)`
 
