@@ -62,7 +62,7 @@ Issue の受け入れ条件「日本語 IME 入力の忠実度を対象サイト
 #### Kasm（1.18.1 Community、使い捨て WSL ディストリ、評価中）
 
 - 評価待ち。
-- 環境構築時の注意（記録）: ①Kasm インストーラが Windows PATH 経由の Docker Desktop バイナリを誤検出して失敗するため、ディストリ内に docker.io / docker-compose-v2 を先に導入してから実行する ②WSL は接続プロセスがなくなるとディストリを自動停止するため、評価中は keepalive プロセスが必要。
+- 環境構築時の注意（記録）: ①Kasm インストーラが Windows PATH 経由の Docker Desktop バイナリを誤検出して失敗するため、ディストリ内に docker.io / docker-compose-v2 を先に導入してから実行する ②WSL は接続プロセスがなくなるとディストリを自動停止するため、評価中は keepalive プロセスが必要 ③既定インストールにはワークスペース（ブラウザ等）が一切含まれず、管理者が Workspace Registry から追加する必要がある（Chrome イメージ約 2GB を追加取得）。
 
 ### 後片付け（フェーズ1 終了時）
 
