@@ -2,7 +2,7 @@
 
 - **Issue**: [#72](https://github.com/f8924919/web-proxy/issues/72)
 - **ブランチ**: `docs/rbi-isolation-spike`
-- **ステータス**: 進行中（調査完了・採用可否はユーザー判断待ち）
+- **ステータス**: 完了（2026-07-05 ユーザー判断: ハイブリッド段階導入を採用。自前ホスト PoC を #193 として起票）
 - **種別**: 調査スパイク（実装なし。成果物は本メモの比較表＋採用判断）
 - **関連**: 前段の現実解 #69（ブラウザバック中継）/ アンチボット #73 / 本番基盤 #71 / 既存調査 #52（Google enablejs ループ）
 - **調査日**: 2026-06-22
@@ -19,6 +19,12 @@
 - **推奨 PoC**: Kasm Workspaces（Community 同時 5）または Neko（OSS）を自前ホストで、対象 1〜数サイト・同時 10 セッション規模に限定して検証。検証項目は (a) 日本語 IME パススルー可否、(b) 帯域・サーバ実測、(c) ハイブリッド振り分けロジック。商用での少量・短期検証なら Hyperbeam（埋め込み API が用途に最も近く 10,000 分/月無料）が低リスク。
 
 > **採用可否（やる / やらない / どの段階まで）はユーザー判断**。本メモは判断材料の提示であり、決定後にステータスを更新する。
+
+### 採用判断（2026-07-05 決定）
+
+- **ハイブリッドの段階導入を採用**: 現行書き換え方式を基盤に維持し、壊れる/ブロックされる特定サイトのみ RBI 経路へフォールバックする方針。
+- **次段は自前ホスト PoC（Kasm Community / Neko）**: 本番想定形態が自前ホストであり、最大リスクの日本語 IME パススルーは Kasm/Neko では自前対応領域のため、商用 SaaS（Hyperbeam）ではなく自前ホストで検証する。IME を最初のキル基準とし、振り分けロジック（`shouldUseBrowser` / `shouldPromoteToBrowser` 再利用）はモック接続で並行検証する。
+- **PoC Issue**: [#193](https://github.com/f8924919/web-proxy/issues/193)（タスクメモ: [193-rbi-selfhost-poc.md](../193-rbi-selfhost-poc.md)）
 
 ---
 
@@ -99,7 +105,7 @@ RBI には大きく 3 系統。現行 web-proxy（サーバ側で HTML/JS を書
 
 ## 5. 既存 `rewrite.ts` / `sw.js` の「軽量フォールバック」降格範囲（受け入れ条件 5）
 
-現行アーキテクチャ（[docs/arch/proxy.md](../arch/proxy.md) 裏取り済み【自社】）と RBI の責務境界:
+現行アーキテクチャ（[docs/arch/proxy.md](../../arch/proxy.md) 裏取り済み【自社】）と RBI の責務境界:
 
 | 現行が担う処理                                                                      | コード位置                                                            | RBI 導入後の位置づけ                                                                                                                                                                                      |
 | ----------------------------------------------------------------------------------- | --------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -165,4 +171,4 @@ RBI には大きく 3 系統。現行 web-proxy（サーバ側で HTML/JS を書
 - [Pixel Pushing vs DOM rendering（virtualbrowser.com）](https://www.virtualbrowser.com/en/post/rendering-technology-rbi-pixel-pushing-vs-dom-comparison) 【二次】
 - [Headless Chrome at Scale: CPU/RAM/Cost](https://medium.com/@zlata_18516/headless-chrome-at-scale-cpu-ram-and-cost-optimization-strategies-caea743245c4) / [WebScraping.AI: resource requirements](https://webscraping.ai/faq/headless-chromium/what-are-the-resource-requirements-for-running-headless-chromium-at-scale) 【二次】
 - [Red5: WebRTC 1080p bitrate](https://www.red5.net/blog/debunking-the-myth-8-reasons-why-webrtc-is-capable-of-high-quality-audio-video-today/) 【二次】
-- 内部裏取り: [docs/arch/proxy.md](../arch/proxy.md)（`rewrite.ts` / `sw.js` / `browserFetch.ts` / ステートレス性）【自社】
+- 内部裏取り: [docs/arch/proxy.md](../../arch/proxy.md)（`rewrite.ts` / `sw.js` / `browserFetch.ts` / ステートレス性）【自社】
