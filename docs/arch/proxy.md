@@ -365,6 +365,61 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 ---
 
+## `src/lib/proxy/rbi.ts`（設計案・#193。実装はモック PoC のみ）
+
+> 対応 Issue: [#193](https://github.com/f8924919/web-proxy/issues/193)（調査スパイク）。検討経緯・PoC 実測は [docs/task/193-rbi-selfhost-poc.md](../task/193-rbi-selfhost-poc.md)。**relayBrowse への配線・実バックエンド（Kasm / Neko）・spec 反映は本採用タスクで行う（本節は設計の正本、現時点の実装はモックバックエンドと判定純粋関数まで）。**
+
+**役割**: 書き換え方式でも headless ブラウザティアでも成立しないサイトを、RBI（Remote Browser Isolation。Kasm / Neko の対話ストリーム）へフォールバックさせる**第三ティア**の判定。中継（`proxyFetch`）→ ブラウザ（`browserFetch`）→ RBI の三層エスカレーションの最上段にあたる。
+
+### 契約の決定（`{response, finalUrl}` には載せない）
+
+RBI は「1 リクエスト = 1 文書」ではなく「セッション確立 + 継続ストリーム（WebRTC / VNC）」のモデルのため、`browserFetch` のインターフェース契約（`(url, options?) => {response, finalUrl}`）には**載せない**。代わりに**セッション仲介契約**を新設する:
+
+```ts
+interface RbiBackend {
+  createSession(targetUrl: string): Promise<{ sessionId: string; sessionUrl: string }>;
+  destroySession(sessionId: string): Promise<void>;
+}
+```
+
+- RBI 経路が選ばれた場合、`relayBrowse` は本文の取得・書き換えを行わず、`createSession` が返す `sessionUrl` へ **302 リダイレクト**（または誘導ページ）で応答する。以降のユーザー操作はブラウザと RBI バックエンド間の直接ストリームであり、本プロキシの書き換えパイプラインは関与しない。
+- したがって `rewrite.ts` のスクリプト注入群・`sw.js` の横取りは RBI 経路では**丸ごと不要**（[#72 §5](../task/archive/72-rbi-isolation-spike.md) の「書き換え方式は RBI 非対象サイト向けの軽量フォールバックへ降格」の実現形）。
+
+### 判定（純粋関数・既存 2 関数の再利用）
+
+| 純粋関数 / 定数              | 役割                                                                                                                                                                                        |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rbiBackendFromEnv(env)`     | `RBI_BACKEND`（`off` / `mock` / `kasm` / `neko`、既定 `off`）と `RBI_BASE_URL` から設定を組み立てる。`off` なら RBI 判定全体を無効化                                                        |
+| `shouldUseRbi(url, config)`  | allowlist 方式（`RBI_FORCE_HOSTS`、`shouldUseBrowser` と同型のホスト照合）。明示指定サイトは最初から RBI へ                                                                                 |
+| `shouldPromoteToRbi(result)` | **ブラウザティアの出力**に `shouldPromoteToBrowser(html, status, contentType)` を再適用し、真（= ブラウザ昇格後もチャレンジ / 崩れが解消しない）なら RBI 昇格候補とする（判定ロジック新設なし・既存ヒューリスティックの再利用） |
+
+- **#73 との接合点**: 「ブラウザティアでもチャレンジが解消しない」は egress IP 起因ブロックの主シグナルであり、residential egress を持つ RBI バックエンドへ振り向ける判断材料になる。egress の手配・検出の高度化（IP 品質分類等）は #73 の領域とし、本設計はこのシグナル 1 本で接合する。
+
+### 再昇格抑止・資源上限（`RbiGuard`・インメモリ状態）
+
+- `PromotionGuard` と同型のスライディングウィンドウ（`ホスト + パス` 単位）で再昇格を抑止し、加えて**同時セッション数上限**（`RBI_MAX_SESSIONS`、フェーズ2 実測: 1 セッションあたり約 0.9 コア / 0.9GB / 3Mbps を根拠にホスト資源から決める）と**セッション TTL**（`RBI_SESSION_TTL_MS`）を持つ。
+- **既知の制約**: インメモリ前提のため複数インスタンス構成ではセッション数上限を共有できない。本採用時に複数インスタンスへ広げる場合は共有ストア（DB / Redis 等）が必要（本 PoC では単一インスタンス前提と明記して見送り）。
+
+### 配線案（本採用時。PoC では実装しない）
+
+1. `relayBrowse` 冒頭: `shouldUseRbi(url)` が真なら `createSession` → 302（中継・ブラウザティアをスキップ）。
+2. ブラウザティア応答後: `shouldPromoteToRbi(result)` かつ `rbiGuard.tryPromote(target)` が真なら `createSession` → 302。
+3. **フォールバック方向**: `createSession` 失敗（バックエンド不達・セッション上限）時はエラーで終端せず、**ブラウザティアの結果をそのまま返す**（RBI はベストエフォートの改善であり可用性を下げない）。
+
+### 環境変数（案）
+
+| 変数                 | 意味                                                    | 既定  |
+| -------------------- | ------------------------------------------------------- | ----- |
+| `RBI_BACKEND`        | `off` / `mock` / `kasm` / `neko`                        | `off` |
+| `RBI_BASE_URL`       | RBI バックエンドの URL（セッション URL の生成元）       | なし  |
+| `RBI_FORCE_HOSTS`    | 最初から RBI へ送るホストの allowlist（カンマ区切り）   | 空    |
+| `RBI_MAX_SESSIONS`   | 同時セッション数上限                                    | `5`   |
+| `RBI_SESSION_TTL_MS` | セッションの生存時間                                    | 15 分 |
+
+- **テスト**: 純粋関数（`rbiBackendFromEnv` / `shouldUseRbi` / `shouldPromoteToRbi`）と `RbiGuard`（ウィンドウ・上限・TTL）、`MockRbiBackend`（固定 `sessionUrl` を返す PoC 用実装）を単体テスト対象とする（[テスト方針](../testing/policy.md)）。実バックエンドへの接続 I/O はテスト対象外。
+
+---
+
 ## `src/lib/proxy/rewrite.ts`
 
 **役割**: HTML / CSS の URL を書き換える。

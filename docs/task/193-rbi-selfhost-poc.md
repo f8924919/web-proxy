@@ -153,6 +153,16 @@ Issue の受け入れ条件「go の方式で、対象 1〜数サイト・同時
 - Kasm の 10 セッション値は 5 セッション実測からの線形外挿（Community Edition の同時 5 セッション制限のため）。
 - Neko の負荷生成: プロファイル A は Chromium ポリシーで Wikipedia を初期表示＋クライアントから周期スクロール、B は YouTube（Big Buck Bunny）自動再生。Kasm はセッション起動後にリモート Chrome のアドレスバーへ URL を自動入力して誘導（再生はスクリーンショットで確認済み）。
 
+## フェーズ3 実施計画（2026-07-05 ユーザー確認済み）
+
+受け入れ条件「`shouldUseBrowser` / `shouldPromoteToBrowser` を再利用した RBI フォールバック判定の設計案（実装はモック接続の PoC 範囲まで）」を、criteria-review の指摘を受けて以下に具体化した。
+
+- **設計の正本は [docs/arch/proxy.md §`src/lib/proxy/rbi.ts`](../arch/proxy.md)**（本メモには経緯・比較表を残す）。
+- **契約の決着まで含めて完了とする**: RBI はセッション + ストリームのモデルで既存 `{response, finalUrl}` 契約に載らないため、「載らない」の記録で終わらせず、代替のセッション仲介契約（`RbiBackend.createSession` → 302 誘導）の設計まで含める。
+- **#73 接合点はトリガー設計に含める**: 「ブラウザティアでもチャレンジ未解消」を egress IP 起因ブロックのシグナルとして RBI 昇格トリガーに採用（検出の高度化・residential 手配は #73 に委ねる）。
+- **PoC 実装範囲**: `src/lib/proxy/rbi.ts` の判定純粋関数 + `MockRbiBackend` + 単体テストまで。`relayBrowse` への配線・実バックエンド・spec 反映は本採用タスクへ。
+- **本採用の意思決定はユーザー**: 本タスクは判断材料（比較表）の提示まで。
+
 ### 後片付け（PoC 終了時）
 
 - Neko: `docker compose down` ＋イメージ削除（フェーズ2 の 10 コンテナ構成も同じ compose プロジェクトで管理し一括削除）。
