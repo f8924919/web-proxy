@@ -57,6 +57,8 @@ Issue の受け入れ条件「日本語 IME 入力の忠実度を対象サイト
 
 **Neko 判定: go**（判定基準「入力文字列と重なって読めない等がない」を満たす。候補位置のずれは既知の劣化点として記録）
 
+証跡: [assets/193-neko-ime-candidate-window.png](assets/193-neko-ime-candidate-window.png) — カーソルは画面中央の Google 検索ボックスにあるが、IME 候補ウィンドウは画面左上に表示されている。候補の選択・確定は正常。
+
 #### Kasm（1.18.1 Community、使い捨て WSL ディストリ、評価中）
 
 - 評価待ち。
