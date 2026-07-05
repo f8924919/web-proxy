@@ -37,6 +37,7 @@ src/
 │       ├── concurrency.ts    # 同時接続数の制限（グローバル/IP 単位・#133）
 │       ├── loopGuard.ts      # ナビゲーションループ検出（enablejs 自己再ナビ対策）
 │       ├── promotion.ts      # ヒューリスティック自動ティア昇格（崩れ/チャレンジ検出・再昇格抑止）
+│       ├── rbi.ts            # RBI フォールバック判定（第三ティア。設計案＋モック PoC・relayBrowse 未配線・#193）
 │       └── response.ts       # nullBodyStatus 判定・相対リダイレクト生成ユーティリティ
 └── ...
 
@@ -362,6 +363,83 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 - `loopGuard.ts` / `rateLimit.ts` と同じ `Map<key, timestamps[]>` のスライディングウィンドウ方式（既定ウィンドウ 60 秒、プロセス再起動でリセット）。
 - 共有インスタンス `promotionGuard` を `route.ts` が利用する。`tryPromote(target)` は再昇格可なら記録して `true`、抑止中なら `false` を返す。
 - **テスト**: 純粋関数（`autoPromoteEnabledFromEnv` / `shouldPromoteToBrowser`）と `PromotionGuard` のウィンドウ挙動を単体テスト対象とする（[テスト方針](../testing/policy.md)）。`browserFetch` 本体（I/O）はテスト対象外。
+
+---
+
+## `src/lib/proxy/rbi.ts`（設計案・#193。実装はモック PoC のみ）
+
+> 対応 Issue: [#193](https://github.com/f8924919/web-proxy/issues/193)（調査スパイク）。検討経緯・PoC 実測は [docs/task/193-rbi-selfhost-poc.md](../task/193-rbi-selfhost-poc.md)。**relayBrowse への配線・実バックエンド（Kasm / Neko）・spec 反映は本採用タスクで行う（本節は設計の正本、現時点の実装はモックバックエンドと判定純粋関数まで）。**
+
+**役割**: 書き換え方式でも headless ブラウザティアでも成立しないサイトを、RBI（Remote Browser Isolation。Kasm / Neko の対話ストリーム）へフォールバックさせる**第三ティア**の判定。中継（`proxyFetch`）→ ブラウザ（`browserFetch`）→ RBI の三層エスカレーションの最上段にあたる。
+
+### 契約の決定（`{response, finalUrl}` には載せない）
+
+RBI は「1 リクエスト = 1 文書」ではなく「セッション確立 + 継続ストリーム（WebRTC / VNC）」のモデルのため、`browserFetch` のインターフェース契約（`(url, options?) => {response, finalUrl}`）には**載せない**。代わりに**セッション仲介契約**を新設する:
+
+```ts
+interface RbiBackend {
+  createSession(
+    targetUrl: string,
+    seedCookies?: CookieSeed[]
+  ): Promise<{ sessionId: string; sessionUrl: string }>;
+  destroySession(sessionId: string): Promise<void>;
+}
+```
+
+- RBI 経路が選ばれた場合、`relayBrowse` は本文の取得・書き換えを行わず、`createSession` が返す `sessionUrl` へユーザーを誘導する。以降のユーザー操作はブラウザと RBI バックエンド間の直接ストリームであり、本プロキシの書き換えパイプラインは関与しない。
+- したがって `rewrite.ts` のスクリプト注入群・`sw.js` の横取りは RBI 経路では**丸ごと不要**（[#72 §5](../task/archive/72-rbi-isolation-spike.md) の「書き換え方式は RBI 非対象サイト向けの軽量フォールバックへ降格」の実現形）。
+- `seedCookies` は cookieJar のログイン状態を RBI セッションへ引き継ぐ**将来拡張の余地**（PoC・初期採用では未実装）。現状は RBI セッションは jar の状態を持たず**コールドスタート**し、RBI 内で確立した Cookie も jar へ戻らない（既知の制約。#73 の主シグナル＝egress IP 起因ブロックは Cookie 非依存のため初期は許容）。
+
+### 誘導方式の比較（決定: PoC は 302、本採用第一候補は iframe 埋め込み）
+
+| 方式            | 利点                                                                          | 欠点                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 302 直誘導      | 最も単純・疎結合                                                              | プロキシのコンテキスト（アドレスバー UI・`__pxy_auth` 認証境界）から完全離脱。`RBI_BASE_URL` オリジンの生 URL が露出 |
+| iframe 埋め込み | プロキシの UI・認証境界を保持し体験が一貫（Hyperbeam の埋め込みモデルと同型） | RBI 側の `CSP frame-ancestors` 許可が必要（Kasm / Neko は自前ホストのため制御可能）。実装コスト増                    |
+| 誘導ページ      | 明示遷移のワンクッション（上記の中間）                                        | 1 クリック増える                                                                                                     |
+
+- **PoC は最小の 302** で契約を検証し、**本採用時は iframe 埋め込みを第一候補**として再評価する（2026-07-05 ユーザー確認済み）。契約（`createSession` → `sessionUrl`）は誘導方式に依存しないため、この差し替えで `RbiBackend` は変わらない。
+
+### セキュリティ要件
+
+- **SSRF**: RBI 経路は中継・ブラウザティアをスキップするため、そのままでは `assertSsrfAllowed` を一度も通らない。**`createSession` 前に `assertSsrfAllowed(targetUrl)` を必須**とし、RBI が SSRF 踏み台になる穴を塞ぐ（2026-07-05 ユーザー確認済み）。ただし実際のナビゲーションは RBI 側 Chromium が再解決するため IP ピン留めは効かず、`browserFetch` と同様のリバインディング残存窓がある（既知の制約）。
+- **sessionUrl はケーパビリティ URL**: 302 の `Location`（履歴・`Referer` に残る）に載るため、推測不能な ID・TTL 束縛（可能なら初回接続で失効する単回バインド）を要件とする。`sessionUrl` のオリジンは `RBI_BASE_URL` に一致することを検証する（オープンリダイレクト防止）。
+- **認証境界**: `PROXY_AUTH_TOKEN` 有効時、302 誘導はユーザーを認証ゲート外（RBI バックエンド）へ出す。RBI 側認証との橋渡しは本採用時の検討事項。
+
+### 判定（純粋関数・既存 2 関数の再利用）
+
+| 純粋関数 / 定数              | 役割                                                                                                                                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rbiBackendFromEnv(env)`     | `RBI_BACKEND`（`off` / `mock` / `kasm` / `neko`、既定 `off`）と `RBI_BASE_URL` から設定を組み立てる。`off` なら RBI 判定全体を無効化                                                                                            |
+| `shouldUseRbi(url, config)`  | allowlist 方式（`RBI_FORCE_HOSTS`、`shouldUseBrowser` と同型のホスト照合）。明示指定サイトは最初から RBI へ                                                                                                                     |
+| `shouldPromoteToRbi(result)` | **ブラウザティアの出力**に `shouldPromoteToBrowser(html, status, contentType)` を再適用し、真（= ブラウザ昇格後もチャレンジ / 崩れが解消しない）なら RBI 昇格候補とする（判定ロジック新設なし・既存ヒューリスティックの再利用） |
+
+- **#73 との接合点**: 「ブラウザティアでもチャレンジが解消しない」は egress IP 起因ブロックの主シグナルであり、residential egress を持つ RBI バックエンドへ振り向ける判断材料になる。egress の手配・検出の高度化（IP 品質分類等）は #73 の領域とし、本設計はこのシグナル 1 本で接合する。
+
+### 再昇格抑止（`RbiGuard`）・セッション上限（`RbiSessionLimiter`）・インメモリ状態
+
+- **`RbiGuard`**: `PromotionGuard` と同型のスライディングウィンドウ（`ホスト + パス` 単位）で再昇格を抑止する。責務はウィンドウ抑止のみに絞る。
+- **`RbiSessionLimiter`**: 同時セッション数上限（`RBI_MAX_SESSIONS`）は増減する生カウンタのため、ウィンドウ方式と混ぜず `ConcurrencyLimiter` と同型の `acquire(): release` として分離する。TTL（`RBI_SESSION_TTL_MS`）失効・`destroySession` 時に release と対応づける（セッションリーク防止。TTL 失効時に `destroySession` を呼ぶ掃除役の配線は本採用時の設計事項）。
+- **既知の制約**: いずれもインメモリ前提のため複数インスタンス構成では上限を共有できない。本採用時に複数インスタンスへ広げる場合は共有ストア（DB / Redis 等）が必要（本 PoC では単一インスタンス前提と明記して見送り）。
+
+### 配線案（本採用時。PoC では実装しない）
+
+1. `relayBrowse` 冒頭: `shouldUseRbi(url)` が真なら `assertSsrfAllowed` → `createSession` → 誘導（中継・ブラウザティアをスキップ）。**この経路の `createSession` 失敗時は通常のティア選択へフォールスルー**する（まだ何も取得していないため）。
+2. ブラウザティア応答後: `shouldPromoteToRbi(result)` かつ `rbiGuard.tryPromote(target)` が真なら `assertSsrfAllowed` → `createSession` → 誘導。**この経路の失敗時は取得済みのブラウザティア結果をそのまま返す**（RBI はベストエフォートの改善であり可用性を下げない）。
+3. **前提の明記**: RBI 自動昇格（手順 2）はブラウザティアの実行が前提。ブラウザティアが走らないサイト（allowlist 外かつ自動昇格 off）では `RBI_FORCE_HOSTS` 指定以外で RBI へ到達しない（段階エスカレーションの意図どおり）。
+4. **本採用時の検討事項**: `relayConcurrencyLimiter`（誘導応答で即解放）と `RbiSessionLimiter`（セッション生存中保持）はライフサイクルが異なる別カウンタになる点の整理。
+
+### 環境変数（案）
+
+| 変数                 | 意味                                                                                                                                               | 既定  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `RBI_BACKEND`        | `off` / `mock` / `kasm` / `neko`                                                                                                                   | `off` |
+| `RBI_BASE_URL`       | RBI バックエンドの URL（セッション URL の生成元・オリジン検証の基準）                                                                              | なし  |
+| `RBI_FORCE_HOSTS`    | 最初から RBI へ送るホストの allowlist（カンマ区切り）                                                                                              | 空    |
+| `RBI_MAX_SESSIONS`   | 同時セッション数上限。既定 `5` は安全側の据え置き（フェーズ2 実測 約 0.9 コア / 0.9GB / 3Mbps per セッションを根拠にホスト資源に合わせて調整する） | `5`   |
+| `RBI_SESSION_TTL_MS` | セッションの生存時間                                                                                                                               | 15 分 |
+
+- **テスト**: 純粋関数（`rbiBackendFromEnv` / `shouldUseRbi` / `shouldPromoteToRbi`）と `RbiGuard`（ウィンドウ）・`RbiSessionLimiter`（上限・release 冪等）、`MockRbiBackend`（`RBI_BASE_URL` オリジンの推測不能な `sessionUrl` を返す PoC 用実装）を単体テスト対象とする（[テスト方針](../testing/policy.md)）。実バックエンドへの接続 I/O はテスト対象外。
 
 ---
 
