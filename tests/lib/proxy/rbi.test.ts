@@ -107,20 +107,29 @@ describe("shouldPromoteToRbi", () => {
 
   test("ブラウザティア出力にチャレンジが残っていれば true（shouldPromoteToBrowser の再利用）", () => {
     expect(
-      shouldPromoteToRbi({ html: challengeHtml, status: 200, contentType: HTML }, config)
+      shouldPromoteToRbi(
+        { html: challengeHtml, status: 200, contentType: HTML },
+        config
+      )
     ).toBe(true);
   });
 
   test("ブラウザティアで解消済み（通常応答）なら false", () => {
     expect(
-      shouldPromoteToRbi({ html: normalHtml, status: 200, contentType: HTML }, config)
+      shouldPromoteToRbi(
+        { html: normalHtml, status: 200, contentType: HTML },
+        config
+      )
     ).toBe(false);
   });
 
   test("backend が off なら常に false", () => {
     const off = rbiBackendFromEnv({});
     expect(
-      shouldPromoteToRbi({ html: challengeHtml, status: 200, contentType: HTML }, off)
+      shouldPromoteToRbi(
+        { html: challengeHtml, status: 200, contentType: HTML },
+        off
+      )
     ).toBe(false);
   });
 });
@@ -188,7 +197,9 @@ describe("MockRbiBackend", () => {
 
   test("sessionUrl は RBI_BASE_URL と同一オリジン（オープンリダイレクト防止の要件）", async () => {
     const backend = new MockRbiBackend(baseUrl);
-    const { sessionUrl } = await backend.createSession("https://target.example/");
+    const { sessionUrl } = await backend.createSession(
+      "https://target.example/"
+    );
     expect(new URL(sessionUrl).origin).toBe(new URL(baseUrl).origin);
   });
 
@@ -210,7 +221,9 @@ describe("MockRbiBackend", () => {
 
   test("destroySession は既知の sessionId を解決し、セッションを追跡から外す", async () => {
     const backend = new MockRbiBackend(baseUrl);
-    const { sessionId } = await backend.createSession("https://target.example/");
+    const { sessionId } = await backend.createSession(
+      "https://target.example/"
+    );
     expect(backend.activeSessionCount()).toBe(1);
     await backend.destroySession(sessionId);
     expect(backend.activeSessionCount()).toBe(0);

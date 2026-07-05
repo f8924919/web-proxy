@@ -378,7 +378,10 @@ RBI は「1 リクエスト = 1 文書」ではなく「セッション確立 + 
 
 ```ts
 interface RbiBackend {
-  createSession(targetUrl: string, seedCookies?: CookieSeed[]): Promise<{ sessionId: string; sessionUrl: string }>;
+  createSession(
+    targetUrl: string,
+    seedCookies?: CookieSeed[]
+  ): Promise<{ sessionId: string; sessionUrl: string }>;
   destroySession(sessionId: string): Promise<void>;
 }
 ```
@@ -389,11 +392,11 @@ interface RbiBackend {
 
 ### 誘導方式の比較（決定: PoC は 302、本採用第一候補は iframe 埋め込み）
 
-| 方式 | 利点 | 欠点 |
-| --- | --- | --- |
-| 302 直誘導 | 最も単純・疎結合 | プロキシのコンテキスト（アドレスバー UI・`__pxy_auth` 認証境界）から完全離脱。`RBI_BASE_URL` オリジンの生 URL が露出 |
-| iframe 埋め込み | プロキシの UI・認証境界を保持し体験が一貫（Hyperbeam の埋め込みモデルと同型） | RBI 側の `CSP frame-ancestors` 許可が必要（Kasm / Neko は自前ホストのため制御可能）。実装コスト増 |
-| 誘導ページ | 明示遷移のワンクッション（上記の中間） | 1 クリック増える |
+| 方式            | 利点                                                                          | 欠点                                                                                                                 |
+| --------------- | ----------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
+| 302 直誘導      | 最も単純・疎結合                                                              | プロキシのコンテキスト（アドレスバー UI・`__pxy_auth` 認証境界）から完全離脱。`RBI_BASE_URL` オリジンの生 URL が露出 |
+| iframe 埋め込み | プロキシの UI・認証境界を保持し体験が一貫（Hyperbeam の埋め込みモデルと同型） | RBI 側の `CSP frame-ancestors` 許可が必要（Kasm / Neko は自前ホストのため制御可能）。実装コスト増                    |
+| 誘導ページ      | 明示遷移のワンクッション（上記の中間）                                        | 1 クリック増える                                                                                                     |
 
 - **PoC は最小の 302** で契約を検証し、**本採用時は iframe 埋め込みを第一候補**として再評価する（2026-07-05 ユーザー確認済み）。契約（`createSession` → `sessionUrl`）は誘導方式に依存しないため、この差し替えで `RbiBackend` は変わらない。
 
@@ -405,10 +408,10 @@ interface RbiBackend {
 
 ### 判定（純粋関数・既存 2 関数の再利用）
 
-| 純粋関数 / 定数              | 役割                                                                                                                                                                                        |
-| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `rbiBackendFromEnv(env)`     | `RBI_BACKEND`（`off` / `mock` / `kasm` / `neko`、既定 `off`）と `RBI_BASE_URL` から設定を組み立てる。`off` なら RBI 判定全体を無効化                                                        |
-| `shouldUseRbi(url, config)`  | allowlist 方式（`RBI_FORCE_HOSTS`、`shouldUseBrowser` と同型のホスト照合）。明示指定サイトは最初から RBI へ                                                                                 |
+| 純粋関数 / 定数              | 役割                                                                                                                                                                                                                            |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `rbiBackendFromEnv(env)`     | `RBI_BACKEND`（`off` / `mock` / `kasm` / `neko`、既定 `off`）と `RBI_BASE_URL` から設定を組み立てる。`off` なら RBI 判定全体を無効化                                                                                            |
+| `shouldUseRbi(url, config)`  | allowlist 方式（`RBI_FORCE_HOSTS`、`shouldUseBrowser` と同型のホスト照合）。明示指定サイトは最初から RBI へ                                                                                                                     |
 | `shouldPromoteToRbi(result)` | **ブラウザティアの出力**に `shouldPromoteToBrowser(html, status, contentType)` を再適用し、真（= ブラウザ昇格後もチャレンジ / 崩れが解消しない）なら RBI 昇格候補とする（判定ロジック新設なし・既存ヒューリスティックの再利用） |
 
 - **#73 との接合点**: 「ブラウザティアでもチャレンジが解消しない」は egress IP 起因ブロックの主シグナルであり、residential egress を持つ RBI バックエンドへ振り向ける判断材料になる。egress の手配・検出の高度化（IP 品質分類等）は #73 の領域とし、本設計はこのシグナル 1 本で接合する。
@@ -428,13 +431,13 @@ interface RbiBackend {
 
 ### 環境変数（案）
 
-| 変数                 | 意味                                                                                        | 既定  |
-| -------------------- | ------------------------------------------------------------------------------------------- | ----- |
-| `RBI_BACKEND`        | `off` / `mock` / `kasm` / `neko`                                                            | `off` |
-| `RBI_BASE_URL`       | RBI バックエンドの URL（セッション URL の生成元・オリジン検証の基準）                       | なし  |
-| `RBI_FORCE_HOSTS`    | 最初から RBI へ送るホストの allowlist（カンマ区切り）                                       | 空    |
+| 変数                 | 意味                                                                                                                                               | 既定  |
+| -------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| `RBI_BACKEND`        | `off` / `mock` / `kasm` / `neko`                                                                                                                   | `off` |
+| `RBI_BASE_URL`       | RBI バックエンドの URL（セッション URL の生成元・オリジン検証の基準）                                                                              | なし  |
+| `RBI_FORCE_HOSTS`    | 最初から RBI へ送るホストの allowlist（カンマ区切り）                                                                                              | 空    |
 | `RBI_MAX_SESSIONS`   | 同時セッション数上限。既定 `5` は安全側の据え置き（フェーズ2 実測 約 0.9 コア / 0.9GB / 3Mbps per セッションを根拠にホスト資源に合わせて調整する） | `5`   |
-| `RBI_SESSION_TTL_MS` | セッションの生存時間                                                                        | 15 分 |
+| `RBI_SESSION_TTL_MS` | セッションの生存時間                                                                                                                               | 15 分 |
 
 - **テスト**: 純粋関数（`rbiBackendFromEnv` / `shouldUseRbi` / `shouldPromoteToRbi`）と `RbiGuard`（ウィンドウ）・`RbiSessionLimiter`（上限・release 冪等）、`MockRbiBackend`（`RBI_BASE_URL` オリジンの推測不能な `sessionUrl` を返す PoC 用実装）を単体テスト対象とする（[テスト方針](../testing/policy.md)）。実バックエンドへの接続 I/O はテスト対象外。
 

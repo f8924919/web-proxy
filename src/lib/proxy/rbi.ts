@@ -71,7 +71,11 @@ export function shouldPromoteToRbi(
   config: RbiConfig
 ): boolean {
   if (config.backend === "off") return false;
-  return shouldPromoteToBrowser(result.html, result.status, result.contentType);
+  return shouldPromoteToBrowser(
+    result.html,
+    result.status,
+    result.contentType ?? ""
+  );
 }
 
 // ===== 再昇格抑止（PromotionGuard と同型・インメモリ状態） =====
@@ -150,8 +154,11 @@ export class MockRbiBackend implements RbiBackend {
 
   constructor(private readonly baseUrl: string) {}
 
+  // モック PoC は RbiBackend 契約の引数を意図的に無視する。
   async createSession(
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _targetUrl: string,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     _seedCookies?: CookieSeed[]
   ): Promise<{ sessionId: string; sessionUrl: string }> {
     const sessionId = crypto.randomUUID().replaceAll("-", "");
