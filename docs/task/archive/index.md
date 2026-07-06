@@ -38,6 +38,7 @@
 | [172-client-nav-url-hardening.md](172-client-nav-url-hardening.md)             | クライアント側ナビゲーション URL の堅牢化（history.pushState/replaceState 上書き＋Navigation API navigate 横取り＝buildNavApiRedirect＋リクエストシムの pg() フォールバック）。YouTube の location.replace 由来離脱を緩和（方式B 実測で youtubei API が ESCAPED→PROXIED）。残課題は #174 へ Issue #172 / PR #173 | 2026-06-28 |
 | [174-dynamic-element-src-intercept.md](174-dynamic-element-src-intercept.md)   | 動的挿入要素の src 横取り（buildElementSrcRewrite＋挿入メソッド/プロパティ setter/setAttribute/MutationObserver で script/link/media→/api/proxy・iframe→/browse、script は SRI 除去）。初回ロードの SW ギャップ離脱を解消（方式B 実測で /s/player・音声・CSS が ESCAPED→PROXIED：9件/離脱0）Issue #174 / PR #176 | 2026-06-28 |
 | [72-rbi-isolation-spike.md](72-rbi-isolation-spike.md)                         | 調査スパイク: RBI（リモートブラウザ分離・画面ストリーミング）方式の技術評価。全面 RBI 化は非推奨、ハイブリッド段階導入（書き換え方式基盤＋特定サイトのみ RBI フォールバック）を採用と判断。次段の自前ホスト PoC を #193 として起票 Issue #72                                                                     | 2026-07-05 |
+| [198-block-x-forwarded-headers.md](198-block-x-forwarded-headers.md)           | バグ修正: 非 GET 中継が X-Forwarded-Host を上流へ漏らし note.com が 403「Host is not allowed」→障害画面になる問題を、拒否リストへ x-forwarded-\* / forwarded / x-real-ip を追加して解消 Issue #198 / PR #199                                                                                                     | 2026-07-06 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
