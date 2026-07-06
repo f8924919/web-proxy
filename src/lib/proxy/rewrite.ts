@@ -100,6 +100,12 @@ export function rewriteSrcset(value: string, base: string): string {
 // 1 ビューポート分に制限され、スクロールでバーが画面外へ消える（#108。ipleak.net 等）。
 // fixed はコンテンツに重なるため、直後のスペーサー（#proxy-addressbar-spacer）の高さを
 // バーの実レンダリング高へ同期し（初期 + resize / load）、重なりを防ぐ。
+// 末尾 IIFE は高さ同期に加え自己修復（#201）を担う: App Router 等の全体 hydration サイトは
+// SSR 出力に無い注入ノードを React のクライアント側再レンダリングが removeChild で物理削除する
+// （note.com で実測）。注入時に取得したノード参照を保持し、documentElement の MutationObserver
+// （childList+subtree。#124 バックストップと同型）で離脱を検知したら同一ノードを現在の body
+// 先頭へ再挿入し、直後に高さを再同期する。同一ノード再挿入のため冪等（重複生成なし）で、
+// 入力中の値も保持される。再挿入は「同 id の要素が不在のとき」だけ行い、多重実行時も安全。
 // 仕様: docs/spec/screens/browse.md §コンテンツエリア / docs/arch/proxy.md §アドレスバー注入
 // HTML テキスト/属性値コンテキストへ動的文字列を埋め込む際の出力エスケープ。
 // & < > " ' を一括して実体参照へ変換する（& を最先頭に処理し二重実体化を防ぐ）。
@@ -123,7 +129,7 @@ const ADDRESS_BAR_HTML = (currentUrl: string) =>
   <a href="${BASE_PATH}/" style="color:#aaa;font-size:13px;text-decoration:none">ホーム</a>
 </div>
 <div id="proxy-addressbar-spacer" style="height:44px"></div>
-<script>(function(){var b=document.getElementById('proxy-addressbar'),s=document.getElementById('proxy-addressbar-spacer');if(!b||!s)return;function f(){s.style.height=b.offsetHeight+'px';}f();addEventListener('resize',f);addEventListener('load',f);})();</script>`.trim();
+<script>(function(){var b=document.getElementById('proxy-addressbar'),s=document.getElementById('proxy-addressbar-spacer');if(!b||!s)return;function f(){s.style.height=b.offsetHeight+'px';}f();addEventListener('resize',f);addEventListener('load',f);try{new MutationObserver(function(){try{var d=document,y=d.body;if(!y)return;if(!d.getElementById('proxy-addressbar')){y.insertBefore(b,y.firstChild);y.insertBefore(s,b.nextSibling);f();}else if(!d.getElementById('proxy-addressbar-spacer')){b.parentNode&&b.parentNode.insertBefore(s,b.nextSibling);f();}}catch(e){}}).observe(document.documentElement||document,{childList:true,subtree:true});}catch(e){}})();</script>`.trim();
 
 // url 未指定の GET /browse 用の案内ページ HTML（HTTP 200・自動遷移なし）。
 // 以前はホーム（${BASE_PATH}/）へ 307 リダイレクトしていたが、リバースプロキシ
