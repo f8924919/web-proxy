@@ -714,7 +714,7 @@ document に click を capture で委任（動的リンクにも効き、SPA の
 
 > 関連仕様: [プロキシ機能仕様 §CORS プリフライト対応](../spec/features/proxy.md#cors-プリフライト対応)
 
-SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`）に加え、プロキシ自身の文脈を漏らす `origin` / `referer`、およびブラウザの `cookie`（プロキシ自身の `__pxy_sid` / `__pxy_auth` を上流へ漏らさないため）を除外し（#27）、`Content-Type` / `Authorization` / `X-*` 等を残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。転送する `Cookie` は呼び出し側が jar から復元した `jarCookie`（空なら付けない）。`Authorization` はサーバー側のスコープ機構が無いため、`authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。
+SW が `/api/proxy` へ振り向けた**非 GET 中継**向けに、リクエストヘッダーを**拒否リスト方式**で広めに転送する純粋関数。hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`）に加え、プロキシ自身の文脈を漏らす `origin` / `referer`、ブラウザの `cookie`（プロキシ自身の `__pxy_sid` / `__pxy_auth` を上流へ漏らさないため）を除外し（#27）、さらに経路情報を漏らす `x-forwarded-host` / `x-forwarded-for` / `x-forwarded-proto` / `x-forwarded-port` / `forwarded` / `x-real-ip` を除外する（Next.js／リバースプロキシが受信リクエストへ自動付与し、転送すると上流のホスト検証で 403 になる。#198）。`Content-Type` / `Authorization` / `X-*` 等のカスタムヘッダーは残す。`X-CSRF-Token` などカスタムヘッダー依存の API を動かすため、許可リスト（`forwardableRequestHeaders`）より広く取る。転送する `Cookie` は呼び出し側が jar から復元した `jarCookie`（空なら付けない）。`Authorization` はサーバー側のスコープ機構が無いため、`authorizationAllowed(incoming, targetOrigin)`（中継元 `Referer` 由来オリジンと `targetOrigin` の完全一致判定）が真のときのみ転送する（#136）。
 
 ### `allowedCorsOrigin(origin, host)`
 
