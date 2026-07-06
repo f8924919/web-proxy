@@ -272,6 +272,12 @@ describe("relayRequestHeaders", () => {
     ["transfer-encoding", "chunked"],
     ["accept-encoding", "gzip"],
     ["cookie", "__pxy_sid=s1"],
+    ["x-forwarded-host", "proxy.example:8443"],
+    ["x-forwarded-for", "203.0.113.1"],
+    ["x-forwarded-proto", "http"],
+    ["x-forwarded-port", "8443"],
+    ["forwarded", "for=203.0.113.1;host=proxy.example"],
+    ["x-real-ip", "203.0.113.1"],
   ])(
     "hop-by-hop・インフラ系・ブラウザ Cookie の %s は素通ししない",
     (name, value) => {
@@ -281,6 +287,17 @@ describe("relayRequestHeaders", () => {
       expect(result["x-keep"]).toBe("1");
     }
   );
+
+  test("経路情報を漏らす X-Forwarded-Host は大文字表記の入力でも転送しない（#198）", () => {
+    // Next.js／リバースプロキシが自動付与する X-Forwarded-Host を上流へ転送すると、
+    // 上流のホスト検証（Rails HostAuthorization 等）で 403 になる（note.com 事例）。
+    const headers = new Headers();
+    headers.set("X-Forwarded-Host", "proxy.example:8443");
+    headers.set("Content-Type", "application/json");
+    const result = relayRequestHeaders(headers, ORIGIN_A, "");
+    expect(result["x-forwarded-host"]).toBeUndefined();
+    expect(result["content-type"]).toBe("application/json");
+  });
 
   test("プロキシ文脈を漏らす origin / referer は転送しない（#27）", () => {
     const headers = new Headers({

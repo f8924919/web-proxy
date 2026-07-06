@@ -456,14 +456,14 @@ JS アプリが発行するクロスオリジンの `fetch` / XHR（非単純メ
 
 SW が振り向けた非 GET リクエストは、ターゲットの API が要求する `Content-Type` やカスタムヘッダー（`X-CSRF-Token` 等）を保持する必要がある。そのため `/api/proxy` の非 GET 中継では、**拒否リスト方式**でリクエストヘッダーを広めに転送する（純粋関数 `relayRequestHeaders`）。
 
-- **拒否（転送しない）**: hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`〔`proxyFetch` が `identity` 固定のため〕）に加え、**プロキシ自身の文脈を漏らす `origin` / `referer`**（プロキシ origin・`/browse?url=…` 閲覧 URL のターゲットへの漏えい防止。サーバー間中継のため `Origin` 無し＝同一オリジン扱いとなり多くの API でむしろ整合する。#27）。
+- **拒否（転送しない）**: hop-by-hop・インフラ系（`host` / `connection` / `content-length` / `transfer-encoding` / `keep-alive` / `te` / `upgrade` / `accept-encoding`〔`proxyFetch` が `identity` 固定のため〕）に加え、**プロキシ自身の文脈を漏らす `origin` / `referer`**（プロキシ origin・`/browse?url=…` 閲覧 URL のターゲットへの漏えい防止。サーバー間中継のため `Origin` 無し＝同一オリジン扱いとなり多くの API でむしろ整合する。#27）、および**経路情報を漏らす `x-forwarded-host` / `x-forwarded-for` / `x-forwarded-proto` / `x-forwarded-port` / `forwarded` / `x-real-ip`**（Next.js やリバースプロキシが受信リクエストへ自動付与するため、転送するとプロキシ自身のホスト名・クライアント IP がターゲットへ漏れる。特に `X-Forwarded-Host` は Rails の HostAuthorization 等の上流ホスト検証に引っかかり 403 になる〔note.com が 403 `Host is not allowed` を返しフロントが障害画面に差し替わる事例〕。遮断対象は本事例で確認できた代表的なヘッダーに限定し、`x-forwarded-server` 等の亜種は対象外。#198）。
 - **転送する**: 上記以外（`Content-Type`・`Authorization`・`Cookie`・`X-*` 等）。
 - `GET` 中継は従来どおり許可リスト（`forwardableRequestHeaders`＝`Cookie` / `Authorization`）を維持する（既存挙動の回帰を避けるため）。
 - **`Cookie` はサーバー側 jar から復元**: 転送する `Cookie` は、`forwardableRequestHeaders` / `relayRequestHeaders` の両方で**ブラウザ受信分を使わず**、`__pxy_sid` セッション × 現ターゲット origin で jar から復元した分だけを載せる（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。ブラウザの `Cookie`（`__pxy_sid` / `__pxy_auth` 等プロキシ自身の Cookie）は上流へ転送しないため、インフラ認証 cookie（`CF_Authorization` 等）も漏れない。jar に保持分が無ければ `Cookie` ヘッダー自体を付けない。
 
 ### セキュリティ上の制約
 
-- **転送ヘッダーのハードニング（#27 対応済み）**: 非 GET 中継は拒否リスト方式で広めに転送するが、`Cookie` はブラウザ受信分を転送せず jar から現ターゲット origin 分のみを復元し（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）、プロキシ自身の文脈を漏らす `origin` / `referer` は除外する。`Authorization` は `Set-Cookie` のようなサーバー側往復機構が無くスコープ鍵を付与できないため、**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（[§Authorization のオリジンスコープ](#authorization-のオリジンスコープ136)。#136）。
+- **転送ヘッダーのハードニング（#27 対応済み）**: 非 GET 中継は拒否リスト方式で広めに転送するが、`Cookie` はブラウザ受信分を転送せず jar から現ターゲット origin 分のみを復元し（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）、プロキシ自身の文脈を漏らす `origin` / `referer`、経路情報を漏らす `x-forwarded-*` 系・`forwarded`・`x-real-ip` は除外する（#198）。`Authorization` は `Set-Cookie` のようなサーバー側往復機構が無くスコープ鍵を付与できないため、**中継元ページのオリジンが宛先ターゲット origin と一致する場合のみ**転送する（[§Authorization のオリジンスコープ](#authorization-のオリジンスコープ136)。#136）。
 - **CORS 許可オリジンの制限（#27 対応済み）**: `OPTIONS` 応答・中継レスポンスの `Access-Control-Allow-Origin` は、要求 `Origin` がリクエスト自身の Host と同一オリジンの場合のみエコーする（純粋関数 `allowedCorsOrigin`）。第三者クロスオリジンへ無検証エコー＋`Allow-Credentials` を返さない。SW の同一オリジン化により正当なクライアントは常に自プロキシ origin であり、回帰は無い。
 - **`credentials` の扱い**: SW は振り向け時に `credentials: "same-origin"` を用いる（振り向け先は常に同一オリジンの `/api/proxy`）。これにより、プロキシ自身が認証プロキシ（Cloudflare Access 等）の背後にある場合でも、プロキシ origin の認証 cookie（`CF_Authorization` 等）と `__pxy_sid` が `/api/proxy` へ届き、プロキシ自身の認証通過と jar 参照が成立する（`omit` だと未認証とみなされログインページへ 302 され CORS で失敗していた）。届いたブラウザ Cookie 自体は上流へは転送しない（[§サイト間 Cookie アイソレーション](#サイト間-cookie-アイソレーション)）。
 

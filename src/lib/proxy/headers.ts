@@ -211,6 +211,10 @@ export function forwardableRequestHeaders(
 // なり多くの API でむしろ整合する）。
 // cookie はブラウザ受信分（プロキシ自身の __pxy_sid / __pxy_auth 等）を上流へ漏らさない
 // ため除外し、転送する Cookie は cookieJar から復元した jarCookie だけを載せる（#151 Phase 1）。
+// x-forwarded-* / forwarded / x-real-ip は Next.js やリバースプロキシが受信リクエストへ
+// 自動付与する経路情報で、転送するとプロキシ自身のホスト名・クライアント IP がターゲットへ
+// 漏れるうえ、X-Forwarded-Host は上流のホスト検証（Rails HostAuthorization 等）に
+// 引っかかり 403 を招くため除外する（#198。note.com が 403 "Host is not allowed" を返す事例）。
 const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
   "host",
   "connection",
@@ -226,6 +230,12 @@ const RELAY_BLOCKED_REQUEST_HEADERS = new Set([
   "origin",
   "referer",
   "cookie",
+  "x-forwarded-host",
+  "x-forwarded-for",
+  "x-forwarded-proto",
+  "x-forwarded-port",
+  "forwarded",
+  "x-real-ip",
 ]);
 
 // SW が /api/proxy へ振り向けた非 GET 中継向けに、リクエストヘッダーを
