@@ -119,6 +119,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 バーは `position: fixed; top:0`（ビューポート基準で常に上部固定）。`position: sticky` はターゲットが `html, body { height:100% }` を指定すると包含ブロックが 1 ビューポート分に制限され、スクロールでバーが画面外へ消えるため採用しない（#108。ipleak.net 等で発生）。`fixed` でコンテンツに重ならないよう、バー直後にスペーサー `#proxy-addressbar-spacer` を挿入し、その高さをバーの実レンダリング高へ同期する（初期 + `resize` / `load`）。
 
+**自己修復（#201）**: Next.js App Router 等の全体 hydration サイトでは、React が hydration 不一致からのクライアント側再レンダリングで body 直下を作り直す際、注入したバー・スペーサーを `removeChild` で削除する（note.com の react-dom チャンクからの削除をスタックトレースで実測。表示後約 3 秒以内）。対策として注入スクリプトが両ノードの参照を保持し、`document.documentElement` を `MutationObserver`（`childList` + `subtree`。[実行時リクエスト横取りシム注入](#実行時リクエスト横取りシム注入sw-非依存124)のバックストップと同型）で監視して、ノードが document から外れたら保持している同一ノードを現在の `document.body` 先頭へ再挿入し、直後にスペーサー高さをバー実高へ同期する。同一ノード再挿入のため冪等（重複生成なし）で、`input` の値・高さ同期リスナーのクロージャも保持される。`subtree` 監視のため body ごとの差し替えにも追随する。再挿入の回数上限は設けない（React の再レンダリング収束後は削除が止まる。実測で CPU 高止まりなし）。
+
 ---
 
 ## Route Handler: `src/app/api/proxy/route.ts` ＋ `src/app/api/proxy/[...slug]/route.ts`
@@ -484,7 +486,7 @@ interface RbiBackend {
 
 ### アドレスバー注入
 
-`rewriteHtml` は URL 書き換えに加え、アドレスバー HTML スニペットを `<body>` 直後に注入する。バーは `position: fixed`、直後のスペーサー `#proxy-addressbar-spacer` の高さをバー実高へ同期してコンテンツの重なりを防ぐ（#108。詳細は前段の[アドレスバー注入](#アドレスバー注入)を参照）。
+`rewriteHtml` は URL 書き換えに加え、アドレスバー HTML スニペットを `<body>` 直後に注入する。バーは `position: fixed`、直後のスペーサー `#proxy-addressbar-spacer` の高さをバー実高へ同期してコンテンツの重なりを防ぐ（#108）。スニペット末尾の IIFE スクリプトが高さ同期に加え、全体 hydration サイトによるノード削除からの自己修復（同一ノード再挿入・#201）を担う（詳細は前段の[アドレスバー注入](#アドレスバー注入)を参照）。
 
 注入スニペット `ADDRESS_BAR_HTML` は最終 URL（`currentUrl`）を `<input value="…">` へ埋め込む。この値は汎用関数 `escapeHtml`（`rewrite.ts`）で `& < > " '` を一括して HTML 実体参照へエスケープしてから差し込む。`currentUrl` は `new URL` 正規化済みで属性ブレイクアウト自体は塞がれているが、`&`（クエリ区切り）や `< > '` は URL 文法上そのまま含まれ得るため、出力エンコードの欠落による XSS（CWE-116）を防ぐ目的で一括エスケープを行う（#137）。
 
