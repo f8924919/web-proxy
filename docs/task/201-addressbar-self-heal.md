@@ -29,4 +29,5 @@
 - [x] テスト先行（red 確認: 専用ファイル `rewrite.addressbar.dom.test.ts`・6 ケース）
 - [x] 実装 → green（全 808 テスト green・lint / typecheck 通過）
 - [x] 手動スモーク（2026-07-06）: code-server 経由の note.com で表示後 10 秒間 200ms 間隔の全 51 サンプルでバー存在・高さ 43px、バー/スペーサー各 1 個・スペーサー高さ同期・CPU 最大 3.3% で高止まりなし。example.com でも全サンプル存在で回帰なし
-- [ ] verify-gate → PR
+- [x] verify-gate（verify / docs-check green。evaluator は条件付き PASS → spec §アドレスバー への追記をユーザー決定で実施し解消）
+- [x] PR 作成（#202）
