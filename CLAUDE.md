@@ -102,6 +102,7 @@ npm run build
 | [docs/spec/index.md](docs/spec/index.md)       | 動作仕様・画面仕様の目次                                      |
 | [docs/arch/index.md](docs/arch/index.md)       | モジュール実装の目次                                          |
 | [docs/git-workflow.md](docs/git-workflow.md)   | ブランチ運用・Issue ベース開発・PR の詳細ルール               |
+| [docs/ci-guide.md](docs/ci-guide.md)           | CI 導入時の設計指針（導入タイミングで参照）                   |
 | [docs/testing/index.md](docs/testing/index.md) | テスト実行コマンド・方針・カバレッジ運用                      |
 | [docs/task/index.md](docs/task/index.md)       | タスクの進捗管理（セッション開始時に必ず確認）                |
 | [docs/docs-guide.md](docs/docs-guide.md)       | CLAUDE.md / docs の更新ルール（ドキュメント編集時に必ず参照） |

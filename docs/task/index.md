@@ -1,7 +1,7 @@
 # タスク一覧
 
 **進行中・未着手**のタスクを管理します。タスク追加・状態変更時にこのファイルを更新してください。
-完了したタスクは [docs/docs-guide.md](../docs-guide.md) §4.2 の手順で [archive/](archive/index.md) へ移動します（この表からは削除）。
+完了したタスクは [docs/docs-guide.md](../docs-guide.md) §4.2 の手順で [archive/](archive/index.md) へ移動します（この表からは削除）。この移動は**原則タスクを完結させる実装 PR に同梱**します（同梱できなかった場合のみ `/finish-task` で docs ブランチ＋PR による補完）。
 
 ## ステータス凡例
 
