@@ -1,6 +1,6 @@
 ---
 name: finish-task
-description: PR マージ後の後処理を実行する。main を最新化し、マージ済みブランチを削除（local/remote）し、完了タスクメモを docs/task/archive/ へ移動して両 index を更新する（archive 移動は docs ブランチ＋PR として行う）。PR がマージされた直後に使う。
+description: PR マージ後の後処理を実行する。main を最新化し、マージ済みブランチを削除（local/remote）する。完了タスクメモの archive 移動は原則実装 PR に同梱済みの前提で、同梱できなかった場合のみ補完として docs ブランチ＋PR（複数タスクまとめ可）で行う。PR がマージされた直後に使う。
 ---
 
 # finish-task — タスク完了・マージ後処理
@@ -24,11 +24,11 @@ description: PR マージ後の後処理を実行する。main を最新化し�
    - ローカル: `git branch -d <merged-branch>`
    - リモート: `git push origin --delete <merged-branch>`（ホストが自動削除する設定なら local のみ）
 
-### B. 完了タスクの archive 移動（対応する task メモがある場合のみ）
+### B. 完了タスクの archive 移動（補完・同梱漏れがある場合のみ）
 
-> `main` への直コミットは禁止のため、archive 移動は専用の docs ブランチ＋PR で行う（GitHub Flow）。
+> archive 移動は**原則タスクを完結させる実装 PR に同梱**する（[docs-guide.md](../../../docs/docs-guide.md) §4.2）。本手順は、同梱できなかった・し損ねた場合の**補完**であり、複数タスク分を 1 本の docs PR にまとめてよい。`main` への直コミットは禁止のため docs ブランチ＋PR で行う（GitHub Flow）。
 
-1. `git checkout -b docs/archive-<slug>`
+1. `git checkout -b docs/archive-<slug>`（まとめる場合は内容が分かる別名でよい）
 2. `git mv docs/task/<slug>.md docs/task/archive/<slug>.md`
 3. `docs/task/index.md` の「進行中・未着手」テーブルから該当行を削除する（他に進行中が無ければプレースホルダ行に戻す）。
 4. `docs/task/archive/index.md` の**適切なテーマ表**に 1 行追加する（タスク名・概要・更新日。Issue/PR 番号を概要に添える）。
@@ -36,9 +36,9 @@ description: PR マージ後の後処理を実行する。main を最新化し�
 6. コミット（日本語）→ `git push -u origin docs/archive-<slug>` → PR 作成（ベース `main`、本文日本語、関連 Issue/PR を記載。上記「ホスト操作の読み替え」に従う）。
 7. この docs PR がマージされたら、`git checkout main && git pull` 後に `docs/archive-<slug>` を local/remote とも削除する（= 本 skill の A を再実行）。
 
-### 対応する task メモが無い場合
+### 対応する task メモが無い場合・実装 PR に同梱済みの場合
 
-- `refactor` / `docs` / `chore` など task ファイルを持たない作業では B をスキップし、A（main 最新化・ブランチ削除）のみで完了とする。
+- `refactor` / `docs` / `chore` など task ファイルを持たない作業、または archive 移動を実装 PR に同梱済みの場合は B をスキップし、A（main 最新化・ブランチ削除）のみで完了とする。
 
 ## やらないこと
 

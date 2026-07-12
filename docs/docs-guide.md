@@ -62,6 +62,7 @@ CLAUDE.md には概要 1〜2 行と詳細ファイルへのリンクのみを残
 | `docs/testing/`        | テスト方針・実行コマンド・カバレッジ運用                                                        | `kebab-case.md`                                        |
 | `docs/setup.md`        | 環境構築・開発サーバー起動・IDE 設定・トラブルシューティング                                    | 直下の単独ファイル                                     |
 | `docs/git-workflow.md` | ブランチ運用・Issue ベース開発・PR の詳細ルール                                                 | 直下の単独ファイル                                     |
+| `docs/ci-guide.md`     | CI 導入時の設計指針（雛形は CI 設定本体を含まないため、導入時のチェックリストのみ）             | 直下の単独ファイル                                     |
 | `docs/docs-guide.md`   | 本ガイド                                                                                        | 直下の単独ファイル                                     |
 
 ### 2.2 既存フォルダにファイルを追加する基準
@@ -182,15 +183,20 @@ CLAUDE.md にも記載のとおり、**コードまたは仕様を変更・拡�
 | テスト対象モジュール追加                                                | テストファイル新規 + `docs/testing/policy.md` のスコープ表更新                               |
 | リファクタリング（振る舞い不変）                                        | 該当 `arch/{module}.md` のみ（必要に応じて）                                                 |
 | エージェント / スキルの追加・変更 (`.claude/agents/` `.claude/skills/`) | 該当 `.claude/` 定義 + `docs/git-workflow.md` §5.2（エージェント表）/ §5.3（スキル表）を更新 |
+| hooks の追加・変更 (`.claude/hooks/` `.claude/settings.json`)           | 該当 hook 実装 + `docs/git-workflow.md` の該当ルール節（例: main 直コミット禁止は §1）を更新 |
 
 > **GUI プロジェクトの場合は追加で**: 新しい画面追加 → `docs/spec/screens/{name}.md` 新規 + `spec/screens/index.md` 追記
 
 ### 4.2 タスク完了時の手順
 
+archive 移動は**タスクを完結させる実装 PR に同梱するのを原則**とする（専用 PR を立てない）。
+
 1. コード変更 + 対応ドキュメント更新を同一の作業範囲で完了させる
 2. `docs/task/{slug}.md` を `docs/task/archive/` へ移動する
 3. `docs/task/index.md`「タスク」テーブルから該当行を削除する
 4. `docs/task/archive/index.md` の表に概要 + 完了日を追記する
+
+タスクが複数 PR にまたがる場合は**最後の PR** に同梱する。同梱できなかった場合の補完として、複数タスク分をまとめた docs ブランチ + PR（`/finish-task`）で後追い処理してよい。
 
 ---
 

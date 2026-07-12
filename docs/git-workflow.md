@@ -16,6 +16,13 @@
 - すべての変更は `main` から切ったフィーチャーブランチで行い、`main` へ PR を出してマージする。
 - **`main` で直接コミットしない。**
 
+このルールは二段構えで機械的に強制できる（クライアント側を同梱済み）。
+
+- **クライアント側（早期警告）**: Claude Code の PreToolUse hook（[.claude/hooks/block_main_commit.py](../.claude/hooks/block_main_commit.py)・[.claude/settings.json](../.claude/settings.json)）が、カレントブランチが `main` のときの `git commit` / `git push` をコミット前にブロックする。対象は Claude Code の Bash / PowerShell ツール経由のコマンドのみ（matcher `Bash|PowerShell`）。判定はカレントブランチのみで、git コマンド失敗時等は**フェイルオープン**（誤って全コマンドをブロックしない）。検出は「単発・複合コマンド（`&&` / `;` / `|` 区切り）のサブコマンド位置での `git commit` / `git push` 一致」に留め、`git -c k=v commit` のようなオプション挟み込みや文字列内の擦り抜けは追わない（誤ブロック回避を優先し、擦り抜けはサーバー側に委ねる設計）。settings.json の hook 定義は **exec form**（`command` + `args` 配列・`${CLAUDE_PROJECT_DIR}` プレースホルダは Claude Code が置換）とする（shell form はシェル展開・PATH 解決依存で Windows にて不発火の実績があるため）。hooks はセッション開始時に読み込まれるため、変更後の実効確認は新しいセッションで行う。起動子が動かない場合も Claude Code は非ブロッキング扱いでコマンドを通す（フェイルオープン）が、その状態では hook が無効なので注意。
+- **サーバー側（最後の砦）**: ホスティング側の branch protection で `main` への直 push を管理者を含めて拒否する（GitHub なら branch protection の `enforce_admins` を有効化）。PR 経由のマージには影響しない。緊急時に一時解除した場合は、対応後に必ず再有効化する。
+
+ブランチ判定は hook 入力の `cwd` を起点にした**実効ディレクトリ**に対して行う。複合コマンド内の `cd <path>` セグメントを追跡し、git のグローバルオプション `-C <path>`（空白区切り・複数指定の累積）も解決したうえで、対象リポジトリのカレントブランチを判定する。これにより別リポジトリの feature ブランチへの commit/push は誤ブロックせず、別リポジトリの `main` 上なら従来どおりブロックする。`--git-dir` / `--work-tree` によるリポジトリ指定・クォート付きパス（スペースを含むパス）は追わず、パス解決に失敗するケースは一律フェイルオープン（通す）。
+
 ```
 main ──┬──────────────────┬──→ (本番)
        │ feature/12-foo    │
@@ -81,7 +88,7 @@ main ──┬──────────────────┬──→
    - docs / CLAUDE.md を変更した場合は `docs-check` サブエージェント（Sonnet）で整合性（index 更新漏れ・リンク切れ・命名・関連仕様リンク）を点検する。
    - `feature` / `bugfix` / `hotfix` ブランチでは `evaluator` サブエージェント（Opus）で受け入れ条件・spec の充足を独立評価する（起動可否は CLAUDE.md の評価ゲートモードに従う、§5.2）。
 8. PR を作成（ベース `main`、本文は原則日本語＝対応する Issue スレッドが日本語以外ならその言語に合わせる、関連 Issue を `Closes #<issue>` で紐付け）。GitHub 以外は冒頭注記の読み替えに従う。
-9. **ユーザーの承認後**にマージし、マージ済みブランチを削除。完了タスクの archive 移動を含む後処理は `/finish-task` skill で実行できる（§5.3）。
+9. **ユーザーの承認後**にマージし、マージ済みブランチを削除。完了タスクの archive 移動は**原則 step 6〜8 の実装 PR に同梱**する（[docs-guide.md](docs-guide.md) §4.2）。マージ後の後処理（main 最新化・ブランチ削除、同梱できなかった場合のまとめ archive 移動）は `/finish-task` skill で実行できる（§5.3）。
 
 ### 5.1 補足ルール
 
@@ -143,7 +150,7 @@ main ──┬──────────────────┬──→
 | ------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | [`start-task`](../.claude/skills/start-task/SKILL.md)   | Issue 確認/起票・ブランチ作成・`investigate` 起動・`criteria-review`（受け入れ条件レビュー・助言）・（§5.5 発火時）`design-review`（設計レビュー・助言）・docs 先/テスト先の順序ゲート（判断は自動化せず確認に留める）・実装 | step 1〜6      |
 | [`verify-gate`](../.claude/skills/verify-gate/SKILL.md) | ブランチ種別を判定し `verify` →（docs 変更時）`docs-check` →（feature/bugfix/hotfix・モードに応じて）`evaluator` を順に起動・集約                                                                                            | step 7         |
-| [`finish-task`](../.claude/skills/finish-task/SKILL.md) | `main` 最新化・マージ済みブランチ削除・完了タスクの archive 移動（docs ブランチ＋PR）                                                                                                                                        | step 9         |
+| [`finish-task`](../.claude/skills/finish-task/SKILL.md) | `main` 最新化・マージ済みブランチ削除・（実装 PR に同梱できなかった場合の補完として）完了タスクの archive 移動（複数タスクまとめ可・docs ブランチ＋PR）                                                                      | step 9         |
 
 skill が呼ぶサブエージェントの**合否・設計判断は委譲しない**点は §5.1 / §5.2 と同じ。skill は正しい順序・条件での起動と結果集約に徹する。ホスト操作（Issue / PR）を含む skill は冒頭注記の読み替えに従う。
 
