@@ -1,0 +1,19 @@
+# 依存更新の自動 PR（docs/ci-guide.md）。commit prefix はリポジトリの
+# コミット規約（chore: 依存更新）に合わせる。
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore"

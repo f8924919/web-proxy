@@ -1,6 +1,6 @@
 # CI 導入ガイド（設計指針）
 
-このリポジトリはまだ CI 設定本体（ワークフローファイル）を持ちません。本ガイドは、CI を導入する際の**設計指針チェックリスト**です（テンプレート [claude-templates](https://github.com/f8924919/claude-templates) から取り込み）。実運用プロジェクトで得た知見を一般化したもので、GitHub Actions を例に書いていますが考え方は他の CI サービスでも同じです。
+このリポジトリの CI 設定本体は [.github/workflows/test.yml](../.github/workflows/test.yml)（lint / format / 型 / テスト。必須チェック名 `test`）・[.github/workflows/codeql.yml](../.github/workflows/codeql.yml)（静的セキュリティ解析）・[.github/dependabot.yml](../.github/dependabot.yml)（依存更新）にある（#208 で導入）。本ガイドは CI 設定を変更・拡張する際の**設計指針チェックリスト**です（テンプレート [claude-templates](https://github.com/f8924919/claude-templates) から取り込み）。実運用プロジェクトで得た知見を一般化したもので、GitHub Actions を例に書いていますが考え方は他の CI サービスでも同じです。
 
 ## チェックリスト
 

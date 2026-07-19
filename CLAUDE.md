@@ -63,7 +63,7 @@ npm install
 # Lint（問題の検出）
 npm run lint
 
-# フォーマット
+# フォーマット（CI では検証専用の format:check を実行する）
 npm run format
 
 # 型チェック

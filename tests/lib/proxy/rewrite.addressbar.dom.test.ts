@@ -25,7 +25,7 @@ function injectAddressBar() {
   document.querySelectorAll("script").forEach((s) => {
     if (s.textContent && s.textContent.includes("proxy-addressbar-spacer")) {
       found = true;
-      // eslint-disable-next-line no-eval
+
       eval(s.textContent);
     }
   });

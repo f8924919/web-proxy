@@ -19,7 +19,7 @@ function injectInterceptor() {
   document.querySelectorAll("script").forEach((s) => {
     if (s.textContent && s.textContent.includes("addEventListener('submit'")) {
       // 注入スクリプトを実行し、document への submit 委任を登録する
-      // eslint-disable-next-line no-eval
+
       eval(s.textContent);
     }
   });
@@ -247,7 +247,6 @@ describe("クリックナビ横取りスクリプト（注入）", () => {
       .replace(/<\/body>[\s\S]*$/i, "");
     document.querySelectorAll("script").forEach((s) => {
       if (s.textContent && s.textContent.includes("addEventListener('click'")) {
-        // eslint-disable-next-line no-eval
         eval(s.textContent);
       }
     });
@@ -404,7 +403,6 @@ describe("history.pushState/replaceState 横取りシム（注入実行・#172�
       .replace(/<\/body>[\s\S]*$/i, "");
     document.querySelectorAll("script").forEach((s) => {
       if (s.textContent && s.textContent.includes("addEventListener('click'")) {
-        // eslint-disable-next-line no-eval
         eval(s.textContent);
       }
     });
@@ -492,7 +490,7 @@ describe("document.domain ドメインガード無効化シム（注入実行）
       /<script>((?:(?!<\/script>)[\s\S])*Document\.prototype(?:(?!<\/script>)[\s\S])*)<\/script>/
     );
     expect(m).not.toBeNull();
-    // eslint-disable-next-line no-eval
+
     eval(m![1]);
   }
 
@@ -559,7 +557,7 @@ describe("実行時リクエスト横取りシム: navigator.sendBeacon（注入
       /<script>((?:(?!<\/script>)[\s\S])*navigator\.sendBeacon=(?:(?!<\/script>)[\s\S])*)<\/script>/
     );
     expect(m).not.toBeNull();
-    // eslint-disable-next-line no-eval
+
     eval(m![1]);
   }
 
@@ -629,7 +627,7 @@ describe("動的挿入要素の src 横取りシム（注入実行・#174）", (
       /<script>((?:(?!<\/script>)[\s\S])*buildElementSrcRewrite[\s\S]*?)<\/script>/
     );
     expect(m).not.toBeNull();
-    // eslint-disable-next-line no-eval
+
     eval((m as RegExpMatchArray)[1]);
   }
 

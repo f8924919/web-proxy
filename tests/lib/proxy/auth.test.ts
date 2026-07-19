@@ -3,7 +3,6 @@
 
 import {
   AUTH_COOKIE_NAME,
-  AUTH_HEADER_NAME,
   proxyAuthConfigFromEnv,
   tokensMatch,
   parseCookieValue,
