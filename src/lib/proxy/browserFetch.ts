@@ -74,8 +74,7 @@ export function shouldUseBrowser(
 // 外部ブラウザサービスへ CDP 接続するかを表す。インターフェース契約は不変で、
 // getBrowser() の起動方法だけがこれで切り替わる（#71）。
 export type BrowserBackend =
-  | { mode: "launch" }
-  | { mode: "cdp"; endpoint: string };
+  { mode: "launch" } | { mode: "cdp"; endpoint: string };
 
 // 環境変数からブラウザ実行基盤を決める。PROXY_BROWSER_CDP_URL が非空なら外部サービスへ
 // connectOverCDP（cdp）、未設定・空白のみなら自前 Chromium 起動（launch・既定）。
@@ -123,10 +122,7 @@ export const STEALTH_INIT_SCRIPT =
   "Object.defineProperty(navigator,'webdriver',{get:()=>undefined});";
 
 export type BrowserWaitUntil =
-  | "load"
-  | "domcontentloaded"
-  | "networkidle"
-  | "commit";
+  "load" | "domcontentloaded" | "networkidle" | "commit";
 
 export interface BrowserWaitConfig {
   waitUntil: BrowserWaitUntil;
