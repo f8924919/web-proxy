@@ -41,6 +41,7 @@
 | [198-block-x-forwarded-headers.md](198-block-x-forwarded-headers.md)           | バグ修正: 非 GET 中継が X-Forwarded-Host を上流へ漏らし note.com が 403「Host is not allowed」→障害画面になる問題を、拒否リストへ x-forwarded-\* / forwarded / x-real-ip を追加して解消 Issue #198 / PR #199                                                                                                     | 2026-07-06 |
 | [201-addressbar-self-heal.md](201-addressbar-self-heal.md)                     | バグ修正: App Router サイト（note.com）の React 全体 hydration が注入アドレスバーを削除し UI が消える問題を、MutationObserver による同一ノード再挿入の自己修復で解消 Issue #201 / PR #202                                                                                                                        | 2026-07-06 |
 | [public-release.md](public-release.md)                                         | リポジトリのパブリック化。公開前整備（LICENSE=MIT・SECURITY.md・README 整備・description/topics）→ public 切り替え → branch protection（enforce_admins）・secret scanning・Dependabot alerts 有効化。CI 等の継続強化は #208 へ分割 Issue #206 / PR #207                                                          | 2026-07-19 |
+| [208-ci-setup.md](208-ci-setup.md)                                             | CI 導入。test.yml（lint/format/typecheck/test --coverage・Node 22・必須チェック名 test）・codeql.yml（TS + actions）・dependabot.yml を追加し、lint を eslint . に拡大・collectCoverageFrom を新設（policy §5 と双方向同期）。green 実績確認後に必須チェック昇格（strict: false）Issue #208 / PR #210            | 2026-07-19 |
 
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
