@@ -38,5 +38,6 @@
 - [x] criteria-review → Issue #208 の受け入れ条件を明確化（トリガ・Node 版・lint 拡大方針・カバレッジ除外・CodeQL 言語・Phase 分割と green 実績の定義）
 - [x] design-review → カバレッジ粒度・sw.js の lint 除外・ジョブ名固定・strict=false を確定（上記）
 - [x] 実装（Phase A）: workflows 2 本 + dependabot.yml + lint 拡大（違反 8 件解消）+ collectCoverageFrom + docs 同期。ローカルで lint / 型 / test --coverage 全 green
-- [ ] verify-gate → PR
-- [ ] Phase B: マージ後に必須ステータスチェック指定（`gh api`）
+- [x] verify-gate → PR #210（verify green・docs-check 指摘なし・evaluator PASS。非ブロッキング指摘 2 件を反映）
+- [x] green 実績: PR #210 上で test（37s）・CodeQL 両言語 pass
+- [x] Phase B: `required_status_checks` に `test` を指定（`strict: false`・既存設定を全項目再送で維持、適用後 GET で確認）
