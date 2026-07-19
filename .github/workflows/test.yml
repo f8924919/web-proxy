@@ -1,0 +1,48 @@
+name: Test
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# checkout / 依存取得 / 検証のみで書き込み権限を要さないため、
+# 既定トークンを読み取り専用に絞る（最小権限）。
+permissions:
+  contents: read
+
+# 同一 ref で連続 push された場合は古い実行をキャンセルする。
+# main push は必須チェック対象となる正本の検証なので巻き添えキャンセルしない。
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # このジョブ名（test）は branch protection の必須ステータスチェックとして
+  # 参照される契約（docs/ci-guide.md 項目 8）。改名すると protection が孤立参照に
+  # なるため変えない。OS 追加等は既存名を壊さない別ジョブで行う（項目 4）。
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22 # README「動作環境」の推奨値
+          cache: npm
+
+      - run: npm ci
+
+      # 以下は CLAUDE.md 記載のローカルコマンドと同一（docs/ci-guide.md 項目 1）
+      - name: Lint (eslint)
+        run: npm run lint
+
+      - name: Format check (prettier)
+        run: npm run format:check
+
+      - name: Typecheck (tsc)
+        run: npm run typecheck
+
+      # カバレッジは計測・レポート出力のみ。閾値は導入しない（docs/ci-guide.md 項目 3）
+      - name: Test (jest, coverage)
+        run: npm test -- --coverage

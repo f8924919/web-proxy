@@ -1,0 +1,49 @@
+name: CodeQL
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    # 週次スキャン。Test ワークフロー（PR/push 連動）と競合しない早朝帯。
+    - cron: "0 3 * * 2"
+
+# 解析結果（SARIF）を Security タブへアップロードするための最小権限。
+permissions:
+  contents: read
+  security-events: write
+
+# 同一 ref で連続 push された場合は古い実行をキャンセルする。
+# schedule / main push は週次スキャン・正本の解析結果を取りこぼさないよう
+# 巻き添えキャンセルしない（PR 実行のみキャンセル可）。
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # javascript-typescript: src / tests / scripts / public を含む TS・JS を解析。
+          # actions: .github/workflows/** のワークフロー定義自体を解析。
+          # いずれも非ビルド言語のため build-mode: none を明示（autobuild 回避）。
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - uses: actions/checkout@v7
+
+      # クエリセットは default（精度重視）。誤検知ノイズが許容範囲なら
+      # security-extended への強化を再検討する（docs/ci-guide.md 項目 6）。
+      - uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+
+      - uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"

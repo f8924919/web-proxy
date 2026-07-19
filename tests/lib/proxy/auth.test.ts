@@ -1,9 +1,8 @@
-/** @jest-environment node */
+﻿/** @jest-environment node */
 // 仕様: docs/spec/features/proxy.md §認証 / 接続元許可制（任意・#148）
 
 import {
   AUTH_COOKIE_NAME,
-  AUTH_HEADER_NAME,
   proxyAuthConfigFromEnv,
   tokensMatch,
   parseCookieValue,
