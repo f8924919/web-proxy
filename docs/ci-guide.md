@@ -1,6 +1,6 @@
 # CI 導入ガイド（設計指針）
 
-このリポジトリの CI 設定本体は [.github/workflows/test.yml](../.github/workflows/test.yml)（lint / format / 型 / テスト。必須チェック名 `test`）・[.github/workflows/codeql.yml](../.github/workflows/codeql.yml)（静的セキュリティ解析）・[.github/dependabot.yml](../.github/dependabot.yml)（依存更新）にある（#208 で導入）。本ガイドは CI 設定を変更・拡張する際の**設計指針チェックリスト**です（テンプレート [claude-templates](https://github.com/f8924919/claude-templates) から取り込み）。実運用プロジェクトで得た知見を一般化したもので、GitHub Actions を例に書いていますが考え方は他の CI サービスでも同じです。
+このリポジトリの CI 設定本体は [.github/workflows/test.yml](../.github/workflows/test.yml)（lint / format / 型 / テスト / ビルド。必須チェック名 `test`）・[.github/workflows/codeql.yml](../.github/workflows/codeql.yml)（静的セキュリティ解析）・[.github/dependabot.yml](../.github/dependabot.yml)（依存更新）にある（#208 で導入）。本ガイドは CI 設定を変更・拡張する際の**設計指針チェックリスト**です（テンプレート [claude-templates](https://github.com/f8924919/claude-templates) から取り込み）。実運用プロジェクトで得た知見を一般化したもので、GitHub Actions を例に書いていますが考え方は他の CI サービスでも同じです。
 
 ## チェックリスト
 
@@ -36,7 +36,17 @@ lint / フォーマット / 型チェックの対象を、ソースディレク�
 
 branch protection の必須ステータスチェックに CI ジョブを指定し、管理者にも適用する（GitHub なら `enforce_admins`）。クライアント側の hook（[docs/git-workflow.md](git-workflow.md) §1）と合わせて二段構えになる。
 
-### 9. リリース後の実資産スモークを完了条件にする
+### 9. ビルドの成否を CI で担保する
+
+lint / フォーマット / 型チェック / テストがすべて green でも**ビルドは壊れうる**。ビルド時にしか走らない検証（フレームワークのバージョン整合チェック、静的生成、バンドル解決）は他のゲートを素通りするため、ビルドコマンドを CI のステップに含める。
+
+このリポジトリでは #218（dependabot が `react` のみ 19.2.8 へ更新し `react-dom` を 19.2.7 に残した）が CI 全 pass のままマージされ、`main` の `npm run build` を「react と react-dom のバージョン不一致」で失敗させた（#225）。依存更新 PR が自動で流れてくる運用では、この種の破壊は必ず起きる前提で CI 側に受け止めを置く。
+
+- ステップは**実行コストの低い順**に並べ、ビルドは最後に置く（早期 fail を優先する）。
+- ジョブ名 `test` は branch protection の必須チェック名なので変えない（項目 8）。
+- ビルドキャッシュ（`.next/cache` 等）は**無条件には入れない**。古いキャッシュによる incremental build で、本来 fail すべきビルドが通る恐れがある。導入する場合は「意図的に壊した状態で fail すること」を再確認してから入れ、判断根拠を記録する。
+
+### 10. リリース後の実資産スモークを完了条件にする
 
 **本番の外部サービス API・実リリース資産（配布物）に依存する機能**（更新チェック・署名検証・テレメトリ等）を含むリリースは、公開直後に**実資産・本番 API に対する E2E スモーク**を行い、pass を確認してからリリース完了（アナウンス・タスク完了）とする。例: 更新チェック系の変更なら、旧バージョンを偽装した実バイナリで新リリースを検知・処理できることを確認する。
 

@@ -204,6 +204,26 @@ ss -ltnp | grep :3000
 
 `next-env.d.ts` が生成されていない場合は、一度 `npm run build` または `npm run dev` を実行してください（Next.js が自動生成します）。
 
+### （Windows）`npm run format:check` が変更していないファイルまで警告する
+
+改行コードの不一致が原因です。Prettier は LF を期待しますが、Git の `core.autocrlf=true` が有効だと作業ツリーが CRLF になり、**全ファイルが「整形崩れ」として警告されます**。この状態では実際の整形崩れがノイズに埋もれて見つけられません（CI は LF で checkout されるため再現せず、ローカル green のまま CI が red になります）。
+
+リポジトリ直下の [.gitattributes](../.gitattributes) が `* text=auto eol=lf` で作業ツリーを LF に統一するため、通常はこの問題は起きません。それでも全件警告が出る場合は、`.gitattributes` 追加前にチェックアウトしたファイルが CRLF のまま残っています。再正規化してください。
+
+```bash
+git add --renormalize .
+git status   # 改行コードのみの差分が出る場合はコミットする
+```
+
+どうしても解消しない場合は、変更したファイルだけを個別に確認します。
+
+```bash
+# 変更ファイルを列挙して個別にチェック
+git diff --name-only origin/main | xargs npx prettier --check
+```
+
+`npm run format` は作業ツリー全体を書き換えるため、無関係な大量の差分が生まれます。整形崩れの調査目的では使わないでください。
+
 ---
 
 ## 8. ヘッドレスブラウザでのデバッグ（方式B）
