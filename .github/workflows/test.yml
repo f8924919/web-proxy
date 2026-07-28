@@ -47,3 +47,10 @@ jobs:
       # カバレッジは計測・レポート出力のみ。閾値は導入しない（docs/ci-guide.md 項目 3）
       - name: Test (jest, coverage)
         run: npm test -- --coverage
+
+      # ビルドは他のゲートを素通りする破壊（依存のバージョン整合など）を受け止める
+      # 最後の砦（docs/ci-guide.md 項目 9・#225）。実行コストが最も高いので末尾に置く。
+      # .next/cache のキャッシュは入れない（古いキャッシュの incremental build で
+      # 本来 fail すべきビルドが通りうるため。項目 9）。
+      - name: Build (next build)
+        run: npm run build
