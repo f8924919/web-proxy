@@ -14,7 +14,7 @@ dependabot PR（#218〜#222）のマージ後に `npm install` を実行した�
 
 `npm update` は 43 パッケージが変化しスコープが過大なため採らない。
 
-恒久的な方針・overrides の削除条件は [docs/arch/dependencies.md](../arch/dependencies.md) を正本とする。
+恒久的な方針・overrides の削除条件は [docs/arch/dependencies.md](../../arch/dependencies.md) を正本とする。
 
 ## 誤判断とその訂正（記録）
 
@@ -34,4 +34,4 @@ dependabot PR（#218〜#222）のマージ後に `npm install` を実行した�
 - [x] docs 先行（`docs/arch/dependencies.md` 新規作成・`docs/arch/index.md` / `docs/docs-guide.md` 追記）
 - [x] next 15.5.22 更新・`overrides` 追加・`package-lock.json` 再生成
 - [x] 検証（verify / docs-check / evaluator）
-- [ ] PR 作成・マージ
+- [x] PR 作成・マージ（PR #228）
