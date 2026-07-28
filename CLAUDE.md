@@ -68,6 +68,10 @@ npm run format
 
 # 型チェック
 npm run typecheck
+
+# ビルド（CI の検証ゲートにも含む。依存のバージョン整合など、
+# lint / 型 / テストを素通りする破壊をここで検知する）
+npm run build
 ```
 
 ## テスト
@@ -87,10 +91,9 @@ npm test -- --coverage
 ```bash
 # 開発時の起動
 npm run dev
-
-# ビルド
-npm run build
 ```
+
+> ビルド（`npm run build`）は検証ゲートの一部として上の「Lint / Format / 型チェック」節に記載している。
 
 ## ドキュメントマップ
 
