@@ -11,6 +11,7 @@
 複数モジュールで共通する制約（例: スレッド間通信は Signal/Slot 経由、エラーは結果型で返す、ロガーは DI 経由など）がある場合はここに簡潔に記述する。各モジュール固有のルールは個別の `arch/{name}.md` に書く。
 -->
 
+- **依存パッケージ**: npm 依存のバージョン固定方針・`overrides` の理由と削除条件・未解消の脆弱性は [dependencies.md](dependencies.md) を正本とする（#223）。
 - **エラーログ**: 中継処理の異常系ログは共通ロガー `src/lib/logger.ts`（`logError`）経由で出力する。閲覧先 URL・ホスト・IP は出力前に redact し、`PROXY_LOG_LEVEL` でレベル制御する（#138。詳細は [proxy.md §src/lib/logger.ts](proxy.md#srclibloggerts共通ロガー138)）。
 
 ## モジュール一覧
