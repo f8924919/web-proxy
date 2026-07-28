@@ -1,0 +1,18 @@
+# 改行コードの正規化（#226）
+#
+# リポジトリ内はすべて LF で保持し、作業ツリーにも LF でチェックアウトする。
+# Git の core.autocrlf 設定に関わらず統一されるため、Windows 環境でも
+# Prettier（LF 前提）の format:check がノイズなく機能する。
+# 詳細は docs/setup.md「よくあるトラブル」を参照。
+* text=auto eol=lf
+
+# バイナリは変換しない
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.pdf binary
