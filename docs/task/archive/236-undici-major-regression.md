@@ -2,7 +2,7 @@
 
 - Issue: [#236](https://github.com/f8924919/web-proxy/issues/236)
 - ブランチ: `bugfix/236-undici-major-regression`
-- ステータス: 進行中
+- ステータス: 完了（PR #238 マージ済み）
 
 ## 背景
 
