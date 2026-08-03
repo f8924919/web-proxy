@@ -17,7 +17,7 @@
   },
   "dependencies": {
     "next": "^15.5.22",
-    "node-html-parser": "^9.0.0",
+    "node-html-parser": "^9.0.1",
     "playwright": "^1.61.1",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
