@@ -84,6 +84,24 @@ v5: typeof require('brace-expansion') === 'object'     → 同じ呼び出しは
 
 この 8 件は当初「stable に修正版が存在しない」と誤判断した。`npm audit` が集約表示する `range` が `9.3.4-canary.0 - 16.3.0-preview.7`（16.x 系まで含むアドバイザリの和集合）だったためだが、**per-advisory のレンジはいずれも `<15.5.21`** で、15.5.21 / 15.5.22 は stable として公開済みだった。集約 `range` を実際の解決状況と取り違えないこと（§4 手順 1）。
 
+## 3.2 undici のバージョン上限（7 系固定・#236）
+
+`undici` は **`^7.29.0`** に固定する。**8 系以降へ上げてはならない。**
+
+`src/lib/proxy/fetch.ts` は SSRF の IP ピン留め（#129）のため npm の `undici` から `Agent` を生成し、**Node 組み込みの `fetch()`** へ per-request の `dispatcher` として渡している。組み込み `fetch()` の実体は Node にバンドルされた undici であり、npm 側とは別インスタンス。undici 8 系では dispatcher のハンドラ interface が刷新され（`onRequestStart` 等）、Node バンドル版と非互換になる。
+
+- 症状: `TypeError: fetch failed` / cause `invalid onRequestStart method`（`UND_ERR_INVALID_ARG`）。**プロキシ中継が全経路で 502 になる**
+- Node のバージョンが undici 8 の要求（>= 22.19.0）を満たしていても再現する（Node v24.14.1 で確認）
+- 実装上の背景・解除条件は [proxy.md §undici のメジャーバージョン制約（7 系固定・#236）](proxy.md#undici-のメジャーバージョン制約7-系固定236)
+- Dependabot は `.github/dependabot.yml` の `ignore` で major 更新を止めている。**`ignore` は security update にも効く**ため、undici の GHSA はリポジトリの Security タブで別途確認する
+- undici 8 の CVE 修正を取り込めないことの影響は限定的。実際の HTTP リクエストを処理しているのは Node 組み込みの undici であり、npm 側は `Agent` 生成にしか使われていない
+
+### dependabot の PR を CI green だけで信用しない（#236 の教訓）
+
+§1 の「CI が green であることを確認してマージする」は**必要条件であって十分条件ではない**。#236 では lint / 型 / テスト / build のすべてが green のまま、プロキシ中継を全滅させる回帰が `main` に入った。
+
+**ランタイムの実装（Node 組み込みの undici、Playwright のブラウザバイナリなど）と npm パッケージの版が噛み合う必要がある依存**は、型検査にもモックテストにも現れない形で壊れる。`undici` / `playwright` のメジャー更新 PR では、CI に加えて `npm run dev` での実挙動確認を行う。回帰検知テストは [testing/policy.md §1.1](../testing/policy.md) を参照。
+
 ## 4. 変更手順
 
 1. `npm audit --json` で各脆弱性の `nodes`（実際の解決パス）と per-advisory の脆弱範囲を確認する。npm が集約表示する `range` はアドバイザリの和集合で実態とずれるため、`via` の個別レンジを見る。

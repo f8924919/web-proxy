@@ -207,6 +207,9 @@ export async function relayBrowse(
         return htmlResponse("ページのサイズが大きすぎます。", 413);
       }
       if (err instanceof FetchTimeoutError) {
+        // タイムアウト以外の上流失敗もここに丸められる。原因は cause 連鎖に入っている
+        // ため、ログへ出さないと切り分けができない（#236）。
+        logError("[proxy/browse]", err);
         return htmlResponse("サイトに接続できませんでした。", 502);
       }
       // DNS 解決失敗など、その他の予期しないエラー

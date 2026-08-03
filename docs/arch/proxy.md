@@ -219,16 +219,42 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 `assertSsrfAllowed` の事前検査だけでは、`fetch` が接続時に独立して再解決するため、検査と接続の間に応答 IP を変えるリバインディングを防げない（[#129](https://github.com/f8924919/web-proxy/issues/129)）。`proxyFetch` は **undici の `Agent` を `dispatcher` として渡し、`connect.lookup` フックで名前解決を 1 回に統一**する。フック内で全アドレスを `isSsrfBlocked` 照合し、通過した IP を `callback` でそのまま返して接続に固定する（ピン留め）。`connect.lookup` のロジック中心部（アドレス配列 → 採用 IP / 遮断判定）は純粋関数に切り出してテスト対象にする（[テスト方針](../testing/policy.md)）。
 
+> **既知の乖離（#237）**: `connect.lookup` が投げた `SsrfBlockedError` は undici によってプレーンな `Error` へ包み直されるため、`findSsrfCause` の `instanceof` 判定が捕捉できない。結果としてピン留めによる遮断は 403 ではなく **502** で返る。遮断自体は成立しており安全側だが、仕様との乖離として [#237](https://github.com/f8924919/web-proxy/issues/237) で追跡する。
+
 > **ブラウザバック中継の残存制約**: Chromium は接続時に自前再解決するため同様のピン留めができない。`installSsrfGuard` の `context.route` 照合までで、リバインディングの窓は残る（[機能仕様 §SSRF（不弱化）](../spec/features/proxy.md#ssrf不弱化)）。
+
+##### undici のメジャーバージョン制約（7 系固定・#236）
+
+**`undici` は 7 系（`^7.29.0`）に固定する。8 系以降へ上げてはならない。**
+
+この構成は「npm の `undici` が生成した `Agent`」を「**Node 組み込みの `fetch()`**」へ per-request の `dispatcher` として渡している。組み込み `fetch()` の実体は **Node にバンドルされた undici** であり、npm 側の `undici` とは別インスタンスである。両者の dispatcher ハンドラ interface が一致している限りこの受け渡しは成立するが、undici 8 系ではこの interface が刷新され（`onRequestStart` 等）、Node バンドル版と非互換になった。
+
+- 症状: `fetch()` が `TypeError: fetch failed` / cause `invalid onRequestStart method`（`UND_ERR_INVALID_ARG`）を投げ、**プロキシ中継が全経路で 502 になる**
+- Node のバージョンが undici 8 の要求（>= 22.19.0）を満たしていても再現する（Node v24.14.1 で確認）。per-request dispatcher 方式そのものが非互換であり、Node 側の互換レイヤ（グローバル dispatcher 向け）では救済されない
+- 型検査もモックテストも通過するため、**実際に HTTP スタックを通すテストでしか検出できない**。`tests/lib/proxy/undici-dispatcher.test.ts` にローカル HTTP サーバーを起動する結合テストを置いて回帰を検知する（[テスト方針 §1.1](../testing/policy.md)）
+- Dependabot が再度 8 系へ上げる PR を作らないよう `.github/dependabot.yml` で `undici` の major 更新を ignore している
+- **解除の条件**: Node 本体のバンドル undici が 8 系に上がり、npm 側 8 系との interface が一致したとき。あるいは `import { fetch } from "undici"` へ切り替えて Agent と fetch を同一インスタンスに揃えたとき（この場合、返る `Response` が global の `Response` ではなくなるため Next のルートハンドラ返却まわりの影響検証が必要）
+- **解除すべき時期に気づく手段**: Node 本体のバンドル undici が 8 系に上がると、今度は npm 側 7 系の Agent が逆向きに非互換となり同じ 502 が起きる。`tests/lib/proxy/undici-dispatcher.test.ts` は**この向きの非互換でも red になる**ため、Node 更新時の検知手段としても機能する
+- **検討したが採らない代替**: npm `undici` 依存自体を落とし、`assertSsrfAllowed` が解決した IP を URL のホストへ差し替えて接続する案。TLS 証明書検証（SNI）・`Host` ヘッダー・リダイレクト追従の取り回しが複雑になり、#129 の設計判断を覆すことになるため採らない
 
 ### エラー型
 
-| エラークラス            | 意味                                     |
-| ----------------------- | ---------------------------------------- |
-| `SsrfBlockedError`      | SSRF ブロック（403 を返す）              |
-| `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）    |
-| `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す） |
-| `BodyTooLargeError`     | 中継本文が上限超過（413 を返す。#134）   |
+| エラークラス            | 意味                                                                              |
+| ----------------------- | --------------------------------------------------------------------------------- |
+| `SsrfBlockedError`      | SSRF ブロック（403 を返す）。ただし `connect.lookup` 由来の遮断は現状 502（#237） |
+| `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）。原因例外を `cause` に保持（#236）          |
+| `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す）                                          |
+| `BodyTooLargeError`     | 中継本文が上限超過（413 を返す。#134）                                            |
+
+#### 上流 fetch 失敗の丸め込みと可観測性（#236）
+
+`proxyFetch` の catch は、`SsrfBlockedError` 以外の `fetch` 由来の例外をすべて `FetchTimeoutError` に丸める。**丸めるのは呼び出し側のステータス分類を変えないため**であり（`browseRelay` / `relayAsset` はどちらも 502 に収束する）、原因情報を捨てるためではない。エラークラスを細分化しても外形的な振る舞いは変わらないため、分類ではなく `cause` で原因を運ぶ設計を採る。
+
+- `FetchTimeoutError` は `cause` に元の例外を保持する
+- `logError` → `formatError`（`src/lib/logger.ts`）が **cause 連鎖を上限付き（5 段）で辿って**出力する。undici の失敗は `TypeError: fetch failed` → `cause: UND_ERR_INVALID_ARG` の多段構造になるため、1 段だけの展開では根本原因が現れない
+- `browseRelay` の `FetchTimeoutError` 分岐と `relayAsset` の 502 分岐は `logError` を呼ぶ。ホスト・URL は `maskSensitive` で redact される（[エラーログとプライバシー](../spec/features/proxy.md#エラーログとプライバシー138)）
+
+この設計は #236 の切り分けが困難だった実績（根本原因が応答にもログにも現れなかった）に基づく。運用ログから「タイムアウトと接続不能を区別したい」需要が出た時点で、`UpstreamFetchError` への分割を再検討する。
 
 ### 中継本文のサイズ上限（`readTextWithLimit` / `maxBufferBytesFromEnv`・#134）
 
@@ -962,7 +988,7 @@ const store = new Map<string, number[]>();
 
 - `logLevelFromEnv(env = process.env)`: `PROXY_LOG_LEVEL` を読み、`silent` / `error` / `warn` / `info` / `debug` のいずれかを返す純粋関数（`*FromEnv` パターン）。未知値・未設定は既定 **`error`**。
 - `maskSensitive(text)`: 任意文字列から **URL（`scheme://…`）・IPv4 / IPv6・素のホスト名（ドメイン）** を正規表現で検出し、`[redacted-url]` / `[redacted-ip]` / `[redacted-host]` へ置換する純粋関数。閲覧先ホスト自体が機微なため**全面 redact**（origin やパスを残さない）。安全側に倒すため過剰一致（例: メッセージ中の `foo.bar` 風トークン）は許容する。
-- `formatError(err, includeStack = false)`: `Error` を `name: maskSensitive(message)` へ整形する。`name`（エラークラス名）は機微でないため残し、`message` と `cause`（ネイティブ fetch 失敗は `cause` にホストを含む）は redact する。`includeStack` 時のみスタックを redact 付きで添える。
+- `formatError(err, includeStack = false)`: `Error` を `name: maskSensitive(message)` へ整形する。`name`（エラークラス名）は機微でないため残し、`message` と `cause`（ネイティブ fetch 失敗は `cause` にホストを含む）は redact する。`includeStack` 時のみスタックを redact 付きで添える。**`cause` は上限付き（5 段）で連鎖を辿る**（#236）。上流 fetch の失敗は `FetchTimeoutError` → `TypeError: fetch failed` → ランタイム側の実エラー、と多段になるため、1 段だけの展開では根本原因が出力されない（実際に #236 の切り分けを困難にした）。上限は `findSsrfCause`（`src/lib/proxy/fetch.ts`）と揃え、循環参照でも停止する。
 - `logError(label, err)`: `logLevelFromEnv()` が `error` 以上のときだけ `console.error(label, formatError(err, level === "debug"))` を出力する。`silent` では何も出さない。スタックは `debug` のみ。
 
 中継の 5 箇所の `console.error("[proxy/…]", err)`（`browseRelay.ts` の `browser-fallback` / `browse` / `auto-promote` / `browse-render`、`relayAsset.ts` の `asset`）はすべて `logError("[proxy/…]", err)` に置き換える。これにより、本番では既定で**機微 URL/ホストを伏せたエラーログのみ**が出力され、`PROXY_LOG_LEVEL=silent` で抑止・`=debug` でスタック付き診断ができる。
