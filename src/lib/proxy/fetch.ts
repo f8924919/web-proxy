@@ -10,9 +10,12 @@ export class SsrfBlockedError extends Error {
   }
 }
 
+// タイムアウト / 到達不能（呼び出し側は 502 を返す）。SSRF 由来以外の fetch 例外は
+// すべてこれに丸めるが、原因の切り分けができるよう元の例外を cause に保持する（#236）。
+// 実装意図: docs/arch/proxy.md §上流 fetch 失敗の丸め込みと可観測性（#236）
 export class FetchTimeoutError extends Error {
-  constructor() {
-    super("Proxy fetch timed out or target unreachable");
+  constructor(options?: { cause?: unknown }) {
+    super("Proxy fetch timed out or target unreachable", options);
     this.name = "FetchTimeoutError";
   }
 }
@@ -514,7 +517,9 @@ export async function proxyFetch(
       // ピン留め検査由来の SSRF ブロックは 403 として扱うため伝播させる（#129）。
       const ssrf = findSsrfCause(err);
       if (ssrf) throw ssrf;
-      throw new FetchTimeoutError();
+      // タイムアウト以外（DNS 失敗・dispatcher の非互換など）もここに来る。呼び出し側の
+      // ステータス分類は変えないが、原因を cause に載せてログへ届ける（#236）。
+      throw new FetchTimeoutError({ cause: err });
     }
 
     const location = isRedirectStatus(res.status)

@@ -9,6 +9,16 @@ updates:
     open-pull-requests-limit: 5
     commit-message:
       prefix: "chore"
+    ignore:
+      # undici は 7 系に固定する（#236）。npm の undici から生成した Agent を Node
+      # 組み込み fetch の dispatcher として渡しているが、8 系では dispatcher の
+      # ハンドラ interface が刷新され、Node バンドル版と非互換になりプロキシ中継が
+      # 全経路 502 になる。詳細と解除条件は docs/arch/proxy.md
+      # §undici のメジャーバージョン制約（7 系固定・#236）。
+      # 注意: ignore は security update にも効くため、undici の GHSA は
+      # リポジトリの Security タブで別途確認すること。
+      - dependency-name: "undici"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"

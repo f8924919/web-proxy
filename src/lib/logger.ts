@@ -46,6 +46,11 @@ export function maskSensitive(text: string): string {
   );
 }
 
+// トップ例外に続けて展開する cause の最大段数（トップ自身は含まない）。
+// 上流 fetch の失敗は FetchTimeoutError → TypeError: fetch failed → ランタイム側の
+// 実エラー、と多段になるため 1 段では根本原因に届かない（#236）。循環参照でも停止する。
+const MAX_CAUSE_DEPTH = 5;
+
 // Error を「name: redact 済み message」へ整形する。
 // name（エラークラス名）は運用診断に必要かつ機微でないため残す。
 // message・cause（ネイティブ fetch 失敗は cause にホストを含む）は redact する。
@@ -53,11 +58,15 @@ export function maskSensitive(text: string): string {
 export function formatError(err: unknown, includeStack = false): string {
   if (err instanceof Error) {
     let out = `${err.name}: ${maskSensitive(err.message)}`;
-    const cause = (err as Error & { cause?: unknown }).cause;
-    if (cause instanceof Error) {
-      out += ` (caused by ${cause.name}: ${maskSensitive(cause.message)})`;
-    } else if (cause != null) {
-      out += ` (caused by ${maskSensitive(String(cause))})`;
+    let cause = (err as Error & { cause?: unknown }).cause;
+    for (let depth = 0; depth < MAX_CAUSE_DEPTH && cause != null; depth++) {
+      if (cause instanceof Error) {
+        out += ` (caused by ${cause.name}: ${maskSensitive(cause.message)})`;
+        cause = (cause as Error & { cause?: unknown }).cause;
+      } else {
+        out += ` (caused by ${maskSensitive(String(cause))})`;
+        break;
+      }
     }
     if (includeStack && err.stack) {
       out += `\n${maskSensitive(err.stack)}`;

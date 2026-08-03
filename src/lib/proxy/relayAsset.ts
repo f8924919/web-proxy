@@ -129,6 +129,8 @@ export async function relayAsset(
         if (err instanceof SsrfBlockedError) {
           return new Response("Forbidden", { status: 403 });
         }
+        // 上流失敗の原因（cause 連鎖）を残す。ステータスは 502 のまま（#236）。
+        logError("[proxy/asset]", err);
         return new Response("Bad Gateway", { status: 502 });
       }
 
