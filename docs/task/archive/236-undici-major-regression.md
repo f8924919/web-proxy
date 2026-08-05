@@ -57,13 +57,15 @@ undici 8.9.0 を一時的に入れて両テストが red になることを確�
 実装中に判明した細かい点:
 
 - `http://localhost:9/` は fetch が "bad port" として拒否するため使えない。ポートは 8181 を使用（待受は不要）
-- `connect.lookup` が投げた `SsrfBlockedError` は undici によってプレーンな `Error`（message に元のクラス名と文言を含む）へ包み直されるため、`instanceof` では捕捉できない。テストは cause 連鎖の文字列で判定している
+- `connect.lookup` が投げた `SsrfBlockedError` は undici によってプレーンな `Error`（message に元のクラス名と文言を含む）へ包み直されるため、`instanceof` では捕捉できない。テストは cause 連鎖の文字列で判定している（**この包み直しが Jest 固有である点は後述の「後日の訂正」を参照**）
 
 ## 別途対応が必要な発見（本 Issue のスコープ外）
 
 上記のとおり `connect.lookup` 由来の `SsrfBlockedError` が `Error` へ包み直されるため、`findSsrfCause`（`instanceof` で判定）が機能せず、**IP ピン留めによる遮断が 403 ではなく 502 になっている**。遮断自体は成立しており安全側だが、[arch/proxy.md](../arch/proxy.md) および [spec/features/proxy.md](../spec/features/proxy.md) の「SSRF ブロックは 403」という記述と乖離する。undici 7 系で再現し、本 Issue の変更とは独立した既存の不具合。
 
 [#237](https://github.com/f8924919/web-proxy/issues/237) として起票済み。本 PR では docs 側に「現状 502・#237 で追跡」の注記を入れるに留め、修正は #237 で行う。
+
+> **後日の訂正（#237 の調査で判明）**: 上記の「実運用でも 502 になる」という見立ては**誤り**だった。包み直しは `callback` へ渡す例外が**別 realm のオブジェクトだった場合にだけ**起きる現象で、`jest-environment-node`（テストコードを vm context で実行する）に固有。単一 realm で動く実運用では `SsrfBlockedError` が cause 連鎖にそのまま残り、`findSsrfCause` の `instanceof` 判定が成立して仕様どおり 403 が返る。本節の観測（`instanceof` では捕捉できない）は Jest 上の事実としては正しいが、そこから実運用の挙動を推定したのが誤りだった。詳細は [#237](https://github.com/f8924919/web-proxy/issues/237) のコメントと [arch/proxy.md](../../arch/proxy.md) §DNS リバインディング / TOCTOU 対策 を参照。
 
 ## 進捗
 
@@ -88,7 +90,7 @@ undici 8.9.0 を一時的に入れて両テストが red になることを確�
 evaluator の指摘に対応した内容:
 
 - Issue #236 本文の受け入れ条件を、実際に採用した 2 本立てへ書き換え（当初の書き換えスクリプトが失敗し反映されていなかった）
-- ピン留め由来の SSRF 遮断が 502 になる既存不具合を [#237](https://github.com/f8924919/web-proxy/issues/237) として起票し、arch / spec に「現状 502・#237 で追跡」の注記を追加
+- ピン留め由来の SSRF 遮断が 502 になる既存不具合を [#237](https://github.com/f8924919/web-proxy/issues/237) として起票し、arch / spec に「現状 502・#237 で追跡」の注記を追加（**この見立ては後日 #237 の調査で誤りと判明。上記「後日の訂正」を参照**）
 - `src/lib/logger.ts` のコメント「`findSsrfCause` と揃える」を訂正（走査ノード数が 1 ずれていた）
 - `formatError` で cause が `Error` でない場合に連鎖を打ち切る仕様をテストで固定
 - `docs/testing/policy.md` §1.1 の許容条件 1 を「実際に接続を行うテストが対象」とスコープ限定し、配線テストの除外を条件表の中で読めるよう修正

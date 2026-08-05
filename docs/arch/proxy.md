@@ -219,7 +219,11 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 `assertSsrfAllowed` の事前検査だけでは、`fetch` が接続時に独立して再解決するため、検査と接続の間に応答 IP を変えるリバインディングを防げない（[#129](https://github.com/f8924919/web-proxy/issues/129)）。`proxyFetch` は **undici の `Agent` を `dispatcher` として渡し、`connect.lookup` フックで名前解決を 1 回に統一**する。フック内で全アドレスを `isSsrfBlocked` 照合し、通過した IP を `callback` でそのまま返して接続に固定する（ピン留め）。`connect.lookup` のロジック中心部（アドレス配列 → 採用 IP / 遮断判定）は純粋関数に切り出してテスト対象にする（[テスト方針](../testing/policy.md)）。
 
-> **既知の乖離（#237）**: `connect.lookup` が投げた `SsrfBlockedError` は undici によってプレーンな `Error` へ包み直されるため、`findSsrfCause` の `instanceof` 判定が捕捉できない。結果としてピン留めによる遮断は 403 ではなく **502** で返る。遮断自体は成立しており安全側だが、仕様との乖離として [#237](https://github.com/f8924919/web-proxy/issues/237) で追跡する。
+> **テスト環境固有の realm 差（[#237](https://github.com/f8924919/web-proxy/issues/237)）**: `connect.lookup` の `callback` へ渡す例外は、**呼び出し元と別 realm のオブジェクトだった場合にだけ** undici にプレーンな `Error`（message が `"SsrfBlockedError: ..."` へ文字列化されたもの）へ置き換えられ、クラス情報もカスタムプロパティも失われる。undici の `makeNetworkError` が `isErrorLike(reason)` 偽のとき `new Error(reason ? String(reason) : reason)` を作るためで、`isErrorLike` の判定は `object instanceof Error || constructor.name === "Error" | "DOMException"`。**同一 realm の `Error` サブクラスは `instanceof Error` が真になるため置換されえない**。
+>
+> したがってこれは `jest-environment-node` がテストコードを vm context で実行するために起きる**テスト環境固有の現象**で、単一 realm で動く実運用（本リポジトリに edge runtime の指定は無く、`proxyFetch` に到達する 4 ルート（`relayBrowse` / `relayAsset` 経由）はすべて Node runtime）では発生しない。実運用では `SsrfBlockedError` が cause 連鎖にそのまま残り、`findSsrfCause` の `instanceof` 判定が成立して**仕様どおり 403 が返る**。
+>
+> このため `tests/lib/proxy/proxyFetch.wiring.test.ts` は `instanceof` ではなくメッセージ文字列で遮断を検証している。将来 edge runtime を採用する場合は realm が分かれるため、判定方法の再検討が必要になる。
 
 > **ブラウザバック中継の残存制約**: Chromium は接続時に自前再解決するため同様のピン留めができない。`installSsrfGuard` の `context.route` 照合までで、リバインディングの窓は残る（[機能仕様 §SSRF（不弱化）](../spec/features/proxy.md#ssrf不弱化)）。
 
@@ -239,12 +243,12 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 ### エラー型
 
-| エラークラス            | 意味                                                                              |
-| ----------------------- | --------------------------------------------------------------------------------- |
-| `SsrfBlockedError`      | SSRF ブロック（403 を返す）。ただし `connect.lookup` 由来の遮断は現状 502（#237） |
-| `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）。原因例外を `cause` に保持（#236）          |
-| `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す）                                          |
-| `BodyTooLargeError`     | 中継本文が上限超過（413 を返す。#134）                                            |
+| エラークラス            | 意味                                                                       |
+| ----------------------- | -------------------------------------------------------------------------- |
+| `SsrfBlockedError`      | SSRF ブロック（403 を返す）。事前検査・`connect.lookup` 由来のいずれも 403 |
+| `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）。原因例外を `cause` に保持（#236）   |
+| `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す）                                   |
+| `BodyTooLargeError`     | 中継本文が上限超過（413 を返す。#134）                                     |
 
 #### 上流 fetch 失敗の丸め込みと可観測性（#236）
 
