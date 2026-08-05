@@ -5,10 +5,16 @@
 サーバー側の最後の砦はホスティングの branch protection が担うため、本 hook は
 早期警告に徹し、判定に迷うケースはすべてフェイルオープン（通す）に倒す:
 
-- stdin の JSON パース失敗・git コマンド失敗（リポジトリ外・detached HEAD 等）→ 通す
+- stdin の JSON パース失敗・想定外の形（dict でない JSON / `tool_input`）・
+  git コマンド失敗（リポジトリ外・detached HEAD 等）→ 通す
 - 検出は「`&&` / `;` / `|` / 改行で分割した各セグメントのサブコマンド位置」での
   git commit / git push 一致のみ。`git -c k=v commit` のようなオプション挟み込みや
   文字列内の擦り抜けは追わない（誤ブロック回避を優先。docs/git-workflow.md §1）。
+- ただし**リモートブランチの削除のみ**の push（`git push --delete` / `-d`、または
+  リモート名を除く refspec がすべて `:branch` 形）は `main` 上でも通す。マージ後のブランチ削除は `main` へ戻ってから
+  行う正規の手順（docs/git-workflow.md §5 step 9・/finish-task）であり、これを
+  塞ぐと運用が回らない。削除は `main` の履歴を変更しないため、本 hook の目的
+  （main への直接の変更を防ぐ）から外れる。
 
 ブランチ判定は cwd を起点にした実効ディレクトリに対して行う:
 
@@ -18,8 +24,11 @@
   一律フェイルオープン（通す）
 
 ブロック時は permissionDecision: deny と理由を JSON で stdout に返す。
-標準ライブラリのみに依存し（Python 3.10+）、Windows / macOS / Linux で動作する。
+標準ライブラリのみに依存し（Python 3.9+。PEP 604 の注釈は `from __future__ import annotations` で遅延評価にしている）、Windows / macOS / Linux で動作する。
 """
+
+# Python 3.9 でも動くよう、PEP 604（`X | None`）の注釈を遅延評価にする。
+from __future__ import annotations
 
 import json
 import os
@@ -57,9 +66,10 @@ def _resolve_dir(base: str | None, path: str) -> str | None:
     return os.path.normpath(os.path.join(base, path))
 
 
-def _git_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
-    """git セグメントのサブコマンドと `-C` パス列を返す。判定不能なら None。
+def _git_subcommand(tokens: list[str]) -> tuple[str, list[str], list[str]] | None:
+    """git セグメントのサブコマンド・`-C` パス列・サブコマンド以降の引数を返す。
 
+    判定不能なら None。
     `-C <path>` は引数を取るグローバルオプションとして読み飛ばしつつ収集する。
     `--git-dir` / `--work-tree`（空白形・`=` 形とも）はスコープ外のため None
     （フェイルオープン）。その他のオプションは従来どおり引数なしとして読み飛ばす。
@@ -79,8 +89,27 @@ def _git_subcommand(tokens: list[str]) -> tuple[str, list[str]] | None:
         if token.startswith("-"):
             i += 1
             continue
-        return token, c_paths
+        return token, c_paths, tokens[i + 1 :]
     return None
+
+
+def _is_branch_deletion(args: list[str]) -> bool:
+    """`git push` の引数が**リモートブランチの削除のみ**かを判定する。
+
+    `--delete` / `-d` を含むか、リモート名を除く refspec が**すべて** `:branch` 形
+    （削除 refspec）のときだけ削除とみなす。削除は main の履歴を変更しないため
+    main 上でもブロックしない（docs/git-workflow.md §1・§5 step 9）。
+
+    `git push origin main :old` のような**削除と通常 push の混在**は削除とみなさない。
+    削除 refspec が 1 つでもあれば通す判定にすると、main の履歴を変更する push が
+    擦り抜けるため。
+    """
+    if any(arg in ("--delete", "-d") for arg in args):
+        return True
+    positional = [arg for arg in args if not arg.startswith("-")]
+    # 先頭がリモート名（`git push origin :old`）か、省略形（`git push :old`）かを見分ける
+    refspecs = positional if positional and positional[0].startswith(":") else positional[1:]
+    return bool(refspecs) and all(arg.startswith(":") for arg in refspecs)
 
 
 def _blocked_violation(command: str, base_cwd: str | None) -> str | None:
@@ -112,9 +141,11 @@ def _blocked_violation(command: str, base_cwd: str | None) -> str | None:
         parsed = _git_subcommand(tokens)
         if parsed is None:
             continue
-        subcommand, c_paths = parsed
+        subcommand, c_paths, args = parsed
         if subcommand not in BLOCKED_SUBCOMMANDS:
             continue
+        if subcommand == "push" and _is_branch_deletion(args):
+            continue  # マージ済みブランチの削除は main 上でも通す
         target = None if unknown else cwd
         resolvable = True
         for path in c_paths:
@@ -134,8 +165,11 @@ def main() -> None:
         hook_input = json.load(sys.stdin)
     except (json.JSONDecodeError, ValueError):
         return
+    if not isinstance(hook_input, dict):
+        return  # 想定外の形の入力 → 通す
 
-    command = hook_input.get("tool_input", {}).get("command", "")
+    tool_input = hook_input.get("tool_input")
+    command = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     if not isinstance(command, str) or not command:
         return
 

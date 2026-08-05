@@ -28,7 +28,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 進行中・未完了のタスクは [docs/task/index.md](docs/task/index.md) で管理する。
 
-> **Claude Code はこの CLAUDE.md を読み込んだ直後に必ず [docs/task/index.md](docs/task/index.md) を確認し、`未着手` または `進行中` のタスクがある場合は、それらの対応を行うかをユーザーに尋ねること。** タスクを完了したら [docs/docs-guide.md](docs/docs-guide.md) §4.2 の手順で `docs/task/archive/` へアーカイブする。新規タスクが発生した場合は `docs/task/{slug}.md` を作成して index.md にも追記する。
+> **`未着手` または `進行中` のタスクがある場合は、それらの対応を行うかをユーザーに尋ねること。** 一覧はセッション開始時に [SessionStart hook](.claude/hooks/session_task_status.py) が自動で注入する（[docs/git-workflow.md](docs/git-workflow.md) §5.7）。**注入が見当たらない場合は hook が動いていないので、[docs/task/index.md](docs/task/index.md) を直接読んで確認すること。** タスクを完了したら [docs/docs-guide.md](docs/docs-guide.md) §4.2 の手順で `docs/task/archive/` へアーカイブする。新規タスクが発生した場合は `docs/task/{slug}.md` を作成して index.md にも追記する。
 
 GitHub Issue は「起票・仕様・受け入れ条件の正本」、`docs/task/` は「作業中の設計・進捗メモ」として併用する。両者は相互リンクで紐付ける。詳細は [docs/git-workflow.md](docs/git-workflow.md) を参照。
 
@@ -36,7 +36,7 @@ GitHub Issue は「起票・仕様・受け入れ条件の正本」、`docs/task
 
 絶対に守るルール（詳細・ブランチ命名表・Issue 起票テンプレは [docs/git-workflow.md](docs/git-workflow.md)）。
 
-- **`main` で直接作業しない**: 必ず `main` からブランチを切り、`main` へ PR を出す（GitHub Flow）。
+- **`main` で直接作業しない**: 必ず `main` からブランチを切り、`main` へ PR を出す（GitHub Flow）。`main` 上での**ファイル編集**と `git commit` / `git push` は hook がブロックする（[docs/git-workflow.md](docs/git-workflow.md) §1・§5.7）。
 - **GitHub 操作は `gh` を使う**: 起票・閲覧・PR 作成は `gh` コマンド経由。
 - **Issue ベース開発**: 修正・機能追加は Issue に基づいて行う。Claude が起票する Issue は、AI が単独で実装・完結できる粒度の技術仕様（背景・受け入れ条件・対象ファイル・関連 spec/arch リンク）まで記述する。
 - **ブランチ命名**: `feature/<issue>-<desc>` / `bugfix/<issue>-<desc>` / `hotfix/<issue>-<desc>`、Issue を伴わない作業は `refactor/<desc>` / `docs/<desc>` / `chore/<desc>`。

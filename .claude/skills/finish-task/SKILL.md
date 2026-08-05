@@ -1,6 +1,7 @@
 ---
 name: finish-task
 description: PR マージ後の後処理を実行する。main を最新化し、マージ済みブランチを削除（local/remote）する。完了タスクメモの archive 移動は原則実装 PR に同梱済みの前提で、同梱できなかった場合のみ補完として docs ブランチ＋PR（複数タスクまとめ可）で行う。PR がマージされた直後に使う。
+argument-hint: "[merged-branch-name]"
 ---
 
 # finish-task — タスク完了・マージ後処理
@@ -30,7 +31,7 @@ description: PR マージ後の後処理を実行する。main を最新化し�
 
 1. `git checkout -b docs/archive-<slug>`（まとめる場合は内容が分かる別名でよい）
 2. `git mv docs/task/<slug>.md docs/task/archive/<slug>.md`
-3. `docs/task/index.md` の「進行中・未着手」テーブルから該当行を削除する（他に進行中が無ければプレースホルダ行に戻す）。
+3. `docs/task/index.md` の「タスク」テーブルから該当行を削除する（他に進行中・未着手が無ければプレースホルダ行に戻す）。
 4. `docs/task/archive/index.md` の**適切なテーマ表**に 1 行追加する（タスク名・概要・更新日。Issue/PR 番号を概要に添える）。
 5. 変更が docs のみなので、必要に応じて `docs-check` サブエージェントで index・リンクの整合を点検する。
 6. コミット（日本語）→ `git push -u origin docs/archive-<slug>` → PR 作成（ベース `main`、本文日本語、関連 Issue/PR を記載。上記「ホスト操作の読み替え」に従う）。
