@@ -47,6 +47,8 @@
 | [236-undici-major-regression.md](236-undici-major-regression.md)               | undici 8 系への更新でプロキシ中継が全経路 502 になる回帰の修正。npm の undici から生成した `Agent` を Node 組み込み `fetch` の dispatcher に渡す構成が 8 系で非互換（`invalid onRequestStart method`）。undici を `^7.29.0` に固定し dependabot で major を ignore。回帰検知テストを 2 本追加（dispatcher 契約 / `proxyFetch` 配線）し、testing/policy §1.1 にローカル完結の結合テストの許容条件を新設。`FetchTimeoutError` の cause 保持と `formatError` の cause 連鎖展開でログの可観測性も改善。派生発見は #237 へ Issue #236 / PR #238 | 2026-08-04 |
 | [246-script-end-tag-regex.md](246-script-end-tag-regex.md)                     | CodeQL `js/bad-tag-filter` の修正。`promotion.ts` の可視テキスト抽出が終了タグを固定文字列でのみ照合し、`</script >`（空白入り）・`</script bar>`（属性付き）で除去に失敗して自動ティア昇格が検出漏れしていた問題を `</script(?:\s[^>]*)?>` 形式へ拡張して解消。あわせて残る Code scanning アラート 3 件を false positive として dismiss Issue #246 / PR #247                                                                                                                                                                              | 2026-08-05 |
 
+| [237-ssrf-pinning-403.md](237-ssrf-pinning-403.md) | 起票時の前提（ピン留め由来の SSRF 遮断が実運用でも 502）が誤りと判明。undici の包み直しは `isErrorLike` が偽になる cross-realm 時のみで、vm context で動く Jest 固有。単一 realm の実運用では `instanceof` が成立し仕様どおり 403。本番コードは変更せず spec / arch / #236 メモの誤った注記を訂正 Issue #237 / PR #249 | 2026-08-05 |
+
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
 
