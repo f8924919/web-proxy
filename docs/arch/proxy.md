@@ -84,7 +84,8 @@ public/
 4b. 自動ティア昇格（GET の text/html・allowlist 未昇格のみ）: autoPromoteEnabledFromEnv() が有効で
    shouldPromoteToBrowser(html, status, contentType) が崩れ/チャレンジを検出し、かつ promotionGuard が
    同一 host+path を再昇格抑止しない場合、browserFetch で再取得して結果を差し替える
-   （失敗時は初回の中継応答へフォールバック。[機能仕様 §ヒューリスティック自動ティア昇格](../spec/features/proxy.md#ヒューリスティック自動ティア昇格崩れチャレンジ検出)）
+   （失敗時は初回の中継応答へフォールバック。昇格結果はローカル変数へ受け、本文読み取りまで
+   成功して初めてまとめて差し替える＝混在応答にしない。#253。[機能仕様 §ヒューリスティック自動ティア昇格](../spec/features/proxy.md#ヒューリスティック自動ティア昇格崩れチャレンジ検出)）
 5. text/html は readTextWithLimit(res, maxBufferBytesFromEnv()) で上限内に読み
    （超過は BodyTooLargeError → 413。#134）、rewriteHtml(html, finalUrl) でアドレスバー HTML を
    先頭に注入 + URL 書き換え（baseUrl はリダイレクト追従後の最終 URL。#42。
@@ -312,9 +313,9 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 - `readTextWithLimit(res, maxBytes)`: `res.text()` の代替。①`Content-Length` が `maxBytes` 超過を宣言していれば読む前に `BodyTooLargeError` を投げる。②`res.body`（Web Streams `ReadableStream<Uint8Array>`）を `getReader()` でチャンク読みし、累積バイト数が `maxBytes` を超えたらストリームを `cancel` して `BodyTooLargeError` を投げる。上限内なら `resolveCharset` で判定した文字コードでデコードした文字列を返す（`res.body` が無ければ空文字）。**サイズ上限の累積判定はデコード前の生バイト列で行う**ため、文字コード追従後も `413` 挙動は不変。
 - `resolveCharset(contentType, bytes)`: 中継本文の文字コードを判定する純粋関数（#158）。①`Content-Type` の `charset=` → ②（①が無い場合）`bytes` 先頭の sniff（HTML `<meta charset>` / `<meta http-equiv>`、CSS `@charset`）→ ③ UTF-8、の優先順でラベルを決める。`readTextWithLimit` は判定ラベルで `TextDecoder` を生成し、未知・不正ラベルなら UTF-8 にフォールバックする（`euc-jp` / `shift_jis` / `iso-2022-jp` は Node 組込みで対応。追加依存なし）。仕様: [§中継本文の文字コード処理](../spec/features/proxy.md#中継本文の文字コード処理158)。
 
-`relayBrowse`（HTML）・`relayAsset`（CSS）はこれを用いて読み、`BodyTooLargeError` を捕捉して `413` を返す。書き換え後の本文は常に UTF-8（`charset=utf-8`）で返す。書き換え不要アセットは `res.body` ストリーム透過のため対象外。
+`relayBrowse`（HTML）・`relayAsset`（CSS）はこれを用いて読み、`BodyTooLargeError` を捕捉して `413` を返す（**自動昇格ブロック内の 2 回目の読み取りは例外**で、巻き戻す。[§昇格失敗時の巻き戻し](#昇格失敗時の巻き戻し253)）。書き換え後の本文は常に UTF-8（`charset=utf-8`）で返す。書き換え不要アセットは `res.body` ストリーム透過のため対象外。
 
-ブラウザティア（`browserFetch`）は `page.content()` で DOM 全体を Node ヒープへ展開した後でしか `readTextWithLimit` が効かないため、`browserFetch` 側で `page.content()` の**前**に DOM サイズを概算して同じ上限で打ち切る（[§browserFetch.ts](#srclibproxybrowserfetchts) の `measureDomByteLength` / `domSizeExceedsLimit`・#144）。`browserFetch` が投げる `BodyTooLargeError` は `relayBrowse` の `fetchTarget` で（`SsrfBlockedError` と同様に）フォールバックさせず伝播させ、`413` へ揃える。
+ブラウザティア（`browserFetch`）は `page.content()` で DOM 全体を Node ヒープへ展開した後でしか `readTextWithLimit` が効かないため、`browserFetch` 側で `page.content()` の**前**に DOM サイズを概算して同じ上限で打ち切る（[§browserFetch.ts](#srclibproxybrowserfetchts) の `measureDomByteLength` / `domSizeExceedsLimit`・#144）。`browserFetch` が投げる `BodyTooLargeError` は `relayBrowse` の `fetchTarget` で（`SsrfBlockedError` と同様に）フォールバックさせず伝播させ、`413` へ揃える。 ただし**自動昇格ブロックは `fetchTarget` を経由しない**ため、このルールは適用されない（上限超過も含め巻き戻す。[§昇格失敗時の巻き戻し](#昇格失敗時の巻き戻し253)・#253）。
 
 ---
 
@@ -367,7 +368,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | `domSizeExceedsLimit(byteLength, maxBytes)` | 概算バイト数が上限を超えるか判定する純粋関数。`readTextWithLimit` と同じく **`>`（厳密超過）** で判定する                                                                                                                                                                                  |
 
 - **配線**: `browserFetch` で `inlineCssomStyles` 実体化の後・`page.content()` の直前に `page.evaluate(measureDomByteLength)` で概算し、`domSizeExceedsLimit(byteLength, maxBufferBytesFromEnv())` が真なら `page.content()` を呼ばずに `BodyTooLargeError` を投げる。測定 evaluate が失敗した場合は概算 0（上限内）として続行し、後段の `readTextWithLimit` を安全網に残す（ベストエフォート方針は `inlineCssomStyles` と同じ）。
-- **伝播**: `fetchTarget`（`browseRelay.ts`）は `browserFetch` の `BodyTooLargeError` を `SsrfBlockedError` 同様にフォールバックさせず再 throw し、`relayBrowse` の取得時 `catch` が `413` を返す（展開後経路の 413 とメッセージ・ステータスを揃える）。
+- **伝播**: `fetchTarget`（`browseRelay.ts`）は `browserFetch` の `BodyTooLargeError` を `SsrfBlockedError` 同様にフォールバックさせず再 throw し、`relayBrowse` の取得時 `catch` が `413` を返す（展開後経路の 413 とメッセージ・ステータスを揃える）。 自動昇格ブロックでの扱いは [§昇格失敗時の巻き戻し](#昇格失敗時の巻き戻し253) を参照（#253）。
 - **テスト**: `measureDomByteLength`（`document` 互換オブジェクト・マルチバイト）と `domSizeExceedsLimit`（境界値）を単体テスト対象とする。`page.evaluate` の I/O 配線は[テスト方針](../testing/policy.md)によりテスト対象外。
 
 ### ブラウザ実行基盤の差し替え（純粋関数 + `getBrowser`・#71）
@@ -438,6 +439,46 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 - `loopGuard.ts` / `rateLimit.ts` と同じ `Map<key, timestamps[]>` のスライディングウィンドウ方式（既定ウィンドウ 60 秒、プロセス再起動でリセット）。
 - 共有インスタンス `promotionGuard` を `route.ts` が利用する。`tryPromote(target)` は再昇格可なら記録して `true`、抑止中なら `false` を返す。
 - **テスト**: 純粋関数（`autoPromoteEnabledFromEnv` / `shouldPromoteToBrowser`）と `PromotionGuard` のウィンドウ挙動を単体テスト対象とする（[テスト方針](../testing/policy.md)）。`browserFetch` 本体（I/O）はテスト対象外。
+
+### 昇格失敗時の巻き戻し（#253）
+
+昇格ブロック（`browseRelay.ts`）は `browserFetch` の結果を**いったんローカルに受け、本文読み取り（`readTextWithLimit`）まで成功して初めて** `res` / `finalUrl` / `outHeaders` / `html` をまとめて差し替える。**成功時のみ 4 値を返すヘルパー関数**に切り出し、部分代入が型レベルで起きない形にする（`fetchTarget` と同型）。
+
+先に一部だけ差し替えると、最後の本文読み取りが失敗したときに「`html` は中継ティア・それ以外はブラウザティア」という**混在応答**になり、中継ティアの HTML をブラウザティアの `finalUrl` 基準で書き換えてブラウザティアのステータス・ヘッダーで返してしまう（[#253](https://github.com/f8924919/web-proxy/issues/253) の不具合）。
+
+**差し替える変数は `res` / `finalUrl` / `outHeaders` / `html` の 4 つのみ**。`contentType` は昇格判定にしか使わないため更新しない。
+
+#### 巻き戻さないもの
+
+| 対象                                            | 扱い                                         | 理由                                                                                                                                                                                                                                                                                                                                         |
+| ----------------------------------------------- | -------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cookieJar` への書き込み（`storeRelayCookies`） | 巻き戻さない（本文読み取りより**前**に呼ぶ） | `browserFetch` 自体は成功しており、取得した Cookie はターゲットが正当に発行したもの。[Cookie セッションウォーミング](../spec/features/proxy.md#cookie-セッションウォーミング)はブラウザティアの意図した機能なので次回以降のために保持する                                                                                                    |
+| `promotionGuard` の抑止ウィンドウ               | 巻き戻さない（解放系メソッドを持たない）     | 失敗時に解放すると、**常に失敗する URL に対してリクエストごとにブラウザを起動できる**ようになり、#70 が定めた「URL あたり高々 1 回 / ウィンドウ」というコスト上限（増幅可能な DoS 面）が崩れる。抑止キーは `host + path` のみで IP / セッションを含まないため、失敗した昇格は**同一 URL を見る全ユーザーに 60 秒間影響する**（自己回復あり） |
+
+> **Cookie を残すトレードオフ**: `cookieJar.store` は**名前単位の後勝ち upsert** なので、ブラウザティアの Cookie は同名の中継ティア Cookie を上書きする。巻き戻し時に返すのは中継ティアの HTML なので、「セッション A で描画された HTML を返しながら、以降のサブリソース / フォーム送信はセッション B の Cookie で飛ぶ」というずれが起きうる。影響は次回ナビゲーション以降に限られ、この分岐に到達する確率も低いため、ウォーミングの利得を優先する。
+
+#### コミット順序の不変条件
+
+`sanitizeHeaders` は `new Headers()` を返す純粋関数だが、**`issueSessionCookie` は引数の `Headers` を破壊的に変更する**（`append`）。したがって:
+
+- `issueSessionCookie` を適用するのは**候補側の新規 `Headers`（`sanitizeHeaders` の戻り値）のみ**。初回の `outHeaders` には触らない
+- **コミット時に候補ヘッダーへの `issueSessionCookie` 適用を忘れない**。忘れると `__pxy_sid` が発行されず、リクエストごとに新セッションが切られて jar が機能しなくなる（#151 Phase 1 の破壊）
+
+正常系・巻き戻し系のどちらでも `Set-Cookie: __pxy_sid` が**ちょうど 1 個**になることをテストで固定する。
+
+#### 昇格ブロックでの `BodyTooLargeError`・`SsrfBlockedError`（`fetchTarget` との違い）
+
+**昇格ブロックは `fetchTarget` を経由せず `browserFetch` を直接呼ぶ。** そのため `fetchTarget` が持つ「`SsrfBlockedError` / `BodyTooLargeError` は再 throw して 403 / 413 にする」（#144）というルールは、**昇格ブロックには元から適用されていない**。`browserFetch` が DOM 概算超過で投げる `BodyTooLargeError` は現行コードでも巻き戻されており、今回 `readTextWithLimit` 由来のものを同じ扱いに揃えるだけである（発生源によって応答が変わる非対称を作らない）。
+
+根拠は 3 つ。
+
+1. **413 にしても何も守れない**。`browserFetch` は既に完了しており、`readTextWithLimit` は上限到達時に `reader.cancel()` してメモリを抑える。413 を返しても資源は一切節約されず、**セキュリティ上の利得ゼロで UX 退行のみ**になる
+2. **再取得が発生しない**。#144 が「フォールバックさせない」根拠は「上限超過の中継先を別経路で再取得することになり挙動が揃わない」ことだが、昇格ブロックでは中継ティアの HTML を既に読み終えているため当てはまらない
+3. **任意機能の副作用でページが見えなくなる退行を避ける**。自動昇格（`PROXY_BROWSER_AUTO_PROMOTE`）は既定 OFF の任意機能であり、有効にしただけで従来見えていたページが 413 になるのは受け入れられない
+
+`SsrfBlockedError` も同様に巻き戻す。`browserFetch` は昇格時にも `assertSsrfAllowed` を実行するため DNS が変われば投げうるが、**返す中継ティアの本文は SSRF 検査済みの経路で取得したもの**であり開示リスクはない。「SSRF は握り潰さず必ず 403」という他経路の原則に対する**明示的な例外**である。
+
+> 昇格ブロックの `catch` は**すべての例外を握り潰す**。ここで握り潰してよいのは best-effort の昇格に限られるので、将来 `browserFetch` に伝播させるべきエラー型（認可・ポリシー違反など）が増えたら、この `catch` に明示的な例外を書くこと。
 
 ---
 
