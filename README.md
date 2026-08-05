@@ -36,16 +36,17 @@ npm run dev      # http://localhost:3000
 
 ## 主要コマンド
 
-| コマンド                | 内容                                        |
-| ----------------------- | ------------------------------------------- |
-| `npm run dev`           | 開発サーバー起動（ホットリロード）          |
-| `npm run build`         | 本番ビルド（`.next/` に出力）               |
-| `npm start`             | ビルド済みアプリを起動（`next start`）      |
-| `npm run lint`          | ESLint（`lint:fix` で自動修正）             |
-| `npm run format`        | Prettier 整形（`format:check` で確認）      |
-| `npm run typecheck`     | 型チェック（`tsc --noEmit`）                |
-| `npm test`              | Jest テスト（`test:watch` で監視）          |
-| `npm run debug:browser` | ヘッドレスブラウザでの描画デバッグ（方式B） |
+| コマンド                | 内容                                               |
+| ----------------------- | -------------------------------------------------- |
+| `npm run dev`           | 開発サーバー起動（ホットリロード）                 |
+| `npm run build`         | 本番ビルド（`.next/` に出力）                      |
+| `npm start`             | ビルド済みアプリを起動（`next start`）             |
+| `npm run lint`          | ESLint（`lint:fix` で自動修正）                    |
+| `npm run format`        | Prettier 整形（`format:check` で確認）             |
+| `npm run typecheck`     | 型チェック（`tsc --noEmit`）                       |
+| `npm test`              | Jest テスト（`test:watch` で監視）                 |
+| `npm run test:realm`    | 単一 realm の smoke（`node --test`・Node 22 以上） |
+| `npm run debug:browser` | ヘッドレスブラウザでの描画デバッグ（方式B）        |
 
 ## 環境変数
 

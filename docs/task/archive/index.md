@@ -49,6 +49,8 @@
 
 | [237-ssrf-pinning-403.md](237-ssrf-pinning-403.md) | 起票時の前提（ピン留め由来の SSRF 遮断が実運用でも 502）が誤りと判明。undici の包み直しは `isErrorLike` が偽になる cross-realm 時のみで、vm context で動く Jest 固有。単一 realm の実運用では `instanceof` が成立し仕様どおり 403。本番コードは変更せず spec / arch / #236 メモの誤った注記を訂正 Issue #237 / PR #249 | 2026-08-05 |
 
+| [250-ssrf-status-mapping-tests.md](250-ssrf-status-mapping-tests.md) | SSRF 遮断のステータス写像（403/413/502）を守るテストが無く relay 層のカバレッジが 0% だった問題。`jest.requireActual` の部分モックで `relayAsset` / `relayBrowse` の写像を固定し、Jest の vm realm 分離で原理的に検証できない「単一 realm で `instanceof` が成立すること」を `node --test` の別レーン（testing/policy §1.2 新設）で担保。写像の正本を spec に新設 Issue #250 / PR #252 | 2026-08-05 |
+
 <!-- タスク完了時の記入例:
 | [task-slug.md](task-slug.md) | 1 行サマリ | YYYY-MM-DD |
 

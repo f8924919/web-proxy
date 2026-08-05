@@ -77,12 +77,17 @@ npm run build
 ## テスト
 
 ```bash
-# 全テスト実行
+# テスト実行（Jest・既定レーン）
 npm test
 
 # カバレッジ計測
 npm test -- --coverage
+
+# 単一 realm での実行環境 smoke（node --test の別レーン）
+npm run test:realm
 ```
+
+`npm test`（Jest）と `npm run test:realm`（`node --test`）は**別レーン**で、`npm test` は後者を含まない。realm レーンは Jest の vm realm 分離により原理的に検証できない事柄だけを扱う（[docs/testing/policy.md](docs/testing/policy.md) §1.2）。
 
 テスト方針・対象スコープ・記述ルールは [docs/testing/policy.md](docs/testing/policy.md) を参照。
 

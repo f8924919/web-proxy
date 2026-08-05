@@ -19,8 +19,9 @@ tools: Read, Edit, Grep, Glob, Bash
 ```bash
 npm run lint -- --fix  # Lint + 自動修正
 npm run format         # フォーマット適用
-npm run typecheck      # 型チェック
-npm test               # テスト
+npm run typecheck      # 型チェック（ルート + tests/realm の 2 プロジェクト）
+npm test               # テスト（Jest・既定レーン）
+npm run test:realm     # テスト（node --test・別レーン。npm test には含まれない）
 ```
 
 検証対象のディレクトリは `src/`。テストを対象に含む変更では、必要に応じて `tests/`（またはプロジェクトのテスト配置）も同じ lint / format / 型チェックの対象とする。各コマンドの正本は `CLAUDE.md` を参照。

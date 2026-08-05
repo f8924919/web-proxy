@@ -10,8 +10,9 @@
     "lint:fix": "eslint src --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tests/realm --noEmit",
     "test": "jest --passWithNoTests",
+    "test:realm": "node --experimental-strip-types --import ./tests/realm/register.mjs --test tests/realm/ssrf-status.test.mts",
     "test:watch": "jest --watch",
     "debug:browser": "node scripts/debug-browser.mjs"
   },

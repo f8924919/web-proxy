@@ -48,6 +48,12 @@ jobs:
       - name: Test (jest, coverage)
         run: npm test -- --coverage
 
+      # Jest の vm realm 分離により原理的に検証できない事柄だけを扱う別レーン
+      # （docs/testing/policy.md §1.2・#250）。必須チェック名を増やさないため
+      # 別ジョブにせず本ジョブの step として回す（docs/ci-guide.md 項目 8）。
+      - name: Realm smoke (node --test)
+        run: npm run test:realm
+
       # ビルドは他のゲートを素通りする破壊（依存のバージョン整合など）を受け止める
       # 最後の砦（docs/ci-guide.md 項目 9・#225）。実行コストが最も高いので末尾に置く。
       # .next/cache のキャッシュは入れない（古いキャッシュの incremental build で
