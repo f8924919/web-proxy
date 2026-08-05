@@ -4,7 +4,7 @@
 
 ## 背景
 
-CodeQL の Code scanning アラート #4（`js/bad-tag-filter` / high）が [src/lib/proxy/promotion.ts](../../src/lib/proxy/promotion.ts) の `visibleTextOutsideNoscript()` を指摘。「この正規表現は `</script >` のような終了タグにマッチしない」。
+CodeQL の Code scanning アラート #4（`js/bad-tag-filter` / high）が [src/lib/proxy/promotion.ts](../../../src/lib/proxy/promotion.ts) の `visibleTextOutsideNoscript()` を指摘。「この正規表現は `</script >` のような終了タグにマッチしない」。
 
 GitHub のセキュリティ通知を精査した結果、開いていた Code scanning アラート 4 件のうち、実バグはこの 1 件のみ（残る 3 件 = `js/request-forgery` × 1・`js/incomplete-url-scheme-check` × 2 は緩和済み / 前提不成立の false positive として dismiss）。Dependabot・Secret scanning のアラートは 0 件。
 
@@ -22,7 +22,7 @@ GitHub のセキュリティ通知を精査した結果、開いていた Code s
 ## 方針
 
 - 3 つの正規表現の終了タグを `<\/script(?:\s[^>]*)?>` 形式へ拡張する。style / noscript も同様。
-- **`node-html-parser` への切り替えは行わない**。[docs/arch/proxy.md](../arch/proxy.md) §`src/lib/proxy/promotion.ts` に「パーサは使わず既存の正規表現方針に揃える」と明記された既定路線があり、方針転換は本タスクのスコープ外。
+- **`node-html-parser` への切り替えは行わない**。[docs/arch/proxy.md](../../arch/proxy.md) §`src/lib/proxy/promotion.ts` に「パーサは使わず既存の正規表現方針に揃える」と明記された既定路線があり、方針転換は本タスクのスコープ外。
 - テスト: `tests/lib/proxy/promotion.test.ts` に変則終了タグの回帰ケースを追加する。
 
 ### 方針の変更: 属性付き終了タグへの追従（PR #247 の CI で判明）
@@ -37,6 +37,6 @@ GitHub のセキュリティ通知を精査した結果、開いていた Code s
 
 ## 関連 docs
 
-- spec: [docs/spec/features/proxy.md](../spec/features/proxy.md) §ヒューリスティック自動ティア昇格（崩れ/チャレンジ検出）
-- arch: [docs/arch/proxy.md](../arch/proxy.md) §`src/lib/proxy/promotion.ts`
-- 初出タスク: [#70](archive/70-heuristic-auto-tier-promotion.md)
+- spec: [docs/spec/features/proxy.md](../../spec/features/proxy.md) §ヒューリスティック自動ティア昇格（崩れ/チャレンジ検出）
+- arch: [docs/arch/proxy.md](../../arch/proxy.md) §`src/lib/proxy/promotion.ts`
+- 初出タスク: [#70](70-heuristic-auto-tier-promotion.md)
