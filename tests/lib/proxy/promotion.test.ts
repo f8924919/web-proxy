@@ -156,6 +156,99 @@ describe("shouldPromoteToBrowser", () => {
       expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
     });
   });
+
+  // HTML の終了タグはタグ名と `>` の間に空白・改行を挟める（`</script >`）。固定文字列
+  // `</script>` だけで照合すると除去に失敗し、要素の中身が可視テキストとして数えられて
+  // 昇格が検出漏れする（CodeQL js/bad-tag-filter）。
+  describe("空白入り終了タグ（#246）", () => {
+    // 除去に失敗したときだけ閾値（64 文字）を超えるよう、各要素の中身は十分長くする。
+    const LONG = "これは要素の中身であって可視テキストではありません。".repeat(
+      4
+    );
+
+    test("`</script >` でもスクリプト本文を可視テキストに数えない（昇格する）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<script src="/a.js">var CONFIG = "${LONG}";</script >` +
+        "</body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("`</style\\n>` でも CSS を可視テキストに数えない（昇格する）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<style>\n.hero::after { content: "${LONG}"; }\n</style\n>` +
+        '<script src="/a.js"></script></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("`</noscript >` でも <noscript> 主体と判定する（昇格する）", () => {
+      const html =
+        "<html><head><title>x</title></head><body>" +
+        `<noscript>${LONG}</noscript >` +
+        "<div id=root></div></body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("空白入り終了タグでも可視テキストが十分（SSR 済み）なら昇格しない", () => {
+      const body =
+        "実際の記事本文がここに十分な分量で描画されています。".repeat(8);
+      const html =
+        `<html><body><div id="app"><article>${body}</article></div>` +
+        '<script src="/a.js">var a = 1;</script ></body></html>';
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+
+    test("大文字混在 + 空白（`</SCRIPT >`）でも除去する（昇格する）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<SCRIPT src="/a.js">var CONFIG = "${LONG}";</SCRIPT >` +
+        "</body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("属性付き終了タグ（`</script bar>`）でも除去する（昇格する）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<script src="/a.js">var CONFIG = "${LONG}";</script bar>` +
+        "</body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("属性付き終了タグの空白がタブ・改行でも除去する（昇格する）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<script src="/a.js">var CONFIG = "${LONG}";</script\t\n bar>` +
+        "</body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("タグ名に続く別トークン（`</scriptfoo>`）は終了タグと誤認しない（昇格しない）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<script src="/a.js">var CONFIG = "${LONG}";</scriptfoo></script>` +
+        "</body></html>";
+      // `</scriptfoo>` では閉じず、後続の `</script>` までが script 要素として除去される。
+      // 誤認して `</scriptfoo>` で閉じた場合はスクリプト本文が可視テキストに残り false になる。
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("終了タグが無い不正 HTML は従来どおり除去せず過検知しない（昇格しない）", () => {
+      const html = `<html><body><div id="root"></div><script src="/a.js">var CONFIG = "${LONG}";`;
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+
+    test("空白入り終了タグが連続しても script 間の可視テキストは除去しない（昇格しない）", () => {
+      const between =
+        "スクリプトに挟まれた実際の本文がここに十分な分量で存在しています。".repeat(
+          3
+        );
+      const html =
+        '<html><body><div id="root"></div><script src="/a.js">var a = 1;</script >' +
+        `${between}<script>var b = 2;</script ></body></html>`;
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
+    });
+  });
 });
 
 describe("PromotionGuard", () => {
