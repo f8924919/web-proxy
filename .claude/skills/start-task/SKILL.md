@@ -1,6 +1,7 @@
 ---
 name: start-task
 description: タスクの立ち上げを定型化する。Issue 確認/起票 → main 最新化＋ブランチ作成 → investigate 起動 → 受け入れ条件レビュー（criteria-review・助言）→ docs 先行ゲート →（§5.5 発火時）設計レビュー（design-review・助言）→ テスト先行ゲート → 実装、の順に進める。特に「docs 先・テストファースト」の順序を強制し、実装先行（順序逆転）を防ぐ。新しいタスクに着手するときに使う。
+argument-hint: "[issue-number or task-description]"
 ---
 
 # start-task — タスク立ち上げ（ワークフロー前半）

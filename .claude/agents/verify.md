@@ -2,6 +2,7 @@
 name: verify
 description: lint / フォーマット / 型チェック / テストを実行し、失敗を修正して green にする検証エージェント。実装が一段落した後の検証ゲートで使う。設計・仕様判断は行わない。
 model: sonnet
+effort: low
 tools: Read, Edit, Grep, Glob, Bash
 ---
 

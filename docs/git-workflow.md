@@ -18,7 +18,8 @@
 
 このルールは二段構えで機械的に強制できる（クライアント側を同梱済み）。
 
-- **クライアント側（早期警告）**: Claude Code の PreToolUse hook（[.claude/hooks/block_main_commit.py](../.claude/hooks/block_main_commit.py)・[.claude/settings.json](../.claude/settings.json)）が、カレントブランチが `main` のときの `git commit` / `git push` をコミット前にブロックする。対象は Claude Code の Bash / PowerShell ツール経由のコマンドのみ（matcher `Bash|PowerShell`）。判定はカレントブランチのみで、git コマンド失敗時等は**フェイルオープン**（誤って全コマンドをブロックしない）。検出は「単発・複合コマンド（`&&` / `;` / `|` 区切り）のサブコマンド位置での `git commit` / `git push` 一致」に留め、`git -c k=v commit` のようなオプション挟み込みや文字列内の擦り抜けは追わない（誤ブロック回避を優先し、擦り抜けはサーバー側に委ねる設計）。settings.json の hook 定義は **exec form**（`command` + `args` 配列・`${CLAUDE_PROJECT_DIR}` プレースホルダは Claude Code が置換）とする（shell form はシェル展開・PATH 解決依存で Windows にて不発火の実績があるため）。hooks はセッション開始時に読み込まれるため、変更後の実効確認は新しいセッションで行う。起動子が動かない場合も Claude Code は非ブロッキング扱いでコマンドを通す（フェイルオープン）が、その状態では hook が無効なので注意。
+- **クライアント側（早期警告）**: Claude Code の PreToolUse hook（[.claude/hooks/block_main_commit.py](../.claude/hooks/block_main_commit.py)・[.claude/settings.json](../.claude/settings.json)）が、カレントブランチが `main` のときの `git commit` / `git push` をコミット前にブロックする。対象は Claude Code の Bash / PowerShell ツール経由のコマンドのみ（matcher `Bash|PowerShell`）。判定はカレントブランチのみで、git コマンド失敗時等は**フェイルオープン**（誤って全コマンドをブロックしない）。検出は「単発・複合コマンド（`&&` / `;` / `|` 区切り）のサブコマンド位置での `git commit` / `git push` 一致」に留め、`git -c k=v commit` のようなオプション挟み込みや文字列内の擦り抜けは追わない（誤ブロック回避を優先し、擦り抜けはサーバー側に委ねる設計）。**例外としてリモートブランチの削除**（`git push --delete` / `-d` を含む、または**リモート名を除く refspec がすべて `:branch` 形**）は `main` 上でも通す。マージ後のブランチ削除は `main` へ戻ってから行う正規の手順（§5 step 9・`/finish-task`）であり、かつ削除は `main` の履歴を変更しないため、本 hook の目的（main への直接の変更を防ぐ）から外れるため。**削除と通常 push の混在**（`git push origin main :old`）は削除とみなさずブロックする（`main` の履歴を変更する push を擦り抜けさせないため、削除 refspec が 1 つでもあれば通す判定にはしない）。`--force` / `-f` は削除ではないので従来どおりブロックする。settings.json の hook 定義は **exec form**（`command` + `args` 配列・`${CLAUDE_PROJECT_DIR}` プレースホルダは Claude Code が置換）とする（shell form はシェル展開・PATH 解決依存で Windows にて不発火の実績があるため）。hooks はセッション開始時に読み込まれるため、変更後の実効確認は新しいセッションで行う。起動子が動かない場合も Claude Code は非ブロッキング扱いでコマンドを通す（フェイルオープン）が、その状態では hook が無効なので注意。
+- **クライアント側（編集時点）**: PreToolUse hook（[.claude/hooks/block_main_edit.py](../.claude/hooks/block_main_edit.py)・matcher `Edit|Write|NotebookEdit`）が、カレントブランチが `main` のときの**リポジトリ内ファイルの編集**をブロックする。commit 時点まで気付かないのを避けるため。対象パスは `tool_input.file_path`（Edit / Write）と `tool_input.notebook_path`（NotebookEdit）の**両方**から解決する（matcher に `NotebookEdit` を入れても `file_path` しか見なければ素通りするため）。**リポジトリ外のパスは対象外**（Claude Code のメモリなど無関係の書き込みを巻き込まない）。パス解決・ブランチ判定に失敗した場合はフェイルオープン（通す）。
 - **サーバー側（最後の砦）**: ホスティング側の branch protection で `main` への直 push を管理者を含めて拒否する（GitHub なら branch protection の `enforce_admins` を有効化）。PR 経由のマージには影響しない。緊急時に一時解除した場合は、対応後に必ず再有効化する。
 
 ブランチ判定は hook 入力の `cwd` を起点にした**実効ディレクトリ**に対して行う。複合コマンド内の `cd <path>` セグメントを追跡し、git のグローバルオプション `-C <path>`（空白区切り・複数指定の累積）も解決したうえで、対象リポジトリのカレントブランチを判定する。これにより別リポジトリの feature ブランチへの commit/push は誤ブロックせず、別リポジトリの `main` 上なら従来どおりブロックする。`--git-dir` / `--work-tree` によるリポジトリ指定・クォート付きパス（スペースを含むパス）は追わず、パス解決に失敗するケースは一律フェイルオープン（通す）。
@@ -99,14 +100,18 @@ main ──┬──────────────────┬──→
 
 機械的・探索的な作業、および独立評価は専用のサブエージェントへ委譲し、主エージェントの文脈を温存する。定義は `.claude/agents/` 配下。調査・検証・docs 整合・受け入れ条件レビューは Sonnet、独立評価（`evaluator`）と設計レビュー（`design-review`）は Opus を使う。**設計・仕様の判断、テスト内容の決定、設計外の問題への対応は委譲せず、主エージェントとユーザーが行う**（§5.1）。
 
-| エージェント                                              | モデル | 委譲する作業                                            | 対応するフロー | 主エージェントが受け取るもの                     |
-| --------------------------------------------------------- | ------ | ------------------------------------------------------- | -------------- | ------------------------------------------------ |
-| [`investigate`](../.claude/agents/investigate.md)         | Sonnet | docs 先・コード裏取りの調査                             | step 3         | 結論・関連 `path:line`・裏取りメモ               |
-| [`criteria-review`](../.claude/agents/criteria-review.md) | Sonnet | 受け入れ条件・spec の妥当性を実装前に点検（助言・常時） | step 3.5       | 受け入れ条件の指摘・改善案（採否は委譲しない）   |
-| [`design-review`](../.claude/agents/design-review.md)     | Opus   | 設計案の妥当性を実装前に点検（助言・§5.5 発火時）       | step 4.5       | 設計の指摘・改善案（設計方針の決定は委譲しない） |
-| [`verify`](../.claude/agents/verify.md)                   | Sonnet | lint / フォーマット / 型 / テストを green にする        | step 7         | 検証結果・修正点・要判断項目                     |
-| [`docs-check`](../.claude/agents/docs-check.md)           | Sonnet | docs 整合性の点検と機械的修正                           | step 7         | 点検結果・修正点・要対応項目                     |
-| [`evaluator`](../.claude/agents/evaluator.md)             | Opus   | 受け入れ条件・spec の充足を独立評価                     | step 7         | 総合判定・受け入れ条件ごとの合否・要対応項目     |
+| エージェント                                              | モデル / effort   | 委譲する作業                                            | 対応するフロー | 主エージェントが受け取るもの                     |
+| --------------------------------------------------------- | ----------------- | ------------------------------------------------------- | -------------- | ------------------------------------------------ |
+| [`investigate`](../.claude/agents/investigate.md)         | Sonnet / `medium` | docs 先・コード裏取りの調査                             | step 3         | 結論・関連 `path:line`・裏取りメモ               |
+| [`criteria-review`](../.claude/agents/criteria-review.md) | Sonnet / `medium` | 受け入れ条件・spec の妥当性を実装前に点検（助言・常時） | step 3.5       | 受け入れ条件の指摘・改善案（採否は委譲しない）   |
+| [`design-review`](../.claude/agents/design-review.md)     | Opus / `high`     | 設計案の妥当性を実装前に点検（助言・§5.5 発火時）       | step 4.5       | 設計の指摘・改善案（設計方針の決定は委譲しない） |
+| [`verify`](../.claude/agents/verify.md)                   | Sonnet / `low`    | lint / フォーマット / 型 / テストを green にする        | step 7         | 検証結果・修正点・要判断項目                     |
+| [`docs-check`](../.claude/agents/docs-check.md)           | Sonnet / `low`    | docs 整合性の点検と機械的修正                           | step 7         | 点検結果・修正点・要対応項目                     |
+| [`evaluator`](../.claude/agents/evaluator.md)             | Opus / `high`     | 受け入れ条件・spec の充足を独立評価                     | step 7         | 総合判定・受け入れ条件ごとの合否・要対応項目     |
+
+**effort をエージェント側で固定する理由**: 指定しないとセッションの effort をそのまま継承するため、**同じエージェントの判定力がその日の設定で変わる**。特に `evaluator` / `design-review` は「レビュアーが生成者より弱いと追認してしまう」という理由で上位モデルを割り当てているのに、effort がセッション任せだとその前提が崩れる。逆に `verify` / `docs-check` は結果を客観的に検証できる機械的作業なので、最も頻度が高いにもかかわらず高い effort を継承するのは無駄。**モデル（能力の器）と effort（考える深さ）を別々に固定**し、どちらもセッション設定に依存させない。より厳しく見たい回はユーザーが起動時にオーバーライドしてよい（`design-review` / `evaluator` を `xhigh` に上げる等）。
+
+読み取り専任のエージェント（`investigate` / `criteria-review` / `design-review` / `evaluator`）は、`tools` から `Edit` / `Write` を外すだけでは `Bash` 経由の書き込み・commit を防げない。そこで frontmatter に **`permissionMode: plan`（読み取り専用モード）** を指定し、本文の約束ではなく機構で担保する。特に `evaluator` の独立性は本 harness の中核であり、口約束に委ねない。ただし親セッションが `bypassPermissions` / `acceptEdits` / auto モードの場合は親の権限モードが優先されエージェント側の指定は無視されるため、各エージェント本文の「読み取り専用」の記述も残す（二段構え）。`verify` / `docs-check` は修正を行うため対象外。
 
 調査・検証・docs 整合の委譲は費用対効果で判断してよい（一発で通る見込みなら `verify` を介さず直接回す、軽い確認は `investigate` を介さず直接読む等）。`evaluator` と `design-review` が Opus なのは、他の Sonnet 勢が結果を客観的に検証できる機械的・構造的タスクなのに対し、この 2 つは裁量を伴う判断だから。生成側（主エージェント）も上位モデルのため、評価者・レビュアーが弱いと、`evaluator` では実装の見落としを、`design-review` では不十分な設計を、それぞれ追認してしまう。
 
@@ -154,6 +159,16 @@ main ──┬──────────────────┬──→
 
 skill が呼ぶサブエージェントの**合否・設計判断は委譲しない**点は §5.1 / §5.2 と同じ。skill は正しい順序・条件での起動と結果集約に徹する。ホスト操作（Issue / PR）を含む skill は冒頭注記の読み替えに従う。
 
+**`allowed-tools` は事前承認ではない（frontmatter に置かない）**: skill frontmatter の `allowed-tools` は「**その skill の実行中に使えるツールの絞り込み**」であり、コマンドの事前承認ではない（公式リファレンスの例も `allowed-tools: Read, Grep, Glob # Restrict tool access`）。事前承認のつもりで git コマンドだけを列挙すると、その skill は `Read` / `Write` / サブエージェント起動を失い、**手順の中核が実行できなくなる**。したがって skill の frontmatter には `name` / `description` / `argument-hint` のみを置き、`allowed-tools` は書かない。
+
+**承認の省略は `permissions.allow` に一本化する**（§5.6）。skill の定型手順で毎回承認待ちに刻まれるコマンドのうち、副作用が小さく方針上も常時許可してよいものだけを allow に登録する。skill 起動ターンだけ有効な狭い grant という仕組みは存在しないため、「常時許可してよいか」だけが判断軸になる。
+
+| skill         | 承認の扱い                                                                                                                                                                                                                                       |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start-task`  | `git checkout main` / `git pull --ff-only` / `git checkout -b` は §5.6 の allow に登録。**`gh issue create`** は都度確認 — Issue を外部に立てる操作は内容の確認を挟む                                                                            |
+| `finish-task` | `git branch -d` / `git fetch --prune` は allow に登録。**`git push origin --delete` は allow に入れない**（§5.6 の「`git commit` / `git push` は都度確認」を後退させないため）。手順 B の `git commit` / `git push`（archive 移動 PR）も都度確認 |
+| `verify-gate` | 追加なし（使う git が `status` / `diff` / `branch --show-current` の参照系のみで元々承認不要）                                                                                                                                                   |
+
 ### 5.4 ルール層（path-scoped、`.claude/rules/`）
 
 特定の種類のファイルを編集する瞬間にだけ思い出すべき遵守事項は、`.claude/rules/` 配下に **path-scoped rule** として置く。Claude Code はマッチするファイルを読んだ時にそのルールをコンテキストへ自動注入する（`paths` frontmatter の glob で対象を指定）。CLAUDE.md（常時ロード）と違い、関係するファイルを触る時だけ載るため文脈を節約できる。
@@ -196,3 +211,40 @@ skill が呼ぶサブエージェントの**合否・設計判断は委譲しな
 - モードが `auto` で 1 つでも該当（推奨 yes）→ **実施を既定**とする。主エージェントは主観でスキップせず、省略する場合は**理由をユーザーに提示して承認を得る**（提示のみの自己判断スキップは禁止）。
 - ユーザーはオン / オフ両方向でオーバーライドできる（推奨 no でも設計に不安があれば起動を要求してよい。最終判断はユーザー）。
 - `design-review` は助言でありゲートではない。指摘の採否・設計方針の最終決定は主エージェント＋ユーザーが行う（§5.1）。
+
+### 5.6 権限ルール（`.claude/settings.json` の `permissions`）
+
+検証ゲート（§5 step 7）で毎回走る品質コマンドは、`permissions.allow` に列挙して都度確認を省く。`verify` が lint / 型 / テストの往復のたびに承認待ちで止まると、委譲の利点（主エージェントの文脈温存）が失われるため。
+
+**allow に入れる**: [CLAUDE.md](../CLAUDE.md) の「Lint / Format / 型チェック」「テスト」節に載っている**読み取り・検証系のコマンド**（`npm run lint` / `lint:fix` / `format` / `format:check` / `typecheck` / `npm test`）と、`gh` の**参照系**（`gh issue view` / `gh issue list` / `gh pr view` / `gh pr list`）。加えて `start-task` / `finish-task` の定型 git 操作のうち**履歴を変更せず取り消しが容易なもの**（`git checkout main` / `git pull --ff-only` / `git checkout -b` / `git branch -d` / `git fetch --prune`）。Claude Code の Bash / PowerShell **両ツール分**を登録する（サブエージェントは Bash を使う一方、主エージェントは Windows では PowerShell を使うため）。
+
+**allow に入れない**（都度確認させる）:
+
+| 対象                                                                    | 理由                                                                                                                                                                                                           |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 依存のインストール・更新（`npm install` / `npm ci` 等）                 | 依存ツリーを書き換える                                                                                                                                                                                         |
+| アプリ / サービスの起動・E2E・ビルド（`npm run dev` / `npm run build`） | 重い副作用（プロセス起動・成果物生成）を伴う。実行は主エージェントが明示的に行う（[testing/policy.md](testing/policy.md)）。`npm run build` は CI の検証ゲートに含むが、ローカルでの実行は都度確認とする       |
+| `git commit` / `git push`                                               | main 判定 hook（§1）とサーバー側 protection の判断を素通りさせない。`finish-task` が使う `git push origin --delete`（リモートブランチ削除）も**例外にしない**（hook は通すが、常時無条件の許可までは与えない） |
+
+**deny**: `git push --force` / `-f`（両ツール分）。deny は allow より先に評価され例外を作れないため、広い deny（`git push *` 等）は置かない。
+
+ルールの書式は Bash / PowerShell とも glob で、末尾 ` *` は語境界付きの前方一致（引数なしの実行にもマッチする）。追加・変更時は**この表の分類（検証系は allow、副作用のあるものは都度確認）に沿っているか**を判断基準にする。
+
+### 5.7 hooks 層（`.claude/hooks/`）
+
+**プロンプトの指示に頼らず機構で効かせたいもの**は hook にする。CLAUDE.md に書いた約束はモデルが読み飛ばしうるが、hook は必ず走る。同梱している hook は以下（いずれも標準ライブラリのみ・言語非依存。起動子は `python3`）。雛形は Python 3.10+ 前提だが、本リポジトリの実行環境の `python3` は 3.9 のため、各 hook に `from __future__ import annotations` を足して PEP 604（`X | None`）の注釈を遅延評価にしている（これが無いと import 時に `TypeError` で落ち、フェイルオープン設計ゆえに**何も起きないまま素通り**する）。
+
+| hook                                                                | イベント / matcher                         | 役割                                                                                                               | 正本                                                       |
+| ------------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------- |
+| [`session_task_status.py`](../.claude/hooks/session_task_status.py) | `SessionStart`                             | [task/index.md](task/index.md) の 2 つの表を `additionalContext` で注入する                                        | [CLAUDE.md](../CLAUDE.md) タスク管理ルール                 |
+| [`block_main_commit.py`](../.claude/hooks/block_main_commit.py)     | `PreToolUse` / `Bash\|PowerShell`          | `main` 上の `git commit` / `git push` をブロック（ブランチ削除は除く）                                             | §1                                                         |
+| [`block_main_edit.py`](../.claude/hooks/block_main_edit.py)         | `PreToolUse` / `Edit\|Write\|NotebookEdit` | `main` 上のリポジトリ内ファイルの編集をブロック                                                                    | §1                                                         |
+| [`format_edited_file.py`](../.claude/hooks/format_edited_file.py)   | `PostToolUse` / `Edit\|Write`              | 編集したソースファイルを整形する（本リポジトリは `src/` 配下の `.ts` / `.tsx` / `.css` を `npx prettier --write`） | [CLAUDE.md](../CLAUDE.md) の「Lint / Format / 型チェック」 |
+
+共通の設計方針:
+
+- **フェイルオープン**: 判定に迷うケース（パース失敗・パス解決不能・git やツールの失敗）は必ず「通す」に倒す。**想定外の形の入力**（トップレベルが dict でない JSON、`tool_input` が dict でない等）も例外を投げずに**無出力 exit 0** で通す。hook の不調で作業が止まる方が損失が大きい。ブロック系はサーバー側 protection（§1）が最後の砦。
+- **正本を再定義しない**: hook は判定と注入に徹し、ルール本文は docs 側に置く（§5.3 の skill・§5.4 の rule と同じ方針）。
+- **反映タイミング**: hooks の登録（settings.json）はセッション開始時に読み込まれるため、変更後の実効確認は新しいセッションで行う。hook スクリプト本体は実行のたびに読まれるため即座に効く。
+- **検証はスモークで行う**: hook は「効いているつもりで効いていない」状態になっても気付きにくい（matcher に登録済みでも入力キー違いで素通りする、等）。`python3 scripts/smoke_hooks.py` で hook に stdin JSON を直接与え、ブロック / 通過の分岐を確認する（`main` を指す一時 worktree を自動で作る。テスト基盤に依存せず単体で走る）。**hook を変更したら必ず実行すること**。
+- **stdin の BOM に注意**: PowerShell のパイプ（`'{...}' | python hook.py`）は stdin に UTF-8 BOM を付けるため、hook が JSON パースに失敗して**フェイルオープンする**（＝何も起きず、成功と見分けがつかない）。手でスモークする場合は BOM なしのファイルをリダイレクトする（Claude Code 本体は BOM を付けないため実運用には影響しない）。

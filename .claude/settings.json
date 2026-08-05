@@ -1,5 +1,59 @@
 {
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(npm run lint *)",
+      "Bash(npm run lint:fix *)",
+      "Bash(npm run format *)",
+      "Bash(npm run format:check *)",
+      "Bash(npm run typecheck *)",
+      "Bash(npm test *)",
+      "Bash(gh issue view *)",
+      "Bash(gh issue list *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(git checkout main *)",
+      "Bash(git pull --ff-only *)",
+      "Bash(git checkout -b *)",
+      "Bash(git branch -d *)",
+      "Bash(git fetch --prune *)",
+      "PowerShell(npm run lint *)",
+      "PowerShell(npm run lint:fix *)",
+      "PowerShell(npm run format *)",
+      "PowerShell(npm run format:check *)",
+      "PowerShell(npm run typecheck *)",
+      "PowerShell(npm test *)",
+      "PowerShell(gh issue view *)",
+      "PowerShell(gh issue list *)",
+      "PowerShell(gh pr view *)",
+      "PowerShell(gh pr list *)",
+      "PowerShell(git checkout main *)",
+      "PowerShell(git pull --ff-only *)",
+      "PowerShell(git checkout -b *)",
+      "PowerShell(git branch -d *)",
+      "PowerShell(git fetch --prune *)"
+    ],
+    "deny": [
+      "Bash(git push --force *)",
+      "Bash(git push -f *)",
+      "PowerShell(git push --force *)",
+      "PowerShell(git push -f *)"
+    ]
+  },
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/session_task_status.py"
+            ]
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash|PowerShell",
@@ -8,6 +62,30 @@
             "type": "command",
             "command": "python3",
             "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block_main_commit.py"]
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": ["${CLAUDE_PROJECT_DIR}/.claude/hooks/block_main_edit.py"]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.claude/hooks/format_edited_file.py"
+            ]
           }
         ]
       }

@@ -2,6 +2,7 @@
 name: docs-check
 description: docs-guide.md のルールに沿ってドキュメントの整合性（index 更新漏れ・リンク切れ・命名規則・関連仕様リンク）を点検し、機械的な不整合を修正する。タスクの PR 前に使う。
 model: sonnet
+effort: low
 tools: Read, Edit, Grep, Glob, Bash
 ---
 
