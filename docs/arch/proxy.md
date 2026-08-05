@@ -383,6 +383,7 @@ egress IP が支配的なため、最小実装に留める（突破は保証し�
 
 - **チャレンジ語句**: `enable javascript` / `enablejs` / `checking your browser` / `recaptcha` / Cloudflare チャレンジ等の語句を本文（小文字化）に含むか判定する。
 - **`<noscript>` 主体**: `<noscript>` を含み、かつ `<script>` / `<style>` / `<noscript>` を除いた可視テキストが極小であるかで判定する。
+- **除去用正規表現の終了タグ（#246）**: 可視テキスト抽出（`visibleTextOutsideNoscript`）で `<script>` / `<style>` / `<noscript>` を内容ごと除去する際、終了タグは `</script\s*>` のように **`>` 直前の空白・改行を許容**する。HTML の終了タグはタグ名と `>` の間に空白を挟めるため、固定文字列 `</script>` だけで照合すると除去に失敗し、スクリプト本文が可視テキストとして数えられて昇格が検出漏れする（開始タグ側の `<noscript[\s>]` と対称にする）。属性付き終了タグ（`</script foo>`）までは追従しない — `[^>]*` まで緩めると `</scriptfoo>` のような別トークンを誤認するリスクが上回るため。
 - **空 SPA シェル（#160）**: ① 既知の SPA マウント先要素の存在（`SPA_ROOT_IDS` = `root` / `__next` / `app` / `app-root`・タグ種別不問・ID 完全一致は id 値直後の引用符/空白/`>` を先読み `(?=[\s>])` で担保）② 外部 `<script src>` の存在（`src` は独立属性として照合し `data-src` 等を弾く）③ 可視テキスト極小、の **3 条件 AND** で判定する。クライアント描画 SPA（中継ティアでは `location.pathname` がプロキシパスになり描画されない）を昇格対象にする。`node-html-parser` は使わず `promotion.ts` 既存の正規表現方針に揃える。
 
 ### 再昇格抑止（`PromotionGuard`・インメモリ状態）

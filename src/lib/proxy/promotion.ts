@@ -47,11 +47,14 @@ const EXTERNAL_SCRIPT_RE = /<script\b[^>]*\ssrc\s*=/i;
 
 // script / style / noscript の各要素（内容ごと）とタグを除いた可視テキストを抽出し、
 // 連続空白を 1 つに畳んでトリムした文字列を返す。
+// 終了タグは `>` 直前の空白・改行を許容する（`</script >` / `</script\n>` は HTML 仕様上
+// 正当な終了タグ。固定文字列で照合すると除去に失敗し、中身が可視テキストとして数えられて
+// 昇格が検出漏れする・#246）。属性付き終了タグ（`</script foo>`）までは追従しない。
 function visibleTextOutsideNoscript(html: string): string {
   return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<noscript[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script\s*>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style\s*>/gi, " ")
+    .replace(/<noscript[\s\S]*?<\/noscript\s*>/gi, " ")
     .replace(/<[^>]*>/g, " ")
     .replace(/\s+/g, " ")
     .trim();
