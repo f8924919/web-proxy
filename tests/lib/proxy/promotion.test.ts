@@ -207,6 +207,32 @@ describe("shouldPromoteToBrowser", () => {
       expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
     });
 
+    test("属性付き終了タグ（`</script bar>`）でも除去する（昇格する）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<script src="/a.js">var CONFIG = "${LONG}";</script bar>` +
+        "</body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("属性付き終了タグの空白がタブ・改行でも除去する（昇格する）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<script src="/a.js">var CONFIG = "${LONG}";</script\t\n bar>` +
+        "</body></html>";
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
+    test("タグ名に続く別トークン（`</scriptfoo>`）は終了タグと誤認しない（昇格しない）", () => {
+      const html =
+        '<html><body><div id="root"></div>' +
+        `<script src="/a.js">var CONFIG = "${LONG}";</scriptfoo></script>` +
+        "</body></html>";
+      // `</scriptfoo>` では閉じず、後続の `</script>` までが script 要素として除去される。
+      // 誤認して `</scriptfoo>` で閉じた場合はスクリプト本文が可視テキストに残り false になる。
+      expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(true);
+    });
+
     test("終了タグが無い不正 HTML は従来どおり除去せず過検知しない（昇格しない）", () => {
       const html = `<html><body><div id="root"></div><script src="/a.js">var CONFIG = "${LONG}";`;
       expect(shouldPromoteToBrowser(html, 200, HTML)).toBe(false);
