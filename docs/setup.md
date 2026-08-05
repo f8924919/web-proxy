@@ -41,18 +41,19 @@ npm run dev
 
 ## 4. 主要コマンド一覧
 
-| コマンド                 | 内容                                    |
-| ------------------------ | --------------------------------------- |
-| `npm run dev`            | 開発サーバー起動（ホットリロード有効）  |
-| `npm run build`          | 本番向けビルド（`.next/` に出力）       |
-| `npm start`              | ビルド済みアプリをサーバーモードで起動  |
-| `npm run lint`           | ESLint で静的解析                       |
-| `npm run lint:fix`       | ESLint 自動修正                         |
-| `npm run format`         | Prettier でコード整形                   |
-| `npm run format:check`   | フォーマット差異の確認（CI 向け）       |
-| `npm run typecheck`      | TypeScript 型チェック（`tsc --noEmit`） |
-| `npm test`               | Jest テスト実行                         |
-| `npm test -- --coverage` | カバレッジ付きテスト                    |
+| コマンド                 | 内容                                                     |
+| ------------------------ | -------------------------------------------------------- |
+| `npm run dev`            | 開発サーバー起動（ホットリロード有効）                   |
+| `npm run build`          | 本番向けビルド（`.next/` に出力）                        |
+| `npm start`              | ビルド済みアプリをサーバーモードで起動                   |
+| `npm run lint`           | ESLint で静的解析                                        |
+| `npm run lint:fix`       | ESLint 自動修正                                          |
+| `npm run format`         | Prettier でコード整形                                    |
+| `npm run format:check`   | フォーマット差異の確認（CI 向け）                        |
+| `npm run typecheck`      | TypeScript 型チェック（`tsc --noEmit`）                  |
+| `npm test`               | Jest テスト実行                                          |
+| `npm run test:realm`     | 単一 realm の smoke（`node --test`。Node 22 以上が必要） |
+| `npm test -- --coverage` | カバレッジ付きテスト                                     |
 
 ---
 

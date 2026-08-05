@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    // Node は ESM の拡張子解決を行わないため、realm レーンの import は `.ts` / `.mjs`
+    // を明示する。この緩みは本レーンに閉じ込め、ルート tsconfig へは波及させない
+    // （src/ で `.ts` 付き import が書けると next build は壊れるのに tsc は通ってしまう）。
+    "allowImportingTsExtensions": true,
+    "noEmit": true,
+    "types": ["node"]
+  },
+  "include": ["**/*.mts", "**/*.mjs", "../../src/lib/proxy/fetch.ts"]
+}

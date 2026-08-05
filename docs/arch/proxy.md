@@ -175,6 +175,8 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 
 **役割**: SSRF チェックを行ったうえでターゲットへ fetch する。
 
+> **このモジュールは Node が直接読む**（#250）。realm smoke レーン（`tests/realm/`・[テスト方針](../testing/policy.md) §1.2）は Node の型ストリップでこのファイルを**そのまま import する**ため、`@/` エイリアス・`enum` / `namespace` などランタイム機能を持つ TypeScript 構文を導入しない。導入する場合は realm レーンの方式ごと再検討すること（壊れた場合は `npm run test:realm` が fail するため気づけるが、理由に辿り着きにくい）。
+
 ### `proxyFetch(url, options?)`
 
 `options` でメソッド・ボディ・追加リクエストヘッダーを受け取り、ターゲットへ転送する（省略時は GET・ボディなし＝従来動作）。
@@ -223,7 +225,7 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 >
 > したがってこれは `jest-environment-node` がテストコードを vm context で実行するために起きる**テスト環境固有の現象**で、単一 realm で動く実運用（本リポジトリに edge runtime の指定は無く、`proxyFetch` に到達する 4 ルート（`relayBrowse` / `relayAsset` 経由）はすべて Node runtime）では発生しない。実運用では `SsrfBlockedError` が cause 連鎖にそのまま残り、`findSsrfCause` の `instanceof` 判定が成立して**仕様どおり 403 が返る**。
 >
-> このため `tests/lib/proxy/proxyFetch.wiring.test.ts` は `instanceof` ではなくメッセージ文字列で遮断を検証している。将来 edge runtime を採用する場合は realm が分かれるため、判定方法の再検討が必要になる。
+> このため `tests/lib/proxy/proxyFetch.wiring.test.ts` は `instanceof` ではなくメッセージ文字列で遮断を検証している。実運用と同じ**単一 realm** での挙動（`instanceof` が成立して 403 経路に入ること）は Jest では原理的に検証できないため、`node --test` の別レーン（`tests/realm/`・`npm run test:realm`）で担保する（[テスト方針](../testing/policy.md) §1.2・[#250](https://github.com/f8924919/web-proxy/issues/250)）。将来 edge runtime を採用する場合は realm が分かれるため、判定方法の再検討が必要になる。
 
 > **ブラウザバック中継の残存制約**: Chromium は接続時に自前再解決するため同様のピン留めができない。`installSsrfGuard` の `context.route` 照合までで、リバインディングの窓は残る（[機能仕様 §SSRF（不弱化）](../spec/features/proxy.md#ssrf不弱化)）。
 
@@ -249,6 +251,46 @@ GET との差分のみ記載（共通部はレスポンス処理ヘルパーに�
 | `FetchTimeoutError`     | タイムアウト / 到達不能（502 を返す）。原因例外を `cause` に保持（#236）   |
 | `TooManyRedirectsError` | リダイレクト追従が上限超過（502 を返す）                                   |
 | `BodyTooLargeError`     | 中継本文が上限超過（413 を返す。#134）                                     |
+
+#### ステータス写像のテスト（#250）
+
+> 写像の**正本は仕様側**（[機能仕様 §中継失敗時のステータス](../spec/features/proxy.md#中継失敗時のステータス)）。本節は実装とテストの対応を書く。
+
+エラークラスをステータスへ落とすのは relay 層（`browseRelay.ts` / `relayAsset.ts`）の `catch` だが、**両モジュールとも catch は 2 つある**。どちらに届くかでクラスの扱いが変わるため混同しないこと。
+
+**① 上流取得の catch**（`proxyFetch` / `browserFetch` の失敗を受ける）
+
+|                     | `browseRelay`                                            | `relayAsset`                                       |
+| ------------------- | -------------------------------------------------------- | -------------------------------------------------- |
+| `SsrfBlockedError`  | `instanceof` で判定 → 403                                | `instanceof` で判定 → 403                          |
+| `BodyTooLargeError` | `instanceof` で判定 → 413（`browserFetch` の #144 経路） | この catch には届かない（`proxyFetch` は投げない） |
+| `FetchTimeoutError` | `instanceof` で判定 → 502                                | catch-all に落ちる → 502                           |
+| 未知の例外          | 502                                                      | 502                                                |
+
+**② 本文展開の catch**（`readTextWithLimit` / 書き換え / `Response` 構築の失敗を受ける）
+
+両モジュールとも `BodyTooLargeError` → 413、それ以外 → 502。**ここは対称**であり、`/api/proxy` の本文上限超過が 413 になるのはこの catch による。
+
+`relayAsset` の①は `SsrfBlockedError` **だけ**を名指しで判定し残りを無条件に 502 へ丸める catch-all なので、この位置の 502 テストが守るのは「`FetchTimeoutError` を認識している」ことではなく、「**未知の例外でもハンドラをクラッシュさせず 502 を返す**」という不変条件である。
+
+検証は 2 段構え。
+
+| 検証                                   | 手段                                                                                                                                      | 何を守るか                                                                            |
+| -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| 写像そのもの                           | `tests/lib/proxy/relayAsset.test.ts` / `browseRelay.test.ts`（Jest。`jest.requireActual` を使う部分モックで `proxyFetch` だけ差し替える） | ①②両表のとおりステータスが落ちること（**同時接続・レート制限の 503 / 429 は対象外**） |
+| 実行時に `SsrfBlockedError` が届くこと | `tests/realm/`（`node --test`。[テスト方針](../testing/policy.md) §1.2）                                                                  | 単一 realm で `connect.lookup` 由来の例外が `instanceof` を保ったまま伝播すること     |
+
+**エラークラス自体はモックしない**（`jest.requireActual` で温存する）。モックしたクラスでは `instanceof` 判定が成立せず、検証したい写像そのものが壊れるため。②の 413 も `PROXY_MAX_BUFFER_BYTES` を極小にして**実物の `readTextWithLimit`** に投げさせる（`BodyTooLargeError` を注入するのではなく実経路を通す）。
+
+同時接続数・レート制限（503 / 429）は上限判定そのものを `concurrency.ts` / `rateLimit.ts` の単体テストで検証しているが、**relay 層でどのスコープがどのステータスになるかの写像は未固定**である。
+
+`browseRelay` の `fetchTarget` にはブラウザティア（`useBrowser=true`）の `SsrfBlockedError` / `BodyTooLargeError` を**フォールバックさせず再 throw する**分岐があり、これも検証対象に含める（中継ティアへ落ちて 200 になってしまわないこと）。
+
+**残るギャップ**: Jest 側は `proxyFetch` をモックするため境界の手前まで、realm レーンは `proxyFetch` の境界までしか守らない。`relayAsset.ts` / `browseRelay.ts` は `@/` エイリアスを使うため realm レーンからは読めず、**「実際の `connect.lookup` 由来の例外が 403 になる」を端から端まで通す検証は存在しない**。#237 の教訓（緑＝本番正しい、ではない）に照らし、この限界は意識して扱う。
+
+**テスト間干渉**: `assetRateLimiter` / `relayConcurrencyLimiter` / `cookieJar` はシングルトンでリセット API を持たない（既存テストが `new RateLimiter()` 等で回避している手が relay 層では使えない）。`RateLimiter` はキー単位に状態が分離されるためテストごとに異なる IP キーを使えば干渉しないが、`ConcurrencyLimiter` の `global` カウンタは**キーに依らず共有**であり、`finally` での解放に依って各テスト完了後に 0 へ戻ることに依存している。
+
+**代替案として採らなかったもの**: 写像だけを純粋関数（`statusForRelayError(err)` 相当）へ切り出して単体テストする案。安価だが、**catch の順序・分岐が実際に呼ばれること**を守れず、relay 層のカバレッジ 0% も解消しないため、#250 の目的に合わない。DI での差し替えも、本番コードに seam を入れない方針（#236）から採らない。
 
 #### 上流 fetch 失敗の丸め込みと可観測性（#236）
 
@@ -802,7 +844,7 @@ interface JarCookie {
 
 ## `src/lib/proxy/retry.ts`（上流 429 リトライ・#166）
 
-**役割**: アセット中継が上流から受けた `429` を `Retry-After` 尊重で再試行するための、純粋ロジックと待機ユーティリティ。relayAsset 本体は現行方針でテスト対象外のため、判定・待機計算を純粋関数へ切り出して単体テスト可能にする。
+**役割**: アセット中継が上流から受けた `429` を `Retry-After` 尊重で再試行するための、純粋ロジックと待機ユーティリティ。判定・待機計算を純粋関数へ切り出し、リトライ回数・待機時間の網羅検証を下位レイヤで完結させる（[テスト方針](../testing/policy.md) §2.2「下位レイヤでのみ網羅する」）。`relayAsset` 本体も #250 でモジュールモックによるテスト対象になったが、そちらはステータス写像などオーケストレーションの検証に留め、待機計算の網羅は本モジュールのテストで行う。
 
 > 関連機能仕様: [機能仕様 §アセット中継の上流 429 リトライ](../spec/features/proxy.md#アセット中継の上流-429-リトライretry-after-尊重166)。
 
