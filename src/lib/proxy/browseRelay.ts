@@ -134,6 +134,53 @@ export function browseGuards(req: NextRequest, parsed: URL): Response | null {
   return null;
 }
 
+// 自動ティア昇格（#70）の本体。ブラウザティアで取り直し、本文の読み取りまで成功したら
+// 応答を組み立てる 4 値を返す。途中で失敗したら null を返し、呼び出し側は中継ティアの
+// 応答一式をそのまま使う。
+//
+// **成功時のみ値を返す形にしているのが要点**（fetchTarget と同型）。呼び出し側の変数を
+// 逐次書き換えると、最後の readTextWithLimit で失敗したときに「html は中継ティア・
+// それ以外はブラウザティア」という混在応答になる（#253）。
+//
+// 例外はすべて握り潰して巻き戻す。昇格ブロックは fetchTarget を経由しないため、
+// fetchTarget の「SsrfBlockedError / BodyTooLargeError は再 throw して 403 / 413」
+// （#144）は適用されない。返す中継ティアの本文は SSRF 検査済みの経路で取得済みであり、
+// 上限超過を 413 にしても browserFetch は既に完了していて資源は節約されないため、
+// 任意機能（PROXY_BROWSER_AUTO_PROMOTE）の副作用でページが見えなくなる退行を避ける。
+// ここで握り潰してよいのは best-effort の昇格に限る。伝播すべきエラー型を足すならここに
+// 明示的な例外を書くこと。
+// 実装意図: docs/arch/proxy.md §昇格失敗時の巻き戻し（#253）
+async function promoteToBrowser(
+  href: string,
+  fetchOptions: Parameters<typeof proxyFetch>[1],
+  session: SessionRef | undefined,
+  maxBytes: number
+): Promise<{
+  res: Response;
+  finalUrl: string;
+  outHeaders: Headers;
+  html: string;
+} | null> {
+  try {
+    const { response, finalUrl } = await browserFetch(href, fetchOptions);
+    // Cookie の jar 格納は**巻き戻さない**ので、本文読み取りより前に済ませる。browserFetch
+    // 自体は成功しており、取得した Cookie はターゲットが正当に発行したもの（Cookie セッション
+    // ウォーミングはブラウザティアの意図した機能）。ここから下で失敗しても保存は残す。
+    storeRelayCookies(session, finalUrl, response.headers);
+    // sanitizeHeaders は新規 Headers を返す純粋関数。issueSessionCookie は破壊的なので
+    // 候補側の新規 Headers にだけ適用する（初回の outHeaders には触れない）。
+    const outHeaders = sanitizeHeaders(response.headers, finalUrl);
+    issueSessionCookie(session, outHeaders);
+    const html = await readTextWithLimit(response, maxBytes);
+    // ここまで成功して初めて呼び出し側へ返す（＝差し替えられる）。
+    return { res: response, finalUrl, outHeaders, html };
+  } catch (err) {
+    // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。
+    logError("[proxy/auto-promote]", err);
+    return null;
+  }
+}
+
 // 中継ティアを選んでターゲットを取得する。ブラウザティアは SSRF 以外の失敗時に
 // 中継ティア（proxyFetch）へフォールバックし、ブラウザ依存で全損にしない（#69）。
 async function fetchTarget(
@@ -254,17 +301,16 @@ export async function relayBrowse(
         shouldPromoteToBrowser(html, res.status, contentType) &&
         promotionGuard.tryPromote(parsed)
       ) {
-        try {
-          const promoted = await browserFetch(parsed.href, fetchOptions);
-          res = promoted.response;
-          finalUrl = promoted.finalUrl;
-          storeRelayCookies(session, finalUrl, res.headers);
-          outHeaders = sanitizeHeaders(res.headers, finalUrl);
-          issueSessionCookie(session, outHeaders);
-          html = await readTextWithLimit(res, maxBytes);
-        } catch (err) {
-          // 昇格は best-effort。失敗時は初回の中継ティア応答をそのまま使う（全損にしない）。
-          logError("[proxy/auto-promote]", err);
+        const promoted = await promoteToBrowser(
+          parsed.href,
+          fetchOptions,
+          session,
+          maxBytes
+        );
+        // 昇格結果は 4 つまとめて差し替える。途中で失敗した場合は promoteToBrowser が
+        // null を返し、中継ティアの応答一式がそのまま使われる（混在させない。#253）。
+        if (promoted) {
+          ({ res, finalUrl, outHeaders, html } = promoted);
         }
       }
 
