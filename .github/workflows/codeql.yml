@@ -40,11 +40,11 @@ jobs:
 
       # クエリセットは default（精度重視）。誤検知ノイズが許容範囲なら
       # security-extended への強化を再検討する（docs/ci-guide.md 項目 6）。
-      - uses: github/codeql-action/init@v4.37.6
+      - uses: github/codeql-action/init@v4.37.7
         with:
           languages: ${{ matrix.language }}
           build-mode: ${{ matrix.build-mode }}
 
-      - uses: github/codeql-action/analyze@v4.37.6
+      - uses: github/codeql-action/analyze@v4.37.7
         with:
           category: "/language:${{ matrix.language }}"
