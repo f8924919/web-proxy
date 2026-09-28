@@ -62,7 +62,7 @@ FAIL: C3 同名ブランチの PR が複数（#6 / #1） — ISSUES=なし（期
 ### 修正後（green）
 
 ```
-META: HEAD=8c223f0 SKILL.md=未コミットの変更あり gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)
+META: HEAD=ef063c2 SKILL.md=HEAD と同じ gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)
 PASS: C1-1 docs ブランチで Closes #101（#105） — ISSUES=101（期待 101）警告=なし（期待 なし）
 PASS: C1-2 複数の Closes（#139） — ISSUES=129 130（期待 129 130）警告=なし（期待 なし）
 PASS: C1-3 番号一致（#255） — ISSUES=253（期待 253）警告=なし（期待 なし）
