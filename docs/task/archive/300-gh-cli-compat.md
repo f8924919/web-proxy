@@ -2,7 +2,7 @@
 
 - **Issue**: [#300](https://github.com/f8924919/web-proxy/issues/300)
 - **ブランチ**: `bugfix/300-gh-cli-compat`
-- **ステータス**: 進行中
+- **ステータス**: 完了（2026-09-28）
 - **基点**: `8c223f0`（PR #299 のマージ）
 - **経緯**: PR #299（claude-templates 938ac43 の部分取り込み）のマージ後に `/finish-task` を実行し、手順 B-1 の失敗で発覚
 
@@ -134,7 +134,7 @@ PR=なし ISSUES=253
 
 ## 次にやること
 
-- `/verify-gate`（verify → docs-check → evaluator）
+- なし（完了。PR 作成とマージ待ち）
 
 ## evaluator の巡
 
