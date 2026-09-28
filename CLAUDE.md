@@ -42,6 +42,7 @@ GitHub Issue は「起票・仕様・受け入れ条件の正本」、`docs/task
 - **ブランチ命名**: `feature/<issue>-<desc>` / `bugfix/<issue>-<desc>` / `hotfix/<issue>-<desc>`、Issue を伴わない作業は `refactor/<desc>` / `docs/<desc>` / `chore/<desc>`。
 - コミットメッセージは常に日本語。Issue 本文・PR の本文・コメントは[言語ルール](#言語ルール)に従い、原則日本語・既存スレッドが日本語以外なら当該言語に合わせる。
 - **評価ゲート（evaluator）モード**: `always`（`always` / `auto` / `off`）。`feature` / `bugfix` / `hotfix` で受け入れ条件・spec の充足を独立評価する `evaluator` の起動可否を決める単一の正本。定義・auto の閾値・`always` への昇格手順は [docs/git-workflow.md](docs/git-workflow.md) §5.2。
+- **実装の委譲（implementer）**: 設計と受け入れ条件が固まった実装は `implementer`（Sonnet）へ委譲してよい（モードなし）。**ブリーフは prompt ではなく `.brief/` のファイルで渡し**、設計・仕様の判断とテスト内容の決定は委譲しない。取り決めと**主エージェント側の義務**（検証の回し直し・行単位の突合・実際の例外で読む・境界をまたぐ引用を洗う・発火順序まで確かめる）の正本は [docs/git-workflow.md](docs/git-workflow.md) §5.2「実装の委譲」。
 - **設計レビュー（design-review）モード**: `auto`（`always` / `auto` / `off`）。実装前に設計案の妥当性を点検する `design-review`（Opus）の起動可否を決める単一の正本。`auto` は [docs/git-workflow.md](docs/git-workflow.md) §5.5 の構造トリガで発火する。定義・モード表は §5.2。
 - **受け入れ条件レビュー（criteria-review）**: 実装前に受け入れ条件そのものの妥当性を点検する `criteria-review`（Sonnet）は、安価な常時運用の助言として `feature` / `bugfix` / `hotfix`（受け入れ条件を持つ作業）で用いる（モードなし。§5.2）。
 
@@ -104,15 +105,16 @@ npm run dev
 
 詳細は以下の目次から参照する。コード変更時は対応するファイルも合わせて更新すること。
 
-| ドキュメント                                   | 内容                                                          |
-| ---------------------------------------------- | ------------------------------------------------------------- |
-| [docs/setup.md](docs/setup.md)                 | 環境構築・開発サーバー起動・IDE 設定・トラブルシューティング  |
-| [docs/spec/index.md](docs/spec/index.md)       | 動作仕様・画面仕様の目次                                      |
-| [docs/arch/index.md](docs/arch/index.md)       | モジュール実装の目次                                          |
-| [docs/git-workflow.md](docs/git-workflow.md)   | ブランチ運用・Issue ベース開発・PR の詳細ルール               |
-| [docs/ci-guide.md](docs/ci-guide.md)           | CI 導入時の設計指針（導入タイミングで参照）                   |
-| [docs/testing/index.md](docs/testing/index.md) | テスト実行コマンド・方針・カバレッジ運用                      |
-| [docs/task/index.md](docs/task/index.md)       | タスクの進捗管理（セッション開始時に必ず確認）                |
-| [docs/docs-guide.md](docs/docs-guide.md)       | CLAUDE.md / docs の更新ルール（ドキュメント編集時に必ず参照） |
+| ドキュメント                                           | 内容                                                                |
+| ------------------------------------------------------ | ------------------------------------------------------------------- |
+| [docs/setup.md](docs/setup.md)                         | 環境構築・開発サーバー起動・IDE 設定・トラブルシューティング        |
+| [docs/spec/index.md](docs/spec/index.md)               | 動作仕様・画面仕様の目次                                            |
+| [docs/arch/index.md](docs/arch/index.md)               | モジュール実装の目次                                                |
+| [docs/git-workflow.md](docs/git-workflow.md)           | ブランチ運用・Issue ベース開発・PR の詳細ルール                     |
+| [docs/harness-retro-log.md](docs/harness-retro-log.md) | ハーネス見直し（`/harness-retro`・git-workflow §5.9）の回ごとの記録 |
+| [docs/ci-guide.md](docs/ci-guide.md)                   | CI 導入時の設計指針（導入タイミングで参照）                         |
+| [docs/testing/index.md](docs/testing/index.md)         | テスト実行コマンド・方針・カバレッジ運用                            |
+| [docs/task/index.md](docs/task/index.md)               | タスクの進捗管理（セッション開始時に必ず確認）                      |
+| [docs/docs-guide.md](docs/docs-guide.md)               | CLAUDE.md / docs の更新ルール（ドキュメント編集時に必ず参照）       |
 
 > **コードまたは仕様を変更・拡張するときは、対応する `docs/spec/` / `docs/arch/` のファイルも合わせて更新すること。詳細な記載基準は [docs/docs-guide.md](docs/docs-guide.md) に従うこと。**

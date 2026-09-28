@@ -42,3 +42,6 @@ tsconfig.tsbuildinfo
 
 # Debug tooling output (scripts/debug-browser.mjs)
 scripts/.debug-out/
+
+# 実装ブリーフ（implementer へファイルで渡す。docs/git-workflow.md §5.2）
+.brief/
