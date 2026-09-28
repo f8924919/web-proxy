@@ -6,13 +6,16 @@
 
 ## 1. 前提条件
 
-| ツール  | 必要バージョン      | 確認コマンド     |
-| ------- | ------------------- | ---------------- |
-| Node.js | 18 以上（推奨: 22） | `node --version` |
-| npm     | 9 以上              | `npm --version`  |
-| Git     | 任意                | `git --version`  |
+| ツール             | 必要バージョン           | 確認コマンド     |
+| ------------------ | ------------------------ | ---------------- |
+| Node.js            | 18 以上（推奨: 22）      | `node --version` |
+| npm                | 9 以上                   | `npm --version`  |
+| Git                | 任意                     | `git --version`  |
+| GitHub CLI（`gh`） | 任意（動作確認: 2.45.0） | `gh --version`   |
 
 Node.js は [nodejs.org](https://nodejs.org/) または [nvm](https://github.com/nvm-sh/nvm) でインストールしてください。
+
+**gh の版の前提**: 開発コンテナの gh は Ubuntu パッケージの 2.45.0 です。gh 2.45 では `--json` を付けない `gh issue view` / `gh pr view` と `gh pr view --json closingIssuesReferences` は失敗する（上流の修正は v2.71.0 / v2.72.0）。そのため、ハーネスの手順（`.claude/agents/` と `.claude/skills/`）は、Issue・PR を読むときに必ず `--json <fields>` を付け、PR が閉じる Issue は `gh api graphql` で引く形で書いています（#300）。gh を新しくしても手順はそのまま動きます。
 
 ---
 
