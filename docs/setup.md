@@ -40,6 +40,8 @@ npm run dev
 
 起動後、ブラウザで [http://localhost:3000](http://localhost:3000) を開くとトップページが表示されます。
 
+> **`next dev` は CLAUDE.md を書き換えない設定にしています。** Next.js 16.3 系の `next dev` は、既定で CLAUDE.md（無ければ AGENTS.md）の末尾に英語の「agent rules」ブロックを書き込み、起動のたびに書き戻します。CLAUDE.md は日本語の運用ルールの正本なので、`next.config.mjs` で `agentRules: false` にして止めています（`tests/next.config.test.ts` が設定を固定）。ブロックの要点は「この版の Next.js は API・規約が学習データと違うことがあるので、コードを書く前に `node_modules/next/dist/docs/` の該当ガイドを読む」です。Next.js の API を使うコードを書くときは、この点を意識してください。
+
 ---
 
 ## 4. 主要コマンド一覧
