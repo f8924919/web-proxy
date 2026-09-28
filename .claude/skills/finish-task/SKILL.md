@@ -33,24 +33,33 @@ argument-hint: "[merged-branch-name]"
 
 1. **対象の Issue 番号を取り、状態を見る。** **判断の余地なくここまでは必ず実行する。**
 
-   - **正はマージ済み PR の `Closes #`**（GitHub の `closingIssuesReferences`）。1 本の PR で複数の Issue を閉じることがあり、ブランチ名に番号の無い `docs` / `refactor` / `chore` でも `Closes #` は書けるため、ブランチ名だけでは取りこぼす。
+   - **正はマージ済み PR の `Closes #`**（GitHub の `closingIssuesReferences`。**GraphQL の `gh api graphql` で引く** — gh 2.45 では `--json` を付けない `gh issue view` / `gh pr view` と `gh pr view --json closingIssuesReferences` は失敗する（上流の修正は v2.71.0 / v2.72.0。[docs/setup.md](../../../docs/setup.md) §1）。`gh api graphql` は allow に入れていないので、ここで毎回確認を挟む。[git-workflow.md](../../../docs/git-workflow.md) §5.6）。1 本の PR で複数の Issue を閉じることがあり、ブランチ名に番号の無い `docs` / `refactor` / `chore` でも `Closes #` は書けるため、ブランチ名だけでは取りこぼす。
    - **ブランチ名の番号は補助**。PR を引けない、または同じリポジトリの `Closes #` が 0 件のときだけ、`feature|bugfix|hotfix/<番号>-…` から取る。
 
    ```bash
    BRANCH="<merged-branch>"
-   PRS=$(gh pr list --state merged --head "$BRANCH" --limit 200 --json number,mergedAt -q 'sort_by(.mergedAt) | reverse | map(.number) | join(" ")')
+   if ! PRS=$(gh pr list --state merged --head "$BRANCH" --limit 200 --json number,mergedAt -q 'sort_by(.mergedAt) | reverse | map(.number) | join(" ")'); then
+     echo "警告: マージ済み PR の検索（gh pr list）に失敗した。PR の Closes # からは取れないので、ブランチ名の番号へ戻る" >&2
+     PRS=""
+   fi
    PR=${PRS%% *}
    [ "$PR" != "$PRS" ] && echo "警告: ブランチ名 $BRANCH のマージ済み PR が複数ある（$PRS）。マージの新しい #$PR を使う — 今回マージした PR か確かめる"
    ISSUES=""
-   [ -n "$PR" ] && ISSUES=$(gh pr view "$PR" --json url,closingIssuesReferences -q '(.url | split("/")[3:5] | join("/")) as $repo | [.closingIssuesReferences[] | select(.repository.owner.login + "/" + .repository.name == $repo) | .number] | join(" ")')
+   if [ -n "$PR" ]; then
+     if ! ISSUES=$(gh api graphql -F owner='{owner}' -F repo='{repo}' -F pr="$PR" -f query='query($owner:String!,$repo:String!,$pr:Int!){repository(owner:$owner,name:$repo){nameWithOwner pullRequest(number:$pr){closingIssuesReferences(first:50){nodes{number repository{nameWithOwner}}}}}}' --jq '.data.repository as $r | [$r.pullRequest.closingIssuesReferences.nodes[] | select(.repository.nameWithOwner == $r.nameWithOwner) | .number] | join(" ")'); then
+       echo "警告: PR #$PR の Closes #（closingIssuesReferences）を取得できなかった（gh api graphql の失敗）。ブランチ名の番号へ戻る" >&2
+       ISSUES=""
+     fi
+   fi
    [ -z "$ISSUES" ] && ISSUES=$(echo "$BRANCH" | sed -nE 's#^(feature|bugfix|hotfix)/([0-9]+)-.*#\2#p')
    echo "PR=${PR:-なし} ISSUES=${ISSUES:-なし}"
    for n in $ISSUES; do gh issue view "$n" --json number,state,title -q '"#\(.number) \(.state) \(.title)"'; done
    ```
 
    - どちらからも番号が取れない（`Refs #` だけで、ブランチ名にも番号が無い PR。Issue を伴わない `docs` / `refactor` / `chore`）→ 本セクションはスキップ。`Refs #` だけでも `feature|bugfix|hotfix/<番号>-…` のブランチなら、その番号が取れて 2 の判断に進む。
-   - **警告が出たら**（同じブランチ名のマージ済み PR が複数ある。`--head` はブランチ名だけで絞り、再利用されたブランチ名や fork の同名ブランチも拾う）、`PR=` の番号が今回マージした PR と同じか確かめる。違えば、`PR=<今回の PR 番号>` にして `ISSUES=""` から下を流し直す（`closingIssuesReferences` だけを引くと、次の項目の除外が効かない）。
-   - `Closes other/repo#N`（別リポジトリの Issue）は対象外で、**コマンドが除外する**。jq が PR の `url` から `owner/repo` を取り、同じリポジトリの参照だけを残す（除外しないと、`gh issue view` が今のリポジトリの別の #N を表示し、2・3 の判断にかかる）。全件が別リポジトリなら `ISSUES` は空になり、ブランチ名の番号に戻る。
+   - **`警告:` で始まる行が stderr に出たら**（`gh pr list` / `gh api graphql` の失敗）、ブランチ名の番号に戻っている。`Closes #` を拾えていない可能性があるので、失敗の理由（認証・ネットワーク・PR 番号の誤り）を確かめてから流し直す。黙って空にはならない。
+   - **複数 PR の警告が出たら**（同じブランチ名のマージ済み PR が複数ある。`--head` はブランチ名だけで絞り、再利用されたブランチ名や fork の同名ブランチも拾う）、`PR=` の番号が今回マージした PR と同じか確かめる。違えば、`PR=<今回の PR 番号>` にして `ISSUES=""` から下を流し直す（GraphQL のクエリごと流す。`closingIssuesReferences` だけを別に引くと、次の項目の除外が効かない）。
+   - `Closes other/repo#N`（別リポジトリの Issue）は対象外で、**コマンドが除外する**。jq が GraphQL の `repository.nameWithOwner` と各参照の `repository.nameWithOwner` を比べ、同じリポジトリの参照だけを残す（除外しないと、`gh issue view` が今のリポジトリの別の #N を表示し、2・3 の判断にかかる）。全件が別リポジトリなら `ISSUES` は空になり、ブランチ名の番号に戻る。
    - 取れた Issue が複数なら、**1 件ずつ独立に** 2・3 の判断を通す（1 件が親 Issue で close しなくても、他の Issue の判断を止めない）。
    - `CLOSED` → 自動 close されている。何もしない。
    - `OPEN` → 次へ。

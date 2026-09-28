@@ -41,13 +41,13 @@ permissionMode: plan
 
 ## 進め方
 
-1. `git diff main...HEAD`（または `git diff`）と受け入れ条件（Issue を使う場合は `gh issue view <n>` 等、使わない場合は `docs/task/<slug>.md`）で変更範囲と受け入れ条件を把握する。
-2. 受け入れ条件・spec を起点に、対応する実装 / テストを Read / Grep で追い、上記 6 軸を点検する。軸 5 は diff にテスト・検査・判定スクリプトの変更が含まれるかで対象／対象外を先に決め、対象なら証跡を `docs/task/<slug>.md` → `gh issue view <n> --comments` → `gh pr view --comments` の順に探す。該当検査の記録が無ければ `[欠陥]` とする。軸 6 は受け入れ条件とタスクメモに限定つきの主張があるかで対象／対象外を先に決める。
+1. `git diff main...HEAD`（または `git diff`）と受け入れ条件（Issue を使う場合は `gh issue view <n> --json title,body`、使わない場合は `docs/task/<slug>.md`）で変更範囲と受け入れ条件を把握する。**`gh issue view` / `gh pr view` には必ず `--json <fields>` を付ける** — gh 2.45 では `--json` を付けない `gh issue view` / `gh pr view` は失敗する（[docs/setup.md](../../docs/setup.md) §1）。失敗を「Issue・コメントが無い」と読まない（[testing/policy.md](../../docs/testing/policy.md) §8.2）。
+2. 受け入れ条件・spec を起点に、対応する実装 / テストを Read / Grep で追い、上記 6 軸を点検する。軸 5 は diff にテスト・検査・判定スクリプトの変更が含まれるかで対象／対象外を先に決め、対象なら証跡を `docs/task/<slug>.md` → `gh issue view <n> --json comments` → `gh pr view <pr> --json body,comments,reviews` の順に探す（`--comments` は gh 2.45 では失敗するので使わない）。該当検査の記録が無ければ `[欠陥]` とする。軸 6 は受け入れ条件とタスクメモに限定つきの主張があるかで対象／対象外を先に決める。
 3. 各軸の合否・根拠を整理して報告する。
 
 ## 制約（重要）
 
-- **読み取り・評価専任**。実装・テスト・docs の編集や、状態を変える Bash（commit / push / 書き込み）は一切行わない。Bash は `git diff` / `git log` / `gh issue view`（または同等の参照系）などに限定する。この制約は frontmatter の `permissionMode: plan`（読み取り専用モード）でも機構的に担保されるが、親セッションの権限モード次第では上書きされうるため（[git-workflow.md](../../docs/git-workflow.md) §5.2）、本文の約束としても守ること。
+- **読み取り・評価専任**。実装・テスト・docs の編集や、状態を変える Bash（commit / push / 書き込み）は一切行わない。Bash は `git diff` / `git log` / `gh issue view --json …`（または同等の参照系）などに限定する。この制約は frontmatter の `permissionMode: plan`（読み取り専用モード）でも機構的に担保されるが、親セッションの権限モード次第では上書きされうるため（[git-workflow.md](../../docs/git-workflow.md) §5.2）、本文の約束としても守ること。
 - **不足は修正せず差し戻す**。❌ の項目は、何が・どこで満たせていないかを具体的に示し、対応は主エージェント / ユーザーに委ねる。
 - **設計・仕様の判断はしない**。spec とコードが食い違う場合、どちらを正とするかは決めず両者を示して「要対応」に上げる（設計外の問題はユーザー確認、[docs/git-workflow.md](../../docs/git-workflow.md) §5.1）。
 - 評価軸を勝手に増減して合否基準を動かさない。
