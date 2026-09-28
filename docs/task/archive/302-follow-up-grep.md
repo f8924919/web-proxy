@@ -48,10 +48,14 @@ PASS: Follow-up 行が 2 本 — 2（期待 2）
 
 ### C3（本文を数える確認の残り）
 
+`grep -c` / `--count` を使う箇所を広めに洗い、当たった行を 1 件ずつ読んだ。PR / Issue の本文を数えるのは `docs/git-workflow.md` の 2 か所で、どちらも行頭一致になっている。`harness-retro` の `command grep -c .` はメモリファイルの件数を数えるもので、本文を数える確認ではないので対象外。
+
 ```
-META: HEAD=705ad3e
-docs/git-workflow.md:94:.body | grep -cE '^(Closes|Fixes|Resolves) #[0-9]+'
-docs/git-workflow.md:190:.body | grep -cE '^Follow-up: #[0-9]+'
+META: HEAD=c59c6ae
+$ git grep -n -E 'grep +(-[a-zA-Z]*c|--count)' -- .claude docs CLAUDE.md ':!docs/task/archive/'
+.claude/skills/harness-retro/SKILL.md:66: … grep -c . …
+docs/git-workflow.md:94: … grep -cE '^(Closes|Fixes|Resolves …
+docs/git-workflow.md:190: … grep -cE '^Follow-up: #[0-9]+' …
 ```
 
 ## 次にやること
