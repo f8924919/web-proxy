@@ -23,3 +23,12 @@ describe("next.config headers()（#131）", () => {
     );
   });
 });
+
+describe("next.config agentRules", () => {
+  // next dev は既定で CLAUDE.md の末尾に英語の agent rules ブロックを書き込む。
+  // CLAUDE.md は日本語の運用ルールの正本なので、書き込みを止める。
+  // 背景: docs/setup.md §3 開発サーバーの起動
+  test("agentRules を false にして CLAUDE.md への自動書き込みを止める", () => {
+    expect((nextConfig as { agentRules?: boolean }).agentRules).toBe(false);
+  });
+});

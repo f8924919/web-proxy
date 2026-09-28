@@ -10,6 +10,10 @@ const nextConfig = {
   // リバースプロキシ配下でプレフィックスを失い 404 になる（#74 と同類）。catch-all ルートが
   // 末尾スラッシュ有無の両方を直接処理できるよう、自動リダイレクトを無効化する。
   skipTrailingSlashRedirect: true,
+  // next dev は既定で CLAUDE.md の末尾に英語の agent rules ブロックを書き込み、
+  // 起動のたびに書き戻す。CLAUDE.md は日本語の運用ルールの正本なので止める。
+  // 背景: docs/setup.md §3 開発サーバーの起動
+  agentRules: false,
   // ホーム / はプロキシ自身の UI（アドレスバー入力）。React コンポーネントのため
   // レスポンスヘッダーを直接付与できず、ここで X-Frame-Options: DENY を付けて
   // クリックジャッキングを防ぐ。中継パス（/browse・/api/proxy）には付けない
