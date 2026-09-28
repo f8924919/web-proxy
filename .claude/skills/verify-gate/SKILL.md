@@ -43,7 +43,7 @@ description: PR 前の検証ゲートを一括実行する。ブランチ種別�
    - `evaluator` の結果は**区分ごとの件数**（`[欠陥] N 件 / [証跡・文言] M 件`）と総合判定（PASS / PASS（follow-up あり）/ FAIL）を書き、`[証跡・文言]` の各項目について**「この PR で直した」か「follow-up Issue #N に落とした」か**を明示する（[git-workflow.md](../../../docs/git-workflow.md) §5.2「評価ゲートの指摘区分と止め時」）。主エージェントは `[欠陥]` を `[証跡・文言]` へ格下げしない。
    - `verify` / `docs-check` が FAIL を返した場合、または `evaluator` に **`[欠陥]` が残る**場合は PR 作成に進まず、主エージェント／ユーザーで対応方針を決める。**【通知】** [git-workflow.md](../../../docs/git-workflow.md) §5.8。`[証跡・文言]` だけなら PR 作成に進んでよい（直したあとの `evaluator` 再評価は不要。再評価が要るのは `[欠陥]` を直したときだけ）。
    - **`[欠陥]` を直した後の再評価**では、前回の報告（区分ごとの項目・`path:line`）と各項目の**閉じ方の種別・証跡パスまたはコミット**の対応表を `evaluator` の起動プロンプトに渡し、「ここから確認を始める」と指示する。**同じ表をタスクメモにも残す**（正本は [git-workflow.md](../../../docs/git-workflow.md) §5.2「止め時の規則」3）。
-   - follow-up Issue を作ったら `docs/task/index.md` の「起票済み・未着手の Issue」表に載せ、PR 本文に `Follow-up: #N` を書く。
+   - follow-up Issue を作ったら `docs/task/index.md` の「起票済み・未着手の Issue」表に載せ、PR 本文に `Follow-up: #N` を書く（字下げや箇条書き記号を付けずに行頭から書く。行頭一致で機械確認するため。正本は [git-workflow.md](../../../docs/git-workflow.md) §5.2「評価ゲートの指摘区分と止め時」）。
 
 ## やらないこと
 
