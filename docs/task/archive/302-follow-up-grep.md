@@ -10,7 +10,7 @@
 
 ## 設計
 
-[git-workflow.md](../../git-workflow.md) §5.2「評価ゲートの指摘区分と止め時」の follow-up 確認を、`grep -c 'Follow-up: #'` から行頭の `grep -cE '^Follow-up: #[0-9]+'` に変える。理由は §5 step 8 の `Closes #` 確認と同じ（本文の説明文やコードスパンに当たる偽 PASS）。行頭一致なので、`Follow-up: #<N>` は字下げや箇条書き記号を付けずに書くことも明記した。
+[git-workflow.md](../../git-workflow.md) §5.2「評価ゲートの指摘区分と止め時」の follow-up 確認を、`grep -c 'Follow-up: #'` から行頭の `grep -cE '^Follow-up: #[0-9]+'` に変える。理由は §5 step 8 の `Closes #` 確認と同じ（本文の説明文やコードスパンに当たる偽 PASS）。行頭一致なので、`Follow-up: #<N>` は字下げや箇条書き記号を付けずに書くことも明記した。docs-check の指摘を受けて、同じ書き方を [verify-gate](../../../.claude/skills/verify-gate/SKILL.md) 手順 5 の「PR 本文に `Follow-up: #N` を書く」にも添えた（字下げして書くと確認は 0 件になる。書き漏らしを見逃す偽 PASS ではなく、書いたのに「無い」と出る安全側の誤検出）。
 
 ## 進捗
 
