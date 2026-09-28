@@ -15,7 +15,7 @@
 
 ## 設計
 
-- **finish-task B-1**: `closingIssuesReferences` を `gh api graphql` で引く。owner / repo は `gh repo view --json owner,name` で取り、別リポジトリの参照は `repository.nameWithOwner` の比較で除外する。`gh` / `jq` の失敗は終了コードで判定し、stderr に `警告:` 行を出してからブランチ名の番号へ戻る。
+- **finish-task B-1**: `closingIssuesReferences` を `gh api graphql` で引く。owner / repo は `gh api` の `{owner}` / `{repo}` プレースホルダー（カレントリポジトリに展開される）で渡し、別リポジトリの参照は `repository.nameWithOwner` の比較で除外する。`gh` / `jq` の失敗は終了コードで判定し、stderr に `警告:` 行を出してからブランチ名の番号へ戻る。
 - **evaluator**: Issue・PR を読むコマンドを `--json <fields>` 付きにする（本文は `title,body`、証跡探索は `comments` / `comments,reviews`）。
 - **§5 step 8**: `Closes #` 確認を行頭の `^(Closes|Fixes|Resolves) #[0-9]+` に限る。
 - **docs**: setup.md §1 に gh の行、git-workflow §5.3 / §5.6 に `gh api graphql` を allow に入れない理由。
@@ -98,15 +98,46 @@ B-1 の `--jq` プログラムを `SKILL.md` から取り出し、自リポジ�
 ### C6（§5 step 8 の行頭一致）
 
 ```
-#299: 0      （旧 grep -c 'Closes #' では 1 — 本文の説明文に当たっていた）
+META: HEAD=89ad5f4 作業ツリー=HEAD と同じ gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)
+#299: 0
 #255: 1
 #105: 1
+#139: 2
+旧 grep -c 'Closes #' の #299: 1（本文の説明文に当たっていた）
 ```
 
 ### C5（evaluator の `--json` 化）
 
-`gh issue view 300 --json comments,title` / `gh pr view 299 --json body,comments,reviews` がともに exit 0。`--json` なしの `gh issue view 256` / `gh pr view 299` は exit 1（projectCards の GraphQL エラー）。`.claude/` と `docs/`（archive・research を除く）で `--json` を付けない `gh issue view` / `gh pr view` のコマンド記述は 0 件（残る一致は allow の対象を名指しする散文だけ）。
+gh 2.45 では `--json` を付けない `gh issue view` / `gh pr view` は失敗する。evaluator が使う `--json` 付きの形は成功する:
+
+```
+META: HEAD=89ad5f4 作業ツリー=HEAD と同じ gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)
+gh issue view 300 --json comments,title: exit=0
+gh pr view 299 --json body,comments,reviews: exit=0
+gh issue view 256（--json なし）: exit=1
+gh pr view 299（--json なし）: exit=1
+```
+
+`.claude/` と `docs/`（archive・research を除く）で `--json` を付けない `gh issue view` / `gh pr view` のコマンド記述は 0 件（残る一致は allow の対象を名指しする散文だけ）。
+
+### C2（`gh pr list` の失敗の分岐）
+
+```
+META: HEAD=89ad5f4 作業ツリー=HEAD と同じ gh version 2.45.0 (2025-07-18 Ubuntu 2.45.0-1ubuntu0.3)
+GH_REPO=f8924919/no-such-repo で gh pr list を失敗させる:
+警告: マージ済み PR の検索（gh pr list）に失敗した。PR の Closes # からは取れないので、ブランチ名の番号へ戻る
+PR=なし ISSUES=253
+```
 
 ## 次にやること
 
 - `/verify-gate`（verify → docs-check → evaluator）
+
+## evaluator の巡
+
+| 巡  | 判定                              | 要対応（区分・指摘）                                                          | 閉じ方の種別               | 証跡 / コミット                          |
+| --- | --------------------------------- | ----------------------------------------------------------------------------- | -------------------------- | ---------------------------------------- |
+| 1   | FAIL（[欠陥] 1 / [証跡・文言] 3） | [欠陥] C6 の grep ログと別リポジトリ除外の jq ログにメタ行が無い              | 証跡の再取得（メタ行付き） | 本メモ「別リポジトリ参照の除外」「C6」   |
+| 1   | 〃                                | [証跡・文言] C4 ④ の変異ログのメタ行が `8c223f0`・未コミット                  | 証跡の再取得               | 本メモ「変異 → red」（89ad5f4 で再実行） |
+| 1   | 〃                                | [証跡・文言] 設計の owner / repo の取り方が実装（`{owner}` / `{repo}`）と違う | メモの記述修正             | 本メモ「設計」                           |
+| 1   | 〃                                | [証跡・文言] C5 の段落に「gh 2.45 では」の限定句が無い                        | メモの記述修正             | 本メモ「C5」                             |
